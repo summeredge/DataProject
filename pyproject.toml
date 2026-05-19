@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chem-ts-corr"
+version = "0.2.0"
+description = "Industrial time-series correlation analysis for chemical plants"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+full = [
+  "scipy>=1.10",
+  "scikit-learn>=1.3",
+  "statsmodels>=0.14",
+  "shap>=0.44",
+  "matplotlib>=3.8",
+  "pytest>=7.4",
+]
+dev = [
+  "pytest>=7.4",
+  "ruff>=0.4",
+]
+
+[project.scripts]
+chem-ts-corr = "chem_ts_corr.cli:main"
+chem-ts-corr-web = "chem_ts_corr.web:main"
+
+[tool.setuptools.packages.find]
+include = ["chem_ts_corr*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

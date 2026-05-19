@@ -36,6 +36,9 @@ DOWNLOAD_FILES = {
     "regime_scores.csv",
     "risk_flags.csv",
     "model_lift_scores.csv",
+    "recommended_candidates.csv",
+    "lag_peak_quality.csv",
+    "rolling_corr_scores.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 
@@ -276,6 +279,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         segment_min=_optional_float_field(form, "segment_min"),
         segment_max=_optional_float_field(form, "segment_max"),
         capacity_columns=_list_field(form, "capacity_columns"),
+        residual_control_columns=_list_field(form, "residual_control_columns") or _list_field(form, "capacity_columns"),
+        force_include_variables=_list_field(form, "force_include_variables"),
         enable_granger=False,
         enable_model=False,
     )
@@ -320,7 +325,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
-    top10_variables = set(ranked.head(10)["variable"].astype(str)) if not ranked.empty else set()
+    top10_variables = set(ranked.head(20)["variable"].astype(str)) if not ranked.empty else set()
     visible_lag_scores = lag_scores[
         lag_scores.get("variable", pd.Series(dtype=str)).astype(str).isin(top10_variables)
     ] if not lag_scores.empty else lag_scores
@@ -1013,6 +1018,8 @@ async function analyze() {
     form.append("segment_min", el("segmentMin").value);
     form.append("segment_max", el("segmentMax").value);
     form.append("capacity_columns", el("capacityColumns").value);
+    form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
+    form.append("force_include_variables", el("forceIncludeVariables") ? el("forceIncludeVariables").value : "");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);

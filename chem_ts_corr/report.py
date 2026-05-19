@@ -18,11 +18,14 @@ def write_outputs(
     regime_scores: pd.DataFrame | None = None,
     risk_flags: pd.DataFrame | None = None,
     model_lift_scores: pd.DataFrame | None = None,
+    lag_peak_quality: pd.DataFrame | None = None,
+    rolling_corr_scores: pd.DataFrame | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     files = {
         "ranked_features.csv": ranked_features,
+        "recommended_candidates.csv": ranked_features,
         "lag_scores.csv": lag_scores,
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
@@ -31,6 +34,8 @@ def write_outputs(
         "regime_scores.csv": regime_scores,
         "risk_flags.csv": risk_flags,
         "model_lift_scores.csv": model_lift_scores,
+        "lag_peak_quality.csv": lag_peak_quality,
+        "rolling_corr_scores.csv": rolling_corr_scores,
     }
     for name, frame in files.items():
         (frame if frame is not None else pd.DataFrame()).to_csv(

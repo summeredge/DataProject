@@ -22,6 +22,8 @@ class AnalysisConfig:
     segment_min: float | None = None
     segment_max: float | None = None
     capacity_columns: list[str] | None = None
+    residual_control_columns: list[str] | None = None
+    force_include_variables: list[str] | None = None
     roles_path: Path | None = None
     random_state: int = 42
     enable_granger: bool = False

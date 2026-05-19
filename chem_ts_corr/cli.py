@@ -36,7 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--capacity-columns",
         default="",
-        help="comma-separated capacity/load columns used for residual correlation control",
+        help="backward-compatible alias of residual control columns",
+    )
+    analyze.add_argument(
+        "--residual-control-columns",
+        default="",
+        help="comma-separated control columns used for residual correlation control",
+    )
+    analyze.add_argument(
+        "--force-include-variables",
+        default="",
+        help="comma-separated variables to force include in rolling stability review",
     )
     analyze.add_argument("--roles", dest="roles_path", type=Path, default=None, help="optional CSV with columns: variable,role")
     analyze.add_argument(
@@ -78,6 +88,8 @@ def main() -> None:
             segment_min=args.segment_min,
             segment_max=args.segment_max,
             capacity_columns=[item for item in args.capacity_columns.split(",") if item],
+            residual_control_columns=[item for item in args.residual_control_columns.split(",") if item] or [item for item in args.capacity_columns.split(",") if item],
+            force_include_variables=[item for item in args.force_include_variables.split(",") if item],
             roles_path=args.roles_path,
             enable_granger=args.enable_granger,
             enable_model=args.enable_model,

@@ -23,4 +23,6 @@ def run_analysis(config: AnalysisConfig) -> None:
         regime_scores=tables.regime_scores,
         risk_flags=tables.risk_flags,
         model_lift_scores=tables.model_lift_scores,
+        lag_peak_quality=tables.lag_peak_quality,
+        rolling_corr_scores=tables.rolling_corr_scores,
     )

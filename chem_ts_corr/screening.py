@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
@@ -282,7 +282,7 @@ def risk_flags(
         flags = [
             name
             for name, active in [
-                ("formula_leakage", formula_leakage),
+                ("formula_like", formula_leakage),
                 ("common_capacity_driver", common_capacity),
                 ("closed_loop_suspect", closed_loop),
                 ("target_leads_variable", target_leads),
@@ -294,7 +294,7 @@ def risk_flags(
         rows.append(
             {
                 "variable": variable,
-                "formula_leakage_flag": formula_leakage,
+                "formula_like_flag": formula_leakage,
                 "common_capacity_driver_flag": common_capacity,
                 "closed_loop_suspect_flag": closed_loop,
                 "target_leads_variable_flag": target_leads,
@@ -338,6 +338,8 @@ def final_ranked_features(
         np.where(final["model_lift"] > 0.05, "prediction_candidate", "correlation_lead"),
     )
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
+    final["candidate_grade"] = final["final_score"].map(_grade_candidate)
+    final["recommended_use"] = final.apply(_recommended_use_v2, axis=1)
     return final.sort_values("final_score", ascending=False).reset_index(drop=True)
 
 

@@ -7,7 +7,7 @@ import pandas as pd
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import select_numeric_frame
-from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
 
@@ -23,6 +23,8 @@ class AnalysisTables:
     regime_scores: pd.DataFrame
     risk_flags: pd.DataFrame
     model_lift_scores: pd.DataFrame
+    lag_peak_quality: pd.DataFrame
+    rolling_corr_scores: pd.DataFrame
     metrics: dict[str, float | str]
 
 
@@ -36,6 +38,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         regime_scores,
         residual_corr_scores,
         risk_flags,
+        rolling_corr_scores,
     )
 
     numeric = select_numeric_frame(frame, config.target)
@@ -62,9 +65,11 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     raw_ranked = summarize_best_lags(lag_scores)
     candidate_variables = raw_ranked.head(config.top_k)["variable"].tolist()
     best_lags = _best_lag_map(raw_ranked)
-    residual = residual_corr_scores(scaled, config.target, config.capacity_columns, config.max_lag)
+    residual_controls = config.residual_control_columns or config.capacity_columns
+    residual = residual_corr_scores(scaled, config.target, residual_controls, config.max_lag)
     regime, stability = regime_scores(scaled, config.target, config.segment_column, config.max_lag)
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
+    lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
     lift = model_lift_scores(
         scaled,
         config.target,
@@ -72,8 +77,20 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         config.max_lag,
         best_lags=best_lags,
     )
-    risks = risk_flags(raw_ranked, residual, stability, diag, roles, config.capacity_columns)
-    ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks).head(config.top_k)
+    rolling = rolling_corr_scores(scaled, config.target, list(dict.fromkeys(candidate_variables + (config.force_include_variables or []))))
+    risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls)
+    ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks)
+    ranked = ranked.merge(lag_peak[["variable","lag_quality","lag_boundary_flag"]], on="variable", how="left")
+    ranked = ranked.merge(rolling[["variable","rolling_stability"]], on="variable", how="left")
+    ranked["rolling_stability"] = ranked["rolling_stability"].fillna(0.5)
+    ranked["lag_quality"] = ranked["lag_quality"].fillna(0.5)
+    ranked["model_lift_score"] = ranked["model_lift"].fillna(0.0)
+    ranked["risk_penalty"] = ranked["risk_count"].fillna(0)
+    ranked["raw_corr_score"] = ranked["raw_corr"].fillna(0)
+    ranked["residual_corr_score"] = ranked["residual_corr"].fillna(ranked["raw_corr_score"])
+    ranked["regime_stability_final"] = ranked["regime_stability"].fillna(0.5)
+    ranked["final_score"] = (0.25*ranked["raw_corr_score"] +0.25*ranked["residual_corr_score"] +0.15*ranked["regime_stability_final"] +0.15*ranked["rolling_stability"] +0.10*ranked["lag_quality"] +0.10*ranked["model_lift_score"] -0.10*ranked["risk_penalty"]).clip(lower=0,upper=1)
+    ranked = ranked.sort_values("final_score", ascending=False).head(config.top_k)
     candidate_variables = ranked["variable"].tolist()
 
     if config.enable_model:
@@ -120,6 +137,8 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         regime_scores=regime_output,
         risk_flags=risks,
         model_lift_scores=lift,
+        lag_peak_quality=lag_peak,
+        rolling_corr_scores=rolling,
         metrics=metrics,
     )
 

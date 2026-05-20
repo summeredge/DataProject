@@ -71,7 +71,17 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
     rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
-    ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks, lag_peak, rolling).head(config.top_k)
+    ranked = final_ranked_features(
+        raw_ranked,
+        residual,
+        stability,
+        lift,
+        risks,
+        lag_peak,
+        rolling,
+        force_include_variables=config.force_include_variables,
+        top_k=config.top_k,
+    )
     candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
 
     if config.enable_model:

@@ -71,7 +71,11 @@ def preprocess_frame(
         raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
 
     low_variance = cleaned.nunique(dropna=True) <= 1
-    removable = [col for col in low_variance[low_variance].index if col != target]
+    protected = set(protected_columns or [])
+    removable = [col for col in low_variance[low_variance].index if col != target and col not in protected]
+    protected_low_var = [col for col in low_variance[low_variance].index if col in protected]
+    if protected_low_var:
+        cleaned.attrs["protected_low_variance_columns"] = protected_low_var
     return cleaned.drop(columns=removable)
 
 

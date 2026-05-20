@@ -29,4 +29,7 @@ def select_numeric_frame(frame: pd.DataFrame, target: str) -> pd.DataFrame:
     numeric = frame.apply(pd.to_numeric, errors="coerce")
     if target not in numeric.columns:
         raise ValueError(f"Target column '{target}' is not numeric")
+    valid_target = int(numeric[target].notna().sum())
+    if valid_target < 10:
+        raise ValueError(f"Target column '{target}' has insufficient numeric points: {valid_target} < 10")
     return numeric

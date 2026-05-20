@@ -58,7 +58,7 @@ def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.Dat
                     "spearman": spearman_r,
                     "spearman_p": spearman["p_value"],
                     "spearman_r2": spearman["r2"],
-                    "effective_n": pearson["n"],
+                    "n": pearson["n"],
                     "abs_pearson": abs(pearson_r) if not np.isnan(pearson_r) else np.nan,
                     "abs_spearman": abs(spearman_r) if not np.isnan(spearman_r) else np.nan,
                     "lag_boundary_flag": abs(lag) == max_lag,

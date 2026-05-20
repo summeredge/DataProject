@@ -48,14 +48,19 @@ def preprocess_frame(
     target: str,
     resample_rule: str | None,
     min_valid_ratio: float,
+    protected_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     if resample_rule:
         frame = frame.resample(resample_rule).median()
 
     valid_ratio = frame.notna().mean()
     keep_columns = valid_ratio[valid_ratio >= min_valid_ratio].index.tolist()
-    if target not in keep_columns:
-        keep_columns.append(target)
+    keep = set(keep_columns)
+    keep.add(target)
+    for col in (protected_columns or []):
+        if col in frame.columns:
+            keep.add(col)
+    keep_columns = [c for c in frame.columns if c in keep]
 
     cleaned = frame[keep_columns].interpolate(method="time", limit_direction="both")
     cleaned = cleaned.dropna(axis=1, how="all").dropna(axis=0, how="any")

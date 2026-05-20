@@ -25,7 +25,7 @@ def write_outputs(
 
     files = {
         "ranked_features.csv": ranked_features,
-        "recommended_candidates.csv": ranked_features,
+        "recommended_candidates.csv": build_recommended_candidates(ranked_features),
         "lag_scores.csv": lag_scores,
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
@@ -64,14 +64,15 @@ def build_markdown_summary(
     risky = risk_flags[risk_flags.get("risk_count", 0) > 0] if not risk_flags.empty else pd.DataFrame()
     common_capacity = _risk_subset(risky, "common_capacity_driver_flag")
     closed_loop = _risk_subset(risky, "closed_loop_suspect_flag")
-    not_causal = _recommended_subset(ranked_features, "not_recommended_as_causal")
+    strong = _recommended_subset(ranked_features, "strong_screening_candidate")
     predictive = _recommended_subset(ranked_features, "prediction_candidate")
+    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven","formula_coupled_reference","closed_loop_suspect","unstable_candidate","poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
 
     lines = [f"# 四层工业时序筛查摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
 
-    lines.extend(["", "## 相关性线索", ""])
+    lines.extend(["", "## 强初筛候选", ""]); lines.extend(_table_lines(_core_columns(strong).head(15))); lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 预测候选", ""])
@@ -95,7 +96,7 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 综合 raw_corr、residual_corr、regime_stability、lead_lag_value、model_lift，并扣除风险标签惩罚。",
+            "- final_score = 0.25*raw_corr_score + 0.25*residual_corr_score + 0.15*regime_stability_final + 0.15*rolling_stability + 0.10*lag_quality + 0.10*model_lift_score - 0.10*risk_penalty。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability 综合相关强度、符号一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_fdr_q_value 与工程合理性。",
@@ -158,3 +159,16 @@ def _format_cell(value: object) -> str:
     if isinstance(value, float):
         return f"{value:.6g}"
     return str(value)
+
+
+def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
+    if ranked_features.empty:
+        return pd.DataFrame(columns=["variable","candidate_grade","recommended_use","final_score","fallback_reason"])
+    ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(dtype=str)).isin(["A","B"])].copy()
+    if not ab.empty:
+        if "fallback_reason" not in ab.columns:
+            ab["fallback_reason"] = ""
+        return ab
+    top = ranked_features.head(10).copy()
+    top["fallback_reason"] = "no_A_or_B_candidates"
+    return top

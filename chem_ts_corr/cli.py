@@ -5,7 +5,6 @@ from pathlib import Path
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.pipeline import run_analysis
-from chem_ts_corr.web import run_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,6 +97,8 @@ def main() -> None:
         )
         run_analysis(config)
     elif args.command == "serve":
+        from chem_ts_corr.web import run_server
+
         run_server(args.host, args.port, open_browser=not args.no_open)
 
 

@@ -28,6 +28,13 @@ class AnalysisTables:
     metrics: dict[str, float | str]
 
 
+def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str]) -> tuple[list[str], list[str]]:
+    ordered = list(dict.fromkeys(top + (forced or [])))
+    valid = [v for v in ordered if v in columns]
+    warnings = [v for v in (forced or []) if v not in columns]
+    return valid, warnings
+
+
 def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,
@@ -45,133 +52,44 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     roles = load_roles(config, list(numeric.columns))
     numeric = apply_ignore_roles(numeric, roles, config.target)
     diag = diagnostics(numeric, roles)
-    segmented = segment_by_load(
-        numeric,
-        segment_column=config.segment_column,
-        segment_mode=config.segment_mode,
-        segment_min=config.segment_min,
-        segment_max=config.segment_max,
-    )
-    cleaned = preprocess_frame(
-        segmented,
-        target=config.target,
-        resample_rule=config.resample_rule,
-        min_valid_ratio=config.min_valid_ratio,
-    )
-    transformed = transform_frame(cleaned, config.preprocess_mode, config.detrend_window)
-    scaled = standardize_frame(transformed)
+    segmented = segment_by_load(numeric, config.segment_column, config.segment_mode, config.segment_min, config.segment_max)
+    protected = [config.target, config.segment_column, *(config.capacity_columns or []), *(config.residual_control_columns or []), *(config.force_include_variables or [])]
+    cleaned = preprocess_frame(segmented, config.target, config.resample_rule, config.min_valid_ratio, protected_columns=[c for c in protected if c])
+    scaled = standardize_frame(transform_frame(cleaned, config.preprocess_mode, config.detrend_window))
 
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)
-    candidate_variables = raw_ranked.head(config.top_k)["variable"].tolist()
+    topk = raw_ranked.head(config.top_k)["variable"].tolist() if not raw_ranked.empty else []
+    candidate_variables, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns))
     best_lags = _best_lag_map(raw_ranked)
     residual_controls = config.residual_control_columns or config.capacity_columns
+
     residual = residual_corr_scores(scaled, config.target, residual_controls, config.max_lag)
     regime, stability = regime_scores(scaled, config.target, config.segment_column, config.max_lag)
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
-    lift = model_lift_scores(
-        scaled,
-        config.target,
-        candidate_variables,
-        config.max_lag,
-        best_lags=best_lags,
-    )
-    rolling = rolling_corr_scores(
-        scaled,
-        config.target,
-        candidate_variables,
-        config.max_lag,
-    )
-    risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls)
-    ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks)
-    ranked = ranked.merge(lag_peak[["variable","lag_quality","lag_boundary_flag"]], on="variable", how="left")
-    ranked = ranked.merge(rolling[["variable","rolling_stability"]], on="variable", how="left")
-    ranked["rolling_stability"] = ranked["rolling_stability"].fillna(0.5)
-    ranked["lag_quality"] = ranked["lag_quality"].fillna(0.5)
-    ranked["model_lift_score"] = ranked["model_lift"].fillna(0.0)
-    ranked["risk_penalty"] = ranked["risk_count"].fillna(0)
-    ranked["raw_corr_score"] = ranked["raw_corr"].fillna(0)
-    ranked["residual_corr_score"] = ranked["residual_corr"].fillna(ranked["raw_corr_score"])
-    ranked["regime_stability_final"] = ranked["regime_stability"].fillna(0.5)
-    ranked["final_score"] = (0.25*ranked["raw_corr_score"] +0.25*ranked["residual_corr_score"] +0.15*ranked["regime_stability_final"] +0.15*ranked["rolling_stability"] +0.10*ranked["lag_quality"] +0.10*ranked["model_lift_score"] -0.10*ranked["risk_penalty"]).clip(lower=0,upper=1)
-    ranked = ranked.sort_values("final_score", ascending=False).head(config.top_k)
-    candidate_variables = ranked["variable"].tolist()
+    lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
+    rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
+    risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
+    ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks, lag_peak, rolling).head(config.top_k)
+    candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
 
     if config.enable_model:
-        importance, metrics = fit_explainable_model(
-            scaled,
-            target=config.target,
-            max_lag=config.max_lag,
-            candidate_variables=candidate_variables,
-            max_features=config.max_model_features,
-            random_state=config.random_state,
-            best_lags=best_lags,
-        )
+        importance, metrics = fit_explainable_model(scaled, config.target, config.max_lag, candidate_variables, config.max_model_features, config.random_state, best_lags=best_lags)
     else:
-        importance, metrics = _skipped_model_result()
+        importance, metrics = pd.DataFrame(), {"model_status": "skipped: enable model analysis"}
 
     if config.enable_granger:
-        granger = run_granger_tests(
-            scaled,
-            target=config.target,
-            variables=candidate_variables[: min(len(candidate_variables), config.top_k)],
-            maxlag=config.resolved_granger_maxlag(),
-        )
+        granger = run_granger_tests(scaled, config.target, variables=candidate_variables[: config.top_k], maxlag=config.resolved_granger_maxlag())
     else:
-        granger = _skipped_granger_result()
+        granger = pd.DataFrame([{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}])
 
-    metrics.update(
-        {
-            "rows_after_segment": float(len(segmented)),
-            "rows_after_preprocess": float(len(scaled)),
-            "variables": float(len(scaled.columns)),
-            "preprocess_mode": config.preprocess_mode,
-            "detrend_window": float(config.detrend_window),
-            "segment": _segment_label(config),
-        }
-    )
+    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "missing_force_include": ",".join(missing_forced)})
 
-    return AnalysisTables(
-        ranked_features=ranked,
-        lag_scores=lag_scores,
-        granger_tests=granger,
-        importance=importance,
-        diagnostics=diag,
-        residual_corr_scores=residual,
-        regime_scores=regime_output,
-        risk_flags=risks,
-        model_lift_scores=lift,
-        lag_peak_quality=lag_peak,
-        rolling_corr_scores=rolling,
-        metrics=metrics,
-    )
-
-
-def _skipped_model_result() -> tuple[pd.DataFrame, dict[str, str]]:
-    return pd.DataFrame(), {"model_status": "skipped: enable model analysis"}
-
-
-def _skipped_granger_result() -> pd.DataFrame:
-    return pd.DataFrame(
-        [{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}]
-    )
-
-
-def _segment_label(config: AnalysisConfig) -> str:
-    if not config.segment_column or config.segment_mode == "all":
-        return "all"
-    if config.segment_mode == "custom":
-        lower = "-inf" if config.segment_min is None else str(config.segment_min)
-        upper = "+inf" if config.segment_max is None else str(config.segment_max)
-        return f"{config.segment_column}: custom [{lower}, {upper}]"
-    return f"{config.segment_column}: {config.segment_mode}"
+    return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
 
 
 def _best_lag_map(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
         return {}
-    return {
-        str(row["variable"]): int(row["lag"])
-        for _, row in ranked[["variable", "lag"]].dropna().iterrows()
-    }
+    return {str(row["variable"]): int(row["lag"]) for _, row in ranked[["variable", "lag"]].dropna().iterrows()}

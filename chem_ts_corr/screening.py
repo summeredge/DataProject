@@ -249,6 +249,75 @@ def model_lift_scores(
     return pd.DataFrame(rows)
 
 
+
+
+def rolling_corr_scores(
+    frame: pd.DataFrame,
+    target: str,
+    candidate_variables: list[str],
+    max_lag: int,
+    window: int | None = None,
+    min_periods: int | None = None,
+) -> pd.DataFrame:
+    columns = [
+        "variable",
+        "best_lag",
+        "best_score",
+        "rolling_corr_median",
+        "rolling_abs_corr_median",
+        "rolling_corr_iqr",
+        "rolling_sign_consistency",
+        "valid_window_count",
+        "rolling_stability",
+    ]
+    if target not in frame.columns or not candidate_variables:
+        return pd.DataFrame(columns=columns)
+
+    target_series = frame[target]
+    window_size = max(12, int(window or min(len(frame), max(24, max_lag * 4))))
+    min_points = max(6, int(min_periods or window_size // 2))
+
+    rows: list[dict[str, object]] = []
+    for variable in candidate_variables:
+        if variable == target or variable not in frame.columns:
+            continue
+
+        pair = frame[[target, variable]].dropna()
+        if len(pair) < max(window_size, max_lag + 10):
+            continue
+
+        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        if best.empty:
+            continue
+
+        best_row = best.iloc[0]
+        best_lag = int(best_row["lag"])
+        shifted = pair[variable].shift(best_lag)
+        rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target]).dropna()
+        if rolling.empty:
+            continue
+
+        sign_consistency = rolling.apply(lambda value: 1 if value >= 0 else -1).value_counts(normalize=True).max()
+        iqr = float(rolling.quantile(0.75) - rolling.quantile(0.25))
+        abs_median = float(rolling.abs().median())
+        stability = max(0.0, min(1.0, abs_median * float(sign_consistency) * (1.0 - min(1.0, iqr))))
+        rows.append(
+            {
+                "variable": variable,
+                "best_lag": best_lag,
+                "best_score": float(best_row.get("score", 0.0) or 0.0),
+                "rolling_corr_median": float(rolling.median()),
+                "rolling_abs_corr_median": abs_median,
+                "rolling_corr_iqr": iqr,
+                "rolling_sign_consistency": float(sign_consistency),
+                "valid_window_count": int(len(rolling)),
+                "rolling_stability": stability,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows)[columns]
 def risk_flags(
     ranked: pd.DataFrame,
     residual: pd.DataFrame,

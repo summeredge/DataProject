@@ -77,7 +77,12 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         config.max_lag,
         best_lags=best_lags,
     )
-    rolling = rolling_corr_scores(scaled, config.target, list(dict.fromkeys(candidate_variables + (config.force_include_variables or []))))
+    rolling = rolling_corr_scores(
+        scaled,
+        config.target,
+        candidate_variables,
+        config.max_lag,
+    )
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls)
     ranked = final_ranked_features(raw_ranked, residual, stability, lift, risks)
     ranked = ranked.merge(lag_peak[["variable","lag_quality","lag_boundary_flag"]], on="variable", how="left")

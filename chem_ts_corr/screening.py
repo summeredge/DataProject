@@ -401,16 +401,57 @@ def final_ranked_features(
         + 0.10 * final["model_lift"].clip(0, 1)
         - 0.08 * final["risk_count"]
     ).clip(lower=0)
-    final["recommended_use"] = np.where(
-        final["risk_count"] >= 2,
-        "not_recommended_as_causal",
-        np.where(final["model_lift"] > 0.05, "prediction_candidate", "correlation_lead"),
-    )
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
-    final["candidate_grade"] = final["final_score"].map(_grade_candidate)
-    final["recommended_use"] = final.apply(_recommended_use_v2, axis=1)
+    final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
+    final["recommended_use"] = final.apply(_recommend_use, axis=1)
     return final.sort_values("final_score", ascending=False).reset_index(drop=True)
 
+
+
+def _grade_candidate(row: pd.Series) -> str:
+    regime_stability = float(row.get("regime_stability_final", row.get("regime_stability", 0.5)) or 0.5)
+    rolling_stability = float(row.get("rolling_stability", 0.5) or 0.5)
+    lag_quality = float(row.get("lag_quality", 0.5) or 0.5)
+    model_lift = float(row.get("model_lift", 0.0) or 0.0)
+    final_score = float(row.get("final_score", 0.0) or 0.0)
+    risk_flags = str(row.get("risk_flags", "") or "")
+    risk_penalty = min(0.2, 0.03 * len([item for item in risk_flags.split(";") if item])) if risk_flags else 0.0
+
+    quality = 0.35 * final_score + 0.2 * regime_stability + 0.2 * rolling_stability + 0.15 * lag_quality + 0.1 * min(1.0, model_lift * 5) - risk_penalty
+    if quality >= 0.75:
+        return "A"
+    if quality >= 0.6:
+        return "B"
+    if quality >= 0.45:
+        return "C"
+    if quality >= 0.3:
+        return "D"
+    return "E"
+
+
+def _recommend_use(row: pd.Series) -> str:
+    risk_flags = str(row.get("risk_flags", "") or "")
+    grade = str(row.get("candidate_grade", "E") or "E")
+    model_lift = float(row.get("model_lift", 0.0) or 0.0)
+    lag = int(row.get("lag", 0) or 0)
+
+    if "poor_data_quality" in risk_flags:
+        return "poor_quality_variable"
+    if "closed_loop_suspect" in risk_flags:
+        return "closed_loop_suspect"
+    if "common_capacity_driver" in risk_flags:
+        return "capacity_driven"
+    if "formula_like" in risk_flags:
+        return "formula_coupled_reference"
+    if "unstable_across_regimes" in risk_flags:
+        return "unstable_candidate"
+    if grade == "A":
+        return "strong_screening_candidate"
+    if grade == "B" and model_lift > 0.05:
+        return "prediction_candidate"
+    if lag < 0:
+        return "state_indicator"
+    return "manual_review_required"
 
 def _sampling_period_seconds(index: pd.Index) -> float:
     if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:

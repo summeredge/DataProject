@@ -173,7 +173,11 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
         full_cols = base_cols + [f"{variable}__lag_{lag}" for lag in candidate_lags]
         base_errors: list[float] = []
         full_errors: list[float] = []
-        for train_idx, test_idx in _time_series_splits(len(dataset), n_splits):
+        splits = _time_series_splits(len(dataset), n_splits)
+        if not splits:
+            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": 0.0})
+            continue
+        for train_idx, test_idx in splits:
             y_train = dataset.iloc[train_idx][target].to_numpy()
             y_test = dataset.iloc[test_idx][target].to_numpy()
             base_pred = _linear_predict(dataset.iloc[train_idx][base_cols], y_train, dataset.iloc[test_idx][base_cols])
@@ -182,6 +186,9 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
             full_errors.append(_rmse(y_test, full_pred))
         base_rmse = float(np.mean(base_errors))
         full_rmse = float(np.mean(full_errors))
+        if np.isnan(base_rmse) or np.isnan(full_rmse):
+            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": 0.0})
+            continue
         lift = max(0.0, (base_rmse - full_rmse) / base_rmse) if base_rmse > 0 else 0.0
         rows.append({"variable": variable, "status": "ok", "ar_baseline_rmse": base_rmse, "candidate_rmse": full_rmse, "model_lift": lift})
     return pd.DataFrame(rows, columns=cols)

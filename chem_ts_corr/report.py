@@ -99,7 +99,7 @@ def build_markdown_summary(
             "- final_score = 0.25*raw_corr_score + 0.25*residual_corr_score + 0.15*regime_stability_final + 0.15*rolling_stability + 0.10*lag_quality + 0.10*model_lift_score - 0.10*risk_penalty。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability 综合相关强度、符号一致性和滞后一致性。",
-            "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_fdr_q_value 与工程合理性。",
+            "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",
             "- recommended_action 给出下一步处理建议，包括可作为预测候选、疑似共同负荷驱动、疑似闭环反馈、仅作相关性参考、建议人工工艺复核。",
             "- 本报告输出的是筛查线索和预测候选，不直接给出工艺因果结论。",
         ]

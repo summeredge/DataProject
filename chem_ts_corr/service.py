@@ -54,7 +54,15 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     diag = diagnostics(numeric, roles)
     segmented = segment_by_load(numeric, config.segment_column, config.segment_mode, config.segment_min, config.segment_max)
     protected = [config.target, config.segment_column, *(config.capacity_columns or []), *(config.residual_control_columns or []), *(config.force_include_variables or [])]
-    cleaned = preprocess_frame(segmented, config.target, config.resample_rule, config.min_valid_ratio, protected_columns=[c for c in protected if c])
+    cleaned = preprocess_frame(
+        segmented,
+        config.target,
+        config.resample_rule,
+        config.min_valid_ratio,
+        protected_columns=[c for c in protected if c],
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        interpolate_limit_area=config.interpolate_limit_area,
+    )
     scaled = standardize_frame(transform_frame(cleaned, config.preprocess_mode, config.detrend_window))
 
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)

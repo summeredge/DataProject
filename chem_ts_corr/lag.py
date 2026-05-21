@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from statistics import NormalDist
-
 import numpy as np
 import pandas as pd
 
@@ -28,10 +26,9 @@ def _corr_p_value(r: float, n: int) -> float:
     t_stat = abs_r * np.sqrt(df / max(1e-15, 1 - abs_r * abs_r))
     try:
         from scipy.stats import t as student_t  # type: ignore
-
-        return float(2 * student_t.sf(t_stat, df))
     except Exception:
-        return float(2 * (1 - NormalDist().cdf(t_stat)))
+        return np.nan
+    return float(2 * student_t.sf(t_stat, df))
 
 
 def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.DataFrame:
@@ -72,6 +69,7 @@ def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.Dat
         use_pearson = result["abs_pearson"] >= result["abs_spearman"]
         result["p_value"] = np.where(use_pearson, result["pearson_p"], result["spearman_p"])
         result["corr_q_value"] = np.where(use_pearson, result["pearson_q"], result["spearman_q"])
+        result["p_value_status"] = np.where(result["p_value"].isna(), "scipy_unavailable_or_invalid", "ok")
     return result
 
 

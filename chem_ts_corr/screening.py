@@ -74,16 +74,16 @@ def diagnostics(frame: pd.DataFrame, roles: dict[str, str]) -> pd.DataFrame:
 
 
 def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: list[str] | None, max_lag: int) -> pd.DataFrame:
-    out_cols = ["variable", "lag", "residual_corr", "residual_p_value", "residual_r2", "direction"]
+    out_cols = ["variable", "lag", "residual_corr", "residual_p_value", "residual_r2", "direction", "residual_method", "condition_number", "used_control_columns"]
     capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
     if not capacity_columns:
         return pd.DataFrame(columns=out_cols)
-    target_residual = _residualize(frame[target], frame[capacity_columns])
+    target_residual, t_method, t_cond, used_cols = _residualize(frame[target], frame[capacity_columns])
     all_scores: list[pd.DataFrame] = []
     for column in frame.columns:
         if column == target or column in capacity_columns:
             continue
-        candidate_residual = _residualize(frame[column], frame[capacity_columns])
+        candidate_residual, c_method, c_cond, c_used_cols = _residualize(frame[column], frame[capacity_columns])
         pair = pd.DataFrame({target: target_residual, column: candidate_residual}).dropna()
         if len(pair) < max(10, max_lag + 5):
             continue
@@ -96,6 +96,9 @@ def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: lis
     if scores.empty:
         return pd.DataFrame(columns=out_cols)
     out = scores.rename(columns={"score": "residual_corr", "p_value": "residual_p_value", "r2": "residual_r2"})
+    out["residual_method"] = t_method
+    out["condition_number"] = t_cond
+    out["used_control_columns"] = ",".join(used_cols)
     for col in out_cols:
         if col not in out.columns:
             out[col] = np.nan
@@ -113,8 +116,8 @@ def regime_scores(frame: pd.DataFrame, target: str, capacity_column: str | None,
     q2 = capacity.quantile(2 / 3)
     regimes = {
         "low": frame.loc[capacity <= q1],
-        "mid": frame.loc[(capacity >= q1) & (capacity <= q2)],
-        "high": frame.loc[capacity >= q2],
+        "mid": frame.loc[(capacity > q1) & (capacity <= q2)],
+        "high": frame.loc[capacity > q2],
     }
 
     all_rows: list[pd.DataFrame] = []
@@ -125,7 +128,7 @@ def regime_scores(frame: pd.DataFrame, target: str, capacity_column: str | None,
         if best.empty:
             continue
         best["signed_corr"] = np.where(best["method"].eq("pearson"), best["pearson"], best["spearman"])
-        best = best.assign(regime=name)
+        best = best.assign(regime=name, regime_row_count=len(subset))
         all_rows.append(best[score_cols])
 
     if not all_rows:
@@ -225,7 +228,7 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
 
 
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "risk_flags", "risk_count"]
+    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
 
@@ -258,6 +261,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         lag_boundary = bool(lag_map.get(variable, {}).get("lag_boundary_flag", False))
         lift_info = lift_map.get(variable, {})
         low_lift = str(lift_info.get("status", "")).startswith("ok") and float(lift_info.get("model_lift", 0.0) or 0.0) < 0.01
+        residual_collinearity = float(row.get("condition_number", 0) or 0) > 1e8
 
         flags = [name for name, active in [
             ("formula_like", formula_like),
@@ -272,7 +276,11 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             ("poor_data_quality", poor_quality),
         ] if active]
 
-        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "risk_flags": ";".join(flags), "risk_count": len(flags)})
+        strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "closed_loop_suspect", "poor_data_quality"}]
+        weak_risks = [f for f in flags if f not in set(strong_risks)]
+        level = "none" if not flags else ("strong" if len(strong_risks) >= 2 else ("medium" if strong_risks else "weak"))
+        reason = "；".join(flags)
+        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
     return pd.DataFrame(rows, columns=cols)
 
 
@@ -288,6 +296,11 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final = final.merge(lag_peak_quality[[c for c in ["variable", "lag_quality", "lag_boundary_flag"] if c in lag_peak_quality.columns]], on="variable", how="left")
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
 
+    final["residual_status"] = np.where(final.get("residual_corr").notna() if "residual_corr" in final.columns else False, "ok", "not_computed")
+    final["regime_status"] = np.where(final.get("regime_stability_final").notna() if "regime_stability_final" in final.columns else False, "ok", "not_computed")
+    final["rolling_status"] = np.where(final.get("rolling_stability").notna() if "rolling_stability" in final.columns else False, "ok", "not_computed")
+    final["model_lift_status"] = np.where(final.get("model_lift").notna() if "model_lift" in final.columns else False, "ok", "not_computed")
+    final["lag_quality_status"] = np.where(final.get("lag_quality").notna() if "lag_quality" in final.columns else False, "ok", "not_computed")
     final["raw_corr_score"] = final["raw_corr"].fillna(0).clip(0, 1)
     final["residual_corr_score"] = final.get("residual_corr", pd.Series(index=final.index, dtype=float)).fillna(final["raw_corr_score"]).clip(0, 1)
     final["regime_stability_final"] = final.get("regime_stability_final", pd.Series(index=final.index, dtype=float)).fillna(0.5).clip(0, 1)
@@ -295,10 +308,15 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["lag_quality"] = final.get("lag_quality", pd.Series(index=final.index, dtype=float)).fillna(0.5).clip(0, 1)
     final["model_lift_score"] = final.get("model_lift", pd.Series(index=final.index, dtype=float)).fillna(0.0).clip(0, 1)
     final["risk_penalty"] = final.get("risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 5)
-    final["final_score"] = (
-        0.25 * final["raw_corr_score"] + 0.25 * final["residual_corr_score"] + 0.15 * final["regime_stability_final"] +
-        0.15 * final["rolling_stability"] + 0.10 * final["lag_quality"] + 0.10 * final["model_lift_score"] - 0.10 * final["risk_penalty"]
-    ).clip(lower=0, upper=1)
+    parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (final["residual_corr_score"], 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
+    num = 0
+    den = 0
+    for series, w in parts.values():
+        valid = series.notna()
+        num = num + series.fillna(0) * w
+        den = den + valid.astype(float) * w
+    final["final_score"] = (num / den.replace(0, np.nan)).fillna(0) - 0.10 * final["risk_penalty"]
+    final["final_score"] = final["final_score"].clip(lower=0, upper=1)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
@@ -404,17 +422,25 @@ def _saturation_ratio(series: pd.Series) -> float:
     return float(counts.iloc[0]) if len(counts) else 0.0
 
 
-def _residualize(y: pd.Series, x: pd.DataFrame) -> pd.Series:
+def _residualize(y: pd.Series, x: pd.DataFrame) -> tuple[pd.Series, str, float, list[str]]:
     data = pd.concat([y, x], axis=1).dropna()
     x_data = data.iloc[:, 1:]
     usable_columns = [column for column in x_data.columns if x_data[column].nunique() > 1]
     if len(data) < 5 or not usable_columns:
-        return y - y.mean()
+        return y - y.mean(), "demean", np.nan, []
     x_matrix = np.column_stack([np.ones(len(data)), x_data[usable_columns].to_numpy(dtype=float)])
-    coef, *_ = np.linalg.lstsq(x_matrix, data.iloc[:, 0].to_numpy(), rcond=None)
+    cond = float(np.linalg.cond(x_matrix))
+    method = "ols"
+    if cond > 1e8:
+        method = "ridge"
+        alpha = 1e-3
+        xtx = x_matrix.T @ x_matrix + alpha * np.eye(x_matrix.shape[1])
+        coef = np.linalg.solve(xtx, x_matrix.T @ data.iloc[:, 0].to_numpy())
+    else:
+        coef, *_ = np.linalg.lstsq(x_matrix, data.iloc[:, 0].to_numpy(), rcond=None)
     fitted = x_matrix @ coef
     residual = pd.Series(index=data.index, data=data.iloc[:, 0].to_numpy() - fitted)
-    return residual.reindex(y.index)
+    return residual.reindex(y.index), method, cond, usable_columns
 
 
 def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[int]:

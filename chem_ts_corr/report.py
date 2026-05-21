@@ -75,6 +75,10 @@ def build_markdown_summary(
     lines.extend(["", "## 强初筛候选", ""]); lines.extend(_table_lines(_core_columns(strong).head(15))); lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
+    lines.extend(["", "## 评分分解 Top 15", ""])
+    decomp_cols = [c for c in ["variable","final_score","raw_corr_score","residual_corr_score","regime_stability_final","rolling_stability","lag_quality","model_lift_score","risk_penalty","residual_status","regime_status","rolling_status","model_lift_status","lag_quality_status"] if c in ranked_features.columns]
+    lines.extend(_table_lines(ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()))
+
     lines.extend(["", "## 预测候选", ""])
     lines.extend(_table_lines(_core_columns(predictive).head(15)))
 

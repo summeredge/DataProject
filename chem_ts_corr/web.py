@@ -41,6 +41,7 @@ DOWNLOAD_FILES = {
     "rolling_corr_scores.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
+TASKS_LOCK = threading.Lock()
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -163,12 +164,14 @@ def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         raise ValueError("请选择 CSV 文件")
 
     file_id = uuid.uuid4().hex
-    filename = Path(file_item.filename).name
-    upload_path = UPLOADS_DIR / f"{file_id}_{filename}"
-    with upload_path.open("wb") as target:
-        shutil.copyfileobj(file_item.file, target)
+    upload_path = UPLOADS_DIR / f"{file_id}.csv"
+    raw = file_item.file.read()
+    max_bytes = 100 * 1024 * 1024
+    if len(raw) > max_bytes:
+        raise ValueError("上传文件过大")
+    upload_path.write_bytes(raw)
 
-    return {"file_id": file_id, "filename": filename}
+    return {"file_id": file_id, "filename": Path(getattr(file_item, "filename", "upload.csv")).name}
 
 
 def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
@@ -285,7 +288,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         enable_model=False,
     )
     task_id = uuid.uuid4().hex
-    TASKS[task_id] = {
+    with TASKS_LOCK:
+        TASKS[task_id] = {
         "status": "running",
         "message": "后台分析中",
         "run_id": run_id,
@@ -303,15 +307,17 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
     try:
         _write_run_config(config.output_dir, config, file_id)
         run_analysis(config)
-        TASKS[task_id].update(
-            {
-                "status": "done",
-                "message": "分析完成",
-                "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
-            }
-        )
+        with TASKS_LOCK:
+            TASKS[task_id].update(
+                {
+                    "status": "done",
+                    "message": "分析完成",
+                    "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
+                }
+            )
     except Exception as exc:
-        TASKS[task_id].update({"status": "error", "message": str(exc), "error": str(exc)})
+        with TASKS_LOCK:
+            TASKS[task_id].update({"status": "error", "message": str(exc), "error": str(exc)})
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
@@ -345,7 +351,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
 
 
 def _task_status_response(task_id: str) -> dict[str, Any]:
-    task = TASKS.get(task_id)
+    with TASKS_LOCK:
+        task = TASKS.get(task_id)
     if task is None:
         raise FileNotFoundError("任务不存在，请重新开始分析")
     return {
@@ -358,7 +365,8 @@ def _task_status_response(task_id: str) -> dict[str, Any]:
 
 
 def _task_result_response(task_id: str) -> dict[str, Any]:
-    task = TASKS.get(task_id)
+    with TASKS_LOCK:
+        task = TASKS.get(task_id)
     if task is None:
         raise FileNotFoundError("任务不存在，请重新开始分析")
     if task.get("status") == "error":

@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--enable-model", action="store_true", help="run optional model explanation")
     analyze.add_argument("--granger-maxlag", type=int, default=None)
     analyze.add_argument("--max-model-features", type=int, default=300)
+    analyze.add_argument("--max-interpolate-gap-points", type=int, default=5)
+    analyze.add_argument("--interpolate-limit-area", choices=["inside", "outside", "both"], default="inside")
 
     serve = subparsers.add_parser("serve", help="run the local web UI")
     serve.add_argument("--host", default="127.0.0.1")
@@ -94,6 +96,8 @@ def main() -> None:
             enable_model=args.enable_model,
             granger_maxlag=args.granger_maxlag,
             max_model_features=args.max_model_features,
+            max_interpolate_gap_points=args.max_interpolate_gap_points,
+            interpolate_limit_area=args.interpolate_limit_area,
         )
         run_analysis(config)
     elif args.command == "serve":

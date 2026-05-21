@@ -49,6 +49,8 @@ def preprocess_frame(
     resample_rule: str | None,
     min_valid_ratio: float,
     protected_columns: list[str] | None = None,
+    max_interpolate_gap_points: int = 5,
+    interpolate_limit_area: str = "inside",
 ) -> pd.DataFrame:
     if resample_rule:
         frame = frame.resample(resample_rule).median()
@@ -62,7 +64,7 @@ def preprocess_frame(
             keep.add(col)
     keep_columns = [c for c in frame.columns if c in keep]
 
-    cleaned = frame[keep_columns].interpolate(method="time", limit_direction="both")
+    cleaned = frame[keep_columns].interpolate(method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area)
     cleaned = cleaned.dropna(axis=1, how="all").dropna(axis=0, how="any")
 
     if target not in cleaned.columns:

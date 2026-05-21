@@ -1427,6 +1427,40 @@ function formatValue(value) {
     if (value !== 0 && Math.abs(value) < 0.0001) return value.toExponential(3);
     return Number.isInteger(value) ? String(value) : value.toFixed(6);
   }
+  if (typeof value === "string") {
+    const map = {
+      unstable_over_time: "时序不稳定",
+      low_model_lift: "低模型增益",
+      formula_coupled_reference: "公式耦合参考",
+      strong_screening_candidate: "强初筛候选",
+      prediction_candidate: "预测候选",
+      state_indicator: "状态指示量",
+      capacity_driven: "共同负荷驱动",
+      closed_loop_suspect: "疑似闭环反馈",
+      unstable_candidate: "不稳定候选",
+      poor_quality_variable: "低质量变量",
+      manual_review_required: "需要人工复核",
+      formula_like: "公式类变量",
+      strong_formula_leakage: "强公式泄漏",
+      common_capacity_driver: "共同负荷驱动",
+      target_leads_variable: "目标领先变量",
+      unstable_across_regimes: "跨工况不稳定",
+      poor_data_quality: "数据质量差",
+      ok: "正常",
+      skipped: "已跳过",
+    };
+    return value
+      .split(";")
+      .map((item) => {
+        const key = item.trim();
+        if (!key) return "";
+        if (map[key]) return map[key];
+        if (key.startsWith("skipped:")) return key.replace("skipped:", "已跳过：");
+        return key;
+      })
+      .filter(Boolean)
+      .join("；");
+  }
   return value ?? "";
 }
 

@@ -477,8 +477,16 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         resample_rule=config.resample_rule,
         min_valid_ratio=config.min_valid_ratio,
         protected_columns=[c for c in protected if c],
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        interpolate_limit_area=config.interpolate_limit_area,
     )
-    transformed = transform_frame(cleaned, config.preprocess_mode, config.detrend_window)
+    transformed = transform_frame(
+        cleaned,
+        config.preprocess_mode,
+        config.detrend_window,
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        interpolate_limit_area=config.interpolate_limit_area,
+    )
     return standardize_frame(transformed)
 
 

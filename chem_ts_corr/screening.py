@@ -106,7 +106,7 @@ def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: lis
 
 
 def regime_scores(frame: pd.DataFrame, target: str, capacity_column: str | None, max_lag: int) -> tuple[pd.DataFrame, pd.DataFrame]:
-    score_cols = ["variable", "regime", "score", "signed_corr", "lag", "direction", "p_value", "r2"]
+    score_cols = ["variable", "regime", "regime_row_count", "score", "signed_corr", "lag", "direction", "p_value", "r2"]
     stability_cols = ["variable", "regime_stability_final", "regime_sign_consistency", "regime_lag_consistency", "regime_score_cv", "regime_count"]
     if not capacity_column or capacity_column not in frame.columns:
         return pd.DataFrame(columns=score_cols), pd.DataFrame(columns=stability_cols)
@@ -233,6 +233,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         return pd.DataFrame(columns=cols)
 
     residual_map = residual.set_index("variable")["residual_corr"].to_dict() if not residual.empty and "residual_corr" in residual.columns else {}
+    residual_cond_map = residual.set_index("variable")["condition_number"].to_dict() if not residual.empty and "condition_number" in residual.columns else {}
     stability_map = stability.set_index("variable").to_dict("index") if not stability.empty else {}
     diag_map = diag.set_index("variable").to_dict("index") if not diag.empty else {}
     lag_map = lag_peak_quality.set_index("variable").to_dict("index") if lag_peak_quality is not None and not lag_peak_quality.empty else {}
@@ -261,7 +262,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         lag_boundary = bool(lag_map.get(variable, {}).get("lag_boundary_flag", False))
         lift_info = lift_map.get(variable, {})
         low_lift = str(lift_info.get("status", "")).startswith("ok") and float(lift_info.get("model_lift", 0.0) or 0.0) < 0.01
-        residual_collinearity = float(row.get("condition_number", 0) or 0) > 1e8
+        residual_collinearity = float(residual_cond_map.get(variable, 0) or 0) > 1e8
 
         flags = [name for name, active in [
             ("formula_like", formula_like),
@@ -296,17 +297,27 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final = final.merge(lag_peak_quality[[c for c in ["variable", "lag_quality", "lag_boundary_flag"] if c in lag_peak_quality.columns]], on="variable", how="left")
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
 
-    final["residual_status"] = np.where(final.get("residual_corr").notna() if "residual_corr" in final.columns else False, "ok", "not_computed")
-    final["regime_status"] = np.where(final.get("regime_stability_final").notna() if "regime_stability_final" in final.columns else False, "ok", "not_computed")
-    final["rolling_status"] = np.where(final.get("rolling_stability").notna() if "rolling_stability" in final.columns else False, "ok", "not_computed")
-    final["model_lift_status"] = np.where(final.get("model_lift").notna() if "model_lift" in final.columns else False, "ok", "not_computed")
-    final["lag_quality_status"] = np.where(final.get("lag_quality").notna() if "lag_quality" in final.columns else False, "ok", "not_computed")
+    residual_raw = final["residual_corr"] if "residual_corr" in final.columns else pd.Series(np.nan, index=final.index)
+    regime_raw = final["regime_stability_final"] if "regime_stability_final" in final.columns else pd.Series(np.nan, index=final.index)
+    rolling_raw = final["rolling_stability"] if "rolling_stability" in final.columns else pd.Series(np.nan, index=final.index)
+    lagq_raw = final["lag_quality"] if "lag_quality" in final.columns else pd.Series(np.nan, index=final.index)
+    lift_raw = final["model_lift"] if "model_lift" in final.columns else pd.Series(np.nan, index=final.index)
+    final["residual_status"] = np.where(residual_raw.notna(), "ok", "not_computed")
+    final["regime_status"] = np.where(regime_raw.notna(), "ok", "not_computed")
+    final["rolling_status"] = np.where(rolling_raw.notna(), "ok", "not_computed")
+    final["model_lift_status"] = np.where(lift_raw.notna(), "ok", "not_computed")
+    final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
     final["raw_corr_score"] = final["raw_corr"].fillna(0).clip(0, 1)
-    final["residual_corr_score"] = final.get("residual_corr", pd.Series(index=final.index, dtype=float)).fillna(final["raw_corr_score"]).clip(0, 1)
-    final["regime_stability_final"] = final.get("regime_stability_final", pd.Series(index=final.index, dtype=float)).fillna(0.5).clip(0, 1)
-    final["rolling_stability"] = final.get("rolling_stability", pd.Series(index=final.index, dtype=float)).fillna(0.5).clip(0, 1)
-    final["lag_quality"] = final.get("lag_quality", pd.Series(index=final.index, dtype=float)).fillna(0.5).clip(0, 1)
-    final["model_lift_score"] = final.get("model_lift", pd.Series(index=final.index, dtype=float)).fillna(0.0).clip(0, 1)
+    final["residual_corr_score"] = residual_raw.clip(0,1)
+    final["regime_stability_final"] = regime_raw.clip(0,1)
+    final["rolling_stability"] = rolling_raw.clip(0,1)
+    final["lag_quality"] = lagq_raw.clip(0,1)
+    final["model_lift_score"] = lift_raw.clip(0,1)
+    display_residual = residual_raw.fillna(final["raw_corr_score"]).clip(0,1)
+    display_regime = regime_raw.fillna(0.5).clip(0,1)
+    display_rolling = rolling_raw.fillna(0.5).clip(0,1)
+    display_lagq = lagq_raw.fillna(0.5).clip(0,1)
+    display_lift = lift_raw.fillna(0.0).clip(0,1)
     final["risk_penalty"] = final.get("risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 5)
     parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (final["residual_corr_score"], 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
     num = 0
@@ -319,6 +330,11 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["final_score"] = final["final_score"].clip(lower=0, upper=1)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
+    final["residual_corr_score"] = display_residual
+    final["regime_stability_final"] = display_regime
+    final["rolling_stability"] = display_rolling
+    final["lag_quality"] = display_lagq
+    final["model_lift_score"] = display_lift
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
     final["recommended_use"] = final.apply(_recommend_use, axis=1)
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
@@ -358,7 +374,12 @@ def _recommend_use(row: pd.Series) -> str:
         return "closed_loop_suspect"
     if "common_capacity_driver" in flags:
         return "capacity_driven"
-    if "formula_like" in flags or "strong_formula_leakage" in flags:
+    raw_corr = float(row.get("raw_corr", 0) or 0)
+    lag = int(row.get("lag", 0) or 0)
+    has_formula = "formula_like" in flags
+    has_strong_formula = "strong_formula_leakage" in flags
+    has_common = "common_capacity_driver" in flags
+    if has_strong_formula or (has_formula and has_common) or (has_formula and lag == 0 and raw_corr >= 0.95):
         return "formula_coupled_reference"
     if "unstable_across_regimes" in flags or "unstable_over_time" in flags:
         return "unstable_candidate"
@@ -434,7 +455,9 @@ def _residualize(y: pd.Series, x: pd.DataFrame) -> tuple[pd.Series, str, float, 
     if cond > 1e8:
         method = "ridge"
         alpha = 1e-3
-        xtx = x_matrix.T @ x_matrix + alpha * np.eye(x_matrix.shape[1])
+        penalty = alpha * np.eye(x_matrix.shape[1])
+        penalty[0, 0] = 0.0
+        xtx = x_matrix.T @ x_matrix + penalty
         coef = np.linalg.solve(xtx, x_matrix.T @ data.iloc[:, 0].to_numpy())
     else:
         coef, *_ = np.linalg.lstsq(x_matrix, data.iloc[:, 0].to_numpy(), rcond=None)

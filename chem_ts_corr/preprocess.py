@@ -86,20 +86,31 @@ def standardize_frame(frame: pd.DataFrame) -> pd.DataFrame:
     return (frame - frame.mean()) / std
 
 
-def transform_frame(frame: pd.DataFrame, mode: str, detrend_window: int) -> pd.DataFrame:
+def transform_frame(
+    frame: pd.DataFrame,
+    mode: str,
+    detrend_window: int,
+    max_interpolate_gap_points: int = 5,
+    interpolate_limit_area: str = "inside",
+) -> pd.DataFrame:
     if mode == "raw":
         return frame
     if mode == "detrend":
-        return detrend_moving_average(frame, detrend_window)
+        return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area)
     if mode == "diff":
         return frame.diff().dropna()
     if mode == "detrend_diff":
-        return detrend_moving_average(frame, detrend_window).diff().dropna()
+        return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area).diff().dropna()
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
 
-def detrend_moving_average(frame: pd.DataFrame, window: int) -> pd.DataFrame:
+def detrend_moving_average(
+    frame: pd.DataFrame,
+    window: int,
+    max_interpolate_gap_points: int = 5,
+    interpolate_limit_area: str = "inside",
+) -> pd.DataFrame:
     window = max(3, int(window))
     trend = frame.rolling(window=window, center=True, min_periods=max(2, window // 4)).mean()
     detrended = frame - trend
-    return detrended.interpolate(method="time", limit_direction="both").dropna()
+    return detrended.interpolate(method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area).dropna()

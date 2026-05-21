@@ -60,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--granger-maxlag", type=int, default=None)
     analyze.add_argument("--max-model-features", type=int, default=300)
     analyze.add_argument("--max-interpolate-gap-points", type=int, default=5)
-    analyze.add_argument("--interpolate-limit-area", choices=["inside", "outside", "both"], default="inside")
+    analyze.add_argument("--interpolate-limit-area", choices=["inside", "outside"], default="inside")
 
     serve = subparsers.add_parser("serve", help="run the local web UI")
     serve.add_argument("--host", default="127.0.0.1")

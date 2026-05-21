@@ -63,7 +63,15 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    scaled = standardize_frame(transform_frame(cleaned, config.preprocess_mode, config.detrend_window))
+    scaled = standardize_frame(
+        transform_frame(
+            cleaned,
+            config.preprocess_mode,
+            config.detrend_window,
+            max_interpolate_gap_points=config.max_interpolate_gap_points,
+            interpolate_limit_area=config.interpolate_limit_area,
+        )
+    )
 
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)

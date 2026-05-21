@@ -79,6 +79,9 @@ def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
     if lag_scores.empty:
         return lag_scores
     ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
+    ranked = ranked.dropna(subset=["score"])
+    if ranked.empty:
+        return pd.DataFrame(columns=list(lag_scores.columns) + ["score", "method", "p_value", "r2", "corr_q_value", "direction"])
     idx = ranked.groupby("variable")["score"].idxmax()
     best = ranked.loc[idx].sort_values("score", ascending=False).reset_index(drop=True)
     use_pearson = best["abs_pearson"] >= best["abs_spearman"]
@@ -96,6 +99,9 @@ def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFra
     ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
     rows = []
     for var, g in ranked.groupby("variable"):
+        g = g.dropna(subset=["score"])
+        if g.empty:
+            continue
         best = g.sort_values("score", ascending=False).iloc[0]
         bl = int(best["lag"])
         nearby = g[g["lag"].between(bl - 1, bl + 1)]["score"].mean()

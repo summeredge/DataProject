@@ -376,7 +376,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = ranked.head(config.top_k)["variable"].astype(str).tolist()
+    variables = _secondary_variables_from_ranked(ranked, config)
     scaled = _scaled_frame_for_secondary(config)
     granger = run_granger_tests(
         scaled,
@@ -399,7 +399,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = ranked.head(config.top_k)["variable"].astype(str).tolist()
+    variables = _secondary_variables_from_ranked(ranked, config)
     best_lags = _best_lags_from_ranked(ranked)
     scaled = _scaled_frame_for_secondary(config)
     importance, metrics = fit_explainable_model(
@@ -418,6 +418,18 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         "downloads": _download_links(run_id, output_dir),
     }
 
+
+
+
+def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfig) -> list[str]:
+    if ranked.empty or "variable" not in ranked.columns:
+        return []
+    top = ranked.head(config.top_k)["variable"].astype(str).tolist()
+    if "force_included" in ranked.columns:
+        forced = ranked[ranked["force_included"].astype(bool)]["variable"].astype(str).tolist()
+    else:
+        forced = [v for v in (config.force_include_variables or []) if v]
+    return list(dict.fromkeys(top + forced))
 
 def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
@@ -444,11 +456,19 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         segment_min=config.segment_min,
         segment_max=config.segment_max,
     )
+    protected = [
+        config.target,
+        config.segment_column,
+        *(config.capacity_columns or []),
+        *(config.residual_control_columns or []),
+        *(config.force_include_variables or []),
+    ]
     cleaned = preprocess_frame(
         segmented,
         target=config.target,
         resample_rule=config.resample_rule,
         min_valid_ratio=config.min_valid_ratio,
+        protected_columns=[c for c in protected if c],
     )
     transformed = transform_frame(cleaned, config.preprocess_mode, config.detrend_window)
     return standardize_frame(transformed)

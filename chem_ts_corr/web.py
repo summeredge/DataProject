@@ -709,10 +709,10 @@ INDEX_HTML = r"""<!doctype html>
     .subtitle { color:var(--muted); font-size:14px; }
     main { display:grid; grid-template-columns:minmax(320px,430px) 1fr; gap:18px; padding:18px; }
     section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
-    .controls { display:grid; gap:14px; align-content:start; }
-    label { display:grid; gap:6px; font-size:13px; color:var(--muted); }
-    input, select { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:#fff; font-size:14px; }
-    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .controls { display:grid; gap:8px; align-content:start; font-size:80%; }
+    label { display:grid; gap:3px; font-size:10px; line-height:1.2; color:var(--muted); }
+    input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:#fff; font-size:11px; line-height:1.2; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
     .check input { width:auto; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; }
@@ -796,6 +796,11 @@ INDEX_HTML = r"""<!doctype html>
   </header>
   <main>
     <section class="controls">
+      <div class="actions">
+        <button id="upload">上传并识别列</button>
+        <button id="analyze" disabled>开始分析</button>
+        <button id="reset" class="secondary">清空</button>
+      </div>
       <label>CSV 数据文件
         <input id="fileInput" type="file" accept=".csv,text/csv">
       </label>
@@ -845,14 +850,9 @@ INDEX_HTML = r"""<!doctype html>
         <label>自定义下限<input id="segmentMin" type="number" placeholder="可留空"></label>
         <label>自定义上限<input id="segmentMax" type="number" placeholder="可留空"></label>
       </div>
-      <label>残差控制列（CAPACITY，可多列，用逗号分隔）
-        <input id="capacityColumns" placeholder="例如：负荷,进料量">
+      <label>残差控制列（CAPACITY，多选）
+        <select id="capacityColumns" multiple size="6"></select>
       </label>
-      <div class="actions">
-        <button id="upload">上传并识别列</button>
-        <button id="analyze" disabled>开始分析</button>
-        <button id="reset" class="secondary">清空</button>
-      </div>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
@@ -991,6 +991,7 @@ async function loadColumns() {
     fillSelect(el("timeColumn"), data.columns);
   fillSelect(el("targetColumn"), data.numericColumns);
   fillSelect(el("segmentColumn"), data.numericColumns, true);
+  fillSelect(el("capacityColumns"), data.numericColumns);
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
@@ -1006,7 +1007,7 @@ async function loadColumns() {
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
-      el("capacityColumns").value = loadCandidate;
+      Array.from(el("capacityColumns").options).forEach((o) => { if (o.value === loadCandidate) o.selected = true; });
     }
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
@@ -1037,7 +1038,7 @@ async function analyze() {
     form.append("segment_mode", el("segmentMode").value);
     form.append("segment_min", el("segmentMin").value);
     form.append("segment_max", el("segmentMax").value);
-    form.append("capacity_columns", el("capacityColumns").value);
+    form.append("capacity_columns", Array.from(el("capacityColumns").selectedOptions).map((o) => o.value).join(","));
     form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
     form.append("force_include_variables", el("forceIncludeVariables") ? el("forceIncludeVariables").value : "");
     const data = await postForm("/api/analyze", form);
@@ -1448,7 +1449,7 @@ function reset() {
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
   el("segmentColumn").innerHTML = "";
-  el("capacityColumns").value = "";
+  el("capacityColumns").innerHTML = "";
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

@@ -716,6 +716,11 @@ INDEX_HTML = r"""<!doctype html>
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
     .check input { width:auto; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:#fff; }
+    .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:11px; }
+    .multi-dropdown > summary::-webkit-details-marker { display:none; }
+    .multi-options { max-height:180px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:4px; }
+    .multi-options label { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text); }
     button { border:0; border-radius:6px; padding:10px 14px; font-weight:650; cursor:pointer; background:var(--accent); color:#fff; }
     button.secondary { background:#e8edf3; color:var(--text); }
     button:disabled { opacity:.5; cursor:not-allowed; }
@@ -851,7 +856,10 @@ INDEX_HTML = r"""<!doctype html>
         <label>自定义上限<input id="segmentMax" type="number" placeholder="可留空"></label>
       </div>
       <label>残差控制列（CAPACITY，多选）
-        <select id="capacityColumns" multiple size="6"></select>
+        <details id="capacityDropdown" class="multi-dropdown">
+          <summary id="capacitySummary">请选择残差控制列</summary>
+          <div id="capacityOptions" class="multi-options"></div>
+        </details>
       </label>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -966,6 +974,38 @@ el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
 
+
+function fillCapacityOptions(columns) {
+  const box = el("capacityOptions");
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const id = `cap_${name}`;
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("change", updateCapacitySummary);
+    box.appendChild(row);
+  });
+  updateCapacitySummary();
+}
+
+function getCapacitySelection() {
+  return Array.from(document.querySelectorAll('#capacityOptions input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+function setCapacitySelection(values) {
+  const selected = new Set(values || []);
+  Array.from(document.querySelectorAll('#capacityOptions input[type="checkbox"]')).forEach((node) => {
+    node.checked = selected.has(node.value);
+  });
+  updateCapacitySummary();
+}
+
+function updateCapacitySummary() {
+  const selected = getCapacitySelection();
+  el("capacitySummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择残差控制列";
+}
+
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV 文件。");
@@ -991,7 +1031,7 @@ async function loadColumns() {
     fillSelect(el("timeColumn"), data.columns);
   fillSelect(el("targetColumn"), data.numericColumns);
   fillSelect(el("segmentColumn"), data.numericColumns, true);
-  fillSelect(el("capacityColumns"), data.numericColumns);
+  fillCapacityOptions(data.numericColumns);
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
@@ -1007,7 +1047,7 @@ async function loadColumns() {
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
-      Array.from(el("capacityColumns").options).forEach((o) => { if (o.value === loadCandidate) o.selected = true; });
+      setCapacitySelection([loadCandidate]);
     }
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
@@ -1038,7 +1078,7 @@ async function analyze() {
     form.append("segment_mode", el("segmentMode").value);
     form.append("segment_min", el("segmentMin").value);
     form.append("segment_max", el("segmentMax").value);
-    form.append("capacity_columns", Array.from(el("capacityColumns").selectedOptions).map((o) => o.value).join(","));
+    form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
     form.append("force_include_variables", el("forceIncludeVariables") ? el("forceIncludeVariables").value : "");
     const data = await postForm("/api/analyze", form);
@@ -1449,7 +1489,8 @@ function reset() {
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
   el("segmentColumn").innerHTML = "";
-  el("capacityColumns").innerHTML = "";
+  el("capacityOptions").innerHTML = "";
+  el("capacitySummary").textContent = "请选择残差控制列";
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

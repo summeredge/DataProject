@@ -615,10 +615,9 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _resolve_upload(file_id: str) -> Path:
-    matches = list(UPLOADS_DIR.glob(f"{file_id}_*"))
-    if not matches:
+    path = (UPLOADS_DIR / f"{file_id}.csv").resolve()
+    if not path.exists():
         raise FileNotFoundError("上传文件不存在，请重新上传")
-    path = matches[0].resolve()
     if UPLOADS_DIR.resolve() not in path.parents:
         raise ValueError("Invalid upload path")
     return path
@@ -894,6 +893,9 @@ INDEX_HTML = r"""<!doctype html>
           <summary id="capacitySummary">请选择残差控制列</summary>
           <div id="capacityOptions" class="multi-options"></div>
         </details>
+      </label>
+      <label>强制复核变量（逗号分隔）
+        <input id="forceIncludeVariables" placeholder="例如 TI706046.PV,FIC310411.PV">
       </label>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>

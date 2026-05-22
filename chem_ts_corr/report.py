@@ -100,7 +100,7 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score = 0.25*raw_corr_score + 0.25*residual_corr_score + 0.15*regime_stability_final + 0.15*rolling_stability + 0.10*lag_quality + 0.10*model_lift_score - 0.10*risk_penalty。",
+            "- final_score 使用动态权重：未计算项不参与评分，剩余已计算项按原始权重重归一；risk_penalty 按强/弱风险扣减。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability 综合相关强度、符号一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",

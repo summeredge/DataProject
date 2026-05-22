@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import cgi
 from dataclasses import asdict
 import json
-import shutil
 import threading
 import uuid
 import webbrowser
@@ -12,6 +10,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -165,7 +166,7 @@ def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
     file_id = uuid.uuid4().hex
     upload_path = UPLOADS_DIR / f"{file_id}.csv"
-    raw = file_item.file.read()
+    raw = file_item.file if isinstance(file_item.file, (bytes, bytearray)) else file_item.file.read()
     max_bytes = 100 * 1024 * 1024
     if len(raw) > max_bytes:
         raise ValueError("上传文件过大")
@@ -588,16 +589,29 @@ def _resolve_encoding(path: Path, encoding: str) -> str:
     return used_encoding
 
 
-def _multipart_form(handler: BaseHTTPRequestHandler) -> cgi.FieldStorage:
-    return cgi.FieldStorage(
-        fp=handler.rfile,
-        headers=handler.headers,
-        environ={
-            "REQUEST_METHOD": "POST",
-            "CONTENT_TYPE": handler.headers.get("Content-Type", ""),
-            "CONTENT_LENGTH": handler.headers.get("Content-Length", "0"),
-        },
-    )
+def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    content_type = handler.headers.get("Content-Type", "")
+    content_length = int(handler.headers.get("Content-Length", "0") or 0)
+    body = handler.rfile.read(content_length)
+    if "multipart/form-data" in content_type:
+        msg = BytesParser(policy=email_default_policy).parsebytes(
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + body
+        )
+        form: dict[str, Any] = {}
+        for part in msg.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            filename = part.get_filename()
+            payload = part.get_payload(decode=True) or b""
+            if filename:
+                form[name] = SimpleNamespace(filename=filename, file=payload)
+            else:
+                charset = part.get_content_charset() or "utf-8"
+                form[name] = payload.decode(charset, errors="ignore")
+        return form
+    data = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+    return {k: (v[0] if v else "") for k, v in data.items()}
 
 
 def _resolve_upload(file_id: str) -> Path:
@@ -644,36 +658,38 @@ def _download_links(run_id: str, output_dir: Path) -> list[dict[str, str]]:
     ]
 
 
-def _field(form: cgi.FieldStorage, name: str, default: str = "") -> str:
+def _field(form: dict[str, Any], name: str, default: str = "") -> str:
     if name not in form:
         return default
-    value = form.getvalue(name)
+    value = form.get(name)
     if value is None:
+        return default
+    if hasattr(value, "filename"):
         return default
     return str(value)
 
 
-def _int_field(form: cgi.FieldStorage, name: str, default: int) -> int:
+def _int_field(form: dict[str, Any], name: str, default: int) -> int:
     value = _field(form, name, "")
     return int(value) if value else default
 
 
-def _float_field(form: cgi.FieldStorage, name: str, default: float) -> float:
+def _float_field(form: dict[str, Any], name: str, default: float) -> float:
     value = _field(form, name, "")
     return float(value) if value else default
 
 
-def _optional_float_field(form: cgi.FieldStorage, name: str) -> float | None:
+def _optional_float_field(form: dict[str, Any], name: str) -> float | None:
     value = _field(form, name, "")
     return float(value) if value else None
 
 
-def _list_field(form: cgi.FieldStorage, name: str) -> list[str]:
+def _list_field(form: dict[str, Any], name: str) -> list[str]:
     value = _field(form, name, "")
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def _bool_field(form: cgi.FieldStorage, name: str) -> bool:
+def _bool_field(form: dict[str, Any], name: str) -> bool:
     return _field(form, name, "").lower() in {"1", "true", "yes", "on"}
 
 

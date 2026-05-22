@@ -275,25 +275,39 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             ("lag_boundary", lag_boundary),
             ("low_model_lift", low_lift),
             ("poor_data_quality", poor_quality),
+            ("residual_collinearity", residual_collinearity),
         ] if active]
 
         strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "closed_loop_suspect", "poor_data_quality"}]
         weak_risks = [f for f in flags if f not in set(strong_risks)]
         level = "none" if not flags else ("strong" if len(strong_risks) >= 2 else ("medium" if strong_risks else "weak"))
-        reason = "；".join(flags)
+        reason_map = {
+            "formula_like": "疑似公式类变量",
+            "strong_formula_leakage": "强公式泄漏风险",
+            "common_capacity_driver": "疑似共同负荷驱动",
+            "closed_loop_suspect": "疑似闭环反馈",
+            "target_leads_variable": "目标领先变量",
+            "unstable_across_regimes": "跨工况不稳定",
+            "unstable_over_time": "随时间不稳定",
+            "lag_boundary": "滞后触边界",
+            "low_model_lift": "模型增益偏低",
+            "poor_data_quality": "数据质量较差",
+            "residual_collinearity": "残差控制共线性高",
+        }
+        reason = "；".join(reason_map.get(flag, flag) for flag in flags)
         rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
     return pd.DataFrame(rows, columns=cols)
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "residual_corr", "regime_stability_final", "rolling_stability", "lag_quality", "lag_boundary_flag", "model_lift_score", "risk_penalty", "final_score", "candidate_grade", "recommended_use", "recommended_action", "risk_flags", "risk_count", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_penalty", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "final_score", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
     final = final.merge(residual[[c for c in ["variable", "residual_corr"] if c in residual.columns]], on="variable", how="left")
     final = final.merge(stability[[c for c in ["variable", "regime_stability_final"] if c in stability.columns]], on="variable", how="left")
     final = final.merge(model_lift[[c for c in ["variable", "model_lift", "status"] if c in model_lift.columns]], on="variable", how="left")
-    final = final.merge(risks[[c for c in ["variable", "risk_flags", "risk_count"] if c in risks.columns]], on="variable", how="left")
+    final = final.merge(risks[[c for c in ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"] if c in risks.columns]], on="variable", how="left")
     final = final.merge(lag_peak_quality[[c for c in ["variable", "lag_quality", "lag_boundary_flag"] if c in lag_peak_quality.columns]], on="variable", how="left")
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
 
@@ -318,7 +332,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     display_rolling = rolling_raw.fillna(0.5).clip(0,1)
     display_lagq = lagq_raw.fillna(0.5).clip(0,1)
     display_lift = lift_raw.fillna(0.0).clip(0,1)
-    final["risk_penalty"] = final.get("risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 5)
+    strong = final.get("strong_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 10)
+    weak = final.get("weak_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 20)
+    final["risk_penalty"] = 0.12 * strong + 0.03 * weak
     parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (final["residual_corr_score"], 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
     num = 0
     den = 0

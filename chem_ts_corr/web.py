@@ -894,8 +894,11 @@ INDEX_HTML = r"""<!doctype html>
           <div id="capacityOptions" class="multi-options"></div>
         </details>
       </label>
-      <label>强制复核变量（逗号分隔）
-        <input id="forceIncludeVariables" placeholder="例如 TI706046.PV,FIC310411.PV">
+      <label>强制复核变量（多选）
+        <details id="forceIncludeDropdown" class="multi-dropdown">
+          <summary id="forceIncludeSummary">请选择强制复核变量</summary>
+          <div id="forceIncludeOptions" class="multi-options"></div>
+        </details>
       </label>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -1042,6 +1045,37 @@ function updateCapacitySummary() {
   el("capacitySummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择残差控制列";
 }
 
+
+function fillForceIncludeOptions(columns) {
+  const box = el("forceIncludeOptions");
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("change", updateForceIncludeSummary);
+    box.appendChild(row);
+  });
+  updateForceIncludeSummary();
+}
+
+function getForceIncludeSelection() {
+  return Array.from(document.querySelectorAll('#forceIncludeOptions input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+function setForceIncludeSelection(values) {
+  const selected = new Set(values || []);
+  Array.from(document.querySelectorAll('#forceIncludeOptions input[type="checkbox"]')).forEach((node) => {
+    node.checked = selected.has(node.value);
+  });
+  updateForceIncludeSummary();
+}
+
+function updateForceIncludeSummary() {
+  const selected = getForceIncludeSelection();
+  el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
+}
+
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV 文件。");
@@ -1068,6 +1102,9 @@ async function loadColumns() {
   fillSelect(el("targetColumn"), data.numericColumns);
   fillSelect(el("segmentColumn"), data.numericColumns, true);
   fillCapacityOptions(data.numericColumns);
+  fillForceIncludeOptions(data.numericColumns);
+  el("capacityDropdown").open = false;
+  el("forceIncludeDropdown").open = false;
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
@@ -1116,7 +1153,7 @@ async function analyze() {
     form.append("segment_max", el("segmentMax").value);
     form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
-    form.append("force_include_variables", el("forceIncludeVariables") ? el("forceIncludeVariables").value : "");
+    form.append("force_include_variables", getForceIncludeSelection().join(","));
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
@@ -1565,6 +1602,10 @@ function reset() {
   el("segmentColumn").innerHTML = "";
   el("capacityOptions").innerHTML = "";
   el("capacitySummary").textContent = "请选择残差控制列";
+  el("capacityDropdown").open = false;
+  el("forceIncludeOptions").innerHTML = "";
+  el("forceIncludeSummary").textContent = "请选择强制复核变量";
+  el("forceIncludeDropdown").open = false;
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

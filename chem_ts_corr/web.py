@@ -40,6 +40,7 @@ DOWNLOAD_FILES = {
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
+    "causal_review_candidates.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()

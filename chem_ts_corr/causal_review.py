@@ -5,15 +5,10 @@ import pandas as pd
 
 def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     cols = [
-        "variable",
-        "final_score",
-        "candidate_grade",
-        "recommended_use",
-        "risk_level",
-        "risk_flags",
-        "review_priority",
-        "review_reason",
-        "review_tier",
+        "variable", "final_score", "candidate_grade", "lag", "direction", "raw_corr", "residual_corr",
+        "rolling_stability", "regime_stability_final", "lag_boundary_flag", "model_lift_score",
+        "risk_level", "risk_flags", "recommended_use", "recommended_action", "force_included",
+        "review_priority", "review_reason", "review_tier",
     ]
     if ranked_features.empty:
         return pd.DataFrame(columns=cols)

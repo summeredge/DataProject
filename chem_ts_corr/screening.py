@@ -359,7 +359,10 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
 
     if top_k is not None:
-        top = final.sort_values("final_score", ascending=False).head(top_k)
+        rank_base = final
+        if control_set:
+            rank_base = final[~final["variable"].astype(str).isin(control_set)]
+        top = rank_base.sort_values("final_score", ascending=False).head(top_k)
         forced_rows = final[final["force_included"]]
         final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
     else:
@@ -422,6 +425,7 @@ def _recommended_action(row: pd.Series) -> str:
         "unstable_candidate": "跨工况/时间不稳定，建议复核",
         "poor_quality_variable": "数据质量风险，建议剔除",
         "state_indicator": "更可能是状态指示量",
+        "control_variable_reference": "残差/负荷控制变量，仅作控制基准参考。",
     }
     return mapping.get(use, "建议人工工艺复核")
 

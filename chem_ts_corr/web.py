@@ -564,6 +564,7 @@ def _overview_payload(
     return {
         "top10": _records(ranked.head(10)),
         "effective_variables": int(len(ranked)),
+        "risk_tagged_count": high_risk,
         "high_risk_count": high_risk,
         "secondary_review_count": review,
         "target": config.target,
@@ -1384,7 +1385,7 @@ function renderOverview(overview) {
   const metrics = [
     ["数据规模", overview.rows_after_preprocess ?? overview.rows_after_segment ?? ""],
     ["有效变量数量", overview.effective_variables ?? ""],
-    ["高风险变量数量", overview.high_risk_count ?? ""],
+    ["有风险标签变量数量", overview.risk_tagged_count ?? overview.high_risk_count ?? ""],
     ["建议二级复核变量数量", overview.secondary_review_count ?? ""],
   ];
   el("overview").innerHTML = metrics.map(([label, value]) =>

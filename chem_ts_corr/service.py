@@ -28,8 +28,10 @@ class AnalysisTables:
     metrics: dict[str, float | str]
 
 
-def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str]) -> tuple[list[str], list[str]]:
-    ordered = list(dict.fromkeys(top + (forced or [])))
+def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str], excluded: set[str] | None = None) -> tuple[list[str], list[str]]:
+    excluded = excluded or set()
+    top_filtered = [v for v in top if v not in excluded]
+    ordered = list(dict.fromkeys(top_filtered + (forced or [])))
     valid = [v for v in ordered if v in columns]
     warnings = [v for v in (forced or []) if v not in columns]
     return valid, warnings
@@ -75,8 +77,11 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
 
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)
+    excluded_controls = set()
+    if config.exclude_control_columns_from_candidates:
+        excluded_controls = set(config.residual_control_columns or []) | set(config.capacity_columns or [])
     topk = raw_ranked.head(config.top_k)["variable"].tolist() if not raw_ranked.empty else []
-    candidate_variables, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns))
+    candidate_variables, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns), excluded_controls)
     best_lags = _best_lag_map(raw_ranked)
     residual_controls = config.residual_control_columns or config.capacity_columns
 
@@ -97,6 +102,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         rolling,
         force_include_variables=config.force_include_variables,
         top_k=config.top_k,
+        control_columns=list(excluded_controls),
     )
     candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
 

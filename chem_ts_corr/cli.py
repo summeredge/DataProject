@@ -61,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--max-model-features", type=int, default=300)
     analyze.add_argument("--max-interpolate-gap-points", type=int, default=5)
     analyze.add_argument("--interpolate-limit-area", choices=["inside", "outside"], default="inside")
+    analyze.add_argument(
+        "--exclude-control-columns-from-candidates",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exclude residual/capacity control columns from top-k candidates by default",
+    )
 
     serve = subparsers.add_parser("serve", help="run the local web UI")
     serve.add_argument("--host", default="127.0.0.1")
@@ -98,6 +104,7 @@ def main() -> None:
             max_model_features=args.max_model_features,
             max_interpolate_gap_points=args.max_interpolate_gap_points,
             interpolate_limit_area=args.interpolate_limit_area,
+            exclude_control_columns_from_candidates=args.exclude_control_columns_from_candidates,
         )
         run_analysis(config)
     elif args.command == "serve":

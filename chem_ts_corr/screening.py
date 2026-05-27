@@ -299,7 +299,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     return pd.DataFrame(rows, columns=cols)
 
 
-def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None) -> pd.DataFrame:
+def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
     cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_penalty", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "final_score", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -353,6 +353,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["model_lift_score"] = display_lift
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
     final["recommended_use"] = final.apply(_recommend_use, axis=1)
+    control_set = set(control_columns or [])
+    if control_set:
+        final.loc[final["variable"].astype(str).isin(control_set), "recommended_use"] = "control_variable_reference"
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
 
     if top_k is not None:

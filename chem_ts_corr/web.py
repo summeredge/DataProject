@@ -285,6 +285,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         capacity_columns=_list_field(form, "capacity_columns"),
         residual_control_columns=_list_field(form, "residual_control_columns") or _list_field(form, "capacity_columns"),
         force_include_variables=_list_field(form, "force_include_variables"),
+        exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
     )
@@ -1155,6 +1156,7 @@ async function analyze() {
     form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
     form.append("force_include_variables", getForceIncludeSelection().join(","));
+    form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
@@ -1512,6 +1514,7 @@ function formatValue(value) {
       unstable_candidate: "不稳定候选",
       poor_quality_variable: "低质量变量",
       manual_review_required: "需要人工复核",
+      control_variable_reference: "控制变量参考",
       formula_like: "公式类变量",
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",

@@ -1155,7 +1155,7 @@ async function analyze() {
     form.append("segment_min", el("segmentMin").value);
     form.append("segment_max", el("segmentMax").value);
     form.append("capacity_columns", getCapacitySelection().join(","));
-    form.append("residual_control_columns", el("residualControlColumns") ? el("residualControlColumns").value : "");
+    form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);

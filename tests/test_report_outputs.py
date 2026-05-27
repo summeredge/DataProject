@@ -51,9 +51,23 @@ def test_write_outputs_writes_expected_files(tmp_path: Path):
         "lag_scores.csv",
         "risk_flags.csv",
         "rolling_corr_scores.csv",
+        "causal_review_candidates.csv",
         "summary.md",
     ]:
         assert (tmp_path / name).exists(), f"missing output: {name}"
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "自动诊断建议" in summary
+
+
+    review = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    for c in [
+        "variable",
+        "final_score",
+        "candidate_grade",
+        "recommended_use",
+        "review_priority",
+        "review_reason",
+        "review_tier",
+    ]:
+        assert c in review.columns

@@ -14,7 +14,7 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
         return pd.DataFrame(columns=cols)
 
     frame = ranked_features.copy()
-    for c in ["final_score", "candidate_grade", "recommended_use", "risk_level", "risk_flags", "model_lift_score", "lag_quality", "rolling_stability"]:
+    for c in [c for c in cols if c not in {"review_priority", "review_reason", "review_tier"}]:
         if c not in frame.columns:
             frame[c] = pd.NA
 
@@ -42,4 +42,4 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
     priorities.columns = ["review_priority", "review_reason", "review_tier"]
     out = pd.concat([frame, priorities], axis=1)
     out = out.sort_values(["review_priority", "final_score"], ascending=[True, False]).reset_index(drop=True)
-    return out[[c for c in cols if c in out.columns]]
+    return out[cols]

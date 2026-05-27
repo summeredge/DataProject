@@ -1,0 +1,59 @@
+from pathlib import Path
+
+import pandas as pd
+
+from chem_ts_corr.report import write_outputs
+
+
+def test_write_outputs_writes_expected_files(tmp_path: Path):
+    ranked = pd.DataFrame(
+        [
+            {
+                "variable": "v1",
+                "final_score": 0.82,
+                "candidate_grade": "A",
+                "recommended_use": "strong_screening_candidate",
+                "lag": 1,
+                "direction": "变量领先目标",
+                "raw_corr": 0.8,
+                "residual_corr": 0.7,
+                "risk_flags": "",
+                "recommended_action": "优先进入机理复核",
+                "lag_boundary_flag": False,
+            }
+        ]
+    )
+    lag_scores = pd.DataFrame([{"variable": "v1", "lag": 1, "score": 0.8, "corr_q_value": 0.01}])
+    granger = pd.DataFrame([{"variable": "v1", "min_p_value": 0.04, "status": "ok"}])
+    importance = pd.DataFrame([{"variable": "v1", "importance": 0.5}])
+    risk = pd.DataFrame([{"variable": "v1", "risk_count": 0, "common_capacity_driver_flag": False}])
+
+    write_outputs(
+        output_dir=tmp_path,
+        target="target",
+        ranked_features=ranked,
+        lag_scores=lag_scores,
+        granger_tests=granger,
+        importance=importance,
+        metrics={"rows_after_preprocess": 100, "variables": 5},
+        diagnostics=pd.DataFrame([{"variable": "v1", "missing_rate": 0.0}]),
+        residual_corr_scores=pd.DataFrame([{"variable": "v1", "residual_corr": 0.7}]),
+        regime_scores=pd.DataFrame([{"variable": "v1", "regime_stability_final": 0.9}]),
+        risk_flags=risk,
+        model_lift_scores=pd.DataFrame([{"variable": "v1", "model_lift": 0.1}]),
+        lag_peak_quality=pd.DataFrame([{"variable": "v1", "lag_quality": 0.8}]),
+        rolling_corr_scores=pd.DataFrame([{"variable": "v1", "rolling_stability": 0.7}]),
+    )
+
+    for name in [
+        "ranked_features.csv",
+        "recommended_candidates.csv",
+        "lag_scores.csv",
+        "risk_flags.csv",
+        "rolling_corr_scores.csv",
+        "summary.md",
+    ]:
+        assert (tmp_path / name).exists(), f"missing output: {name}"
+
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert "自动诊断建议" in summary

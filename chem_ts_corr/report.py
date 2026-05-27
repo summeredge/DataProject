@@ -95,6 +95,32 @@ def build_markdown_summary(
     lines.append("Granger 结果仅表示候选变量对目标的预测贡献，不作为因果结论。")
     lines.extend(_table_lines(granger_tests.head(15)))
 
+
+    lines.extend(["", "## 自动诊断建议", ""])
+    advice: list[str] = []
+    top10 = ranked_features.head(10) if not ranked_features.empty else pd.DataFrame()
+    if not top10.empty and "lag_boundary_flag" in top10.columns:
+        lag_boundary_ratio = float(top10["lag_boundary_flag"].fillna(False).astype(bool).mean())
+        if lag_boundary_ratio >= 0.3:
+            advice.append("- Top 10 候选中滞后边界命中占比较高（>=30%），建议适当扩大 max_lag 后复跑。")
+
+    if ranked_features.empty or "candidate_grade" not in ranked_features.columns:
+        ab_count = 0
+    else:
+        ab_count = int(ranked_features["candidate_grade"].astype(str).isin(["A", "B"]).sum())
+    if ab_count == 0:
+        advice.append("- 当前未筛出 A/B 级强候选，不建议直接进入 APC/软测量建模，建议先补充工况与变量复核。")
+
+    if not risk_flags.empty and "common_capacity_driver_flag" in risk_flags.columns:
+        common_capacity_ratio = float(risk_flags["common_capacity_driver_flag"].fillna(False).astype(bool).mean())
+        common_capacity_count = int(risk_flags["common_capacity_driver_flag"].fillna(False).astype(bool).sum())
+        if common_capacity_ratio >= 0.3 or common_capacity_count >= 3:
+            advice.append("- 疑似共同负荷驱动变量较多，建议检查残差控制列设置与负荷变量选择是否合理。")
+
+    if not advice:
+        advice.append("- 暂无显著自动诊断告警，建议结合工艺知识继续复核 Top 候选。")
+    lines.extend(advice)
+
     lines.extend(
         [
             "",

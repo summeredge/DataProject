@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from chem_ts_corr.causal_review import build_causal_review_candidates
+
 
 def write_outputs(
     output_dir: Path,
@@ -26,6 +28,7 @@ def write_outputs(
     files = {
         "ranked_features.csv": ranked_features,
         "recommended_candidates.csv": build_recommended_candidates(ranked_features),
+        "causal_review_candidates.csv": build_causal_review_candidates(ranked_features),
         "lag_scores.csv": lag_scores,
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
@@ -95,6 +98,10 @@ def build_markdown_summary(
     lines.append("Granger 结果仅表示候选变量对目标的预测贡献，不作为因果结论。")
     lines.extend(_table_lines(granger_tests.head(15)))
 
+    lines.extend(["", "## 第三层复核准备说明", ""])
+    lines.append("causal_review_candidates.csv 为规则化复核优先级清单（不引入 PCMCI/Transfer Entropy，仅用于三层复核排队）。")
+    review = build_causal_review_candidates(ranked_features)
+    lines.extend(_table_lines(review.head(15)))
 
     lines.extend(["", "## 自动诊断建议", ""])
     advice: list[str] = []

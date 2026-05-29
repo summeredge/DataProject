@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pandas as pd
 
@@ -33,12 +35,10 @@ def run_conditional_granger_tests(
     controls = [c for c in (control_columns or []) if c in frame.columns and c != target]
     rows: list[dict[str, object]] = []
 
+    scipy_available = importlib.util.find_spec("scipy") is not None
     scipy_f = None
-    scipy_available = True
-    try:
+    if scipy_available:
         from scipy.stats import f as scipy_f  # type: ignore
-    except Exception:
-        scipy_available = False
 
     for variable in variables:
         base_row = {
@@ -68,25 +68,36 @@ def run_conditional_granger_tests(
         for lag in range(1, maxlag + 1):
             df = pd.DataFrame(index=frame.index)
             df[y_name] = pd.to_numeric(frame[target], errors="coerce")
-            # baseline: target lags
+            y_lag_cols = []
+            control_lag_cols = []
             for l in range(1, maxlag + 1):
-                df[f"y_lag_{l}"] = pd.to_numeric(frame[target], errors="coerce").shift(l)
-            # full adds candidate lag + control lags
-            df[f"x_lag_{lag}"] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
+                col = f"y_lag_{l}"
+                df[col] = pd.to_numeric(frame[target], errors="coerce").shift(l)
+                y_lag_cols.append(col)
             for c in controls:
                 for l in range(1, maxlag + 1):
-                    df[f"{c}_lag_{l}"] = pd.to_numeric(frame[c], errors="coerce").shift(l)
+                    col = f"{c}_lag_{l}"
+                    df[col] = pd.to_numeric(frame[c], errors="coerce").shift(l)
+                    control_lag_cols.append(col)
+            x_lag_col = f"x_lag_{lag}"
+            df[x_lag_col] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
             df = df.dropna()
             n = len(df)
             if n < min_rows:
                 continue
 
+            base_cols = y_lag_cols + control_lag_cols
+            full_cols = base_cols + [x_lag_col]
             y = df[y_name].to_numpy(dtype=float)
-            base_cols = [c for c in df.columns if c.startswith("y_lag_")]
-            full_cols = base_cols + [f"x_lag_{lag}"] + [c for c in df.columns if c not in [y_name, *base_cols, f"x_lag_{lag}"]]
-
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
             x_full = np.column_stack([np.ones(n), df[full_cols].to_numpy(dtype=float)])
+
+            p = x_base.shape[1]
+            q = x_full.shape[1]
+            df_num = q - p
+            df_den = n - q
+            if df_num <= 0 or df_den <= 0:
+                continue
 
             try:
                 b_coef, *_ = np.linalg.lstsq(x_base, y, rcond=None)
@@ -103,10 +114,6 @@ def run_conditional_granger_tests(
             pred_contrib = max(0.0, (rmse_b - rmse_f) / rmse_b) if rmse_b > 0 else 0.0
 
             p_value = np.nan
-            p = x_base.shape[1]
-            q = x_full.shape[1]
-            df_num = max(1, q - p)
-            df_den = max(1, n - q)
             if rss_f > 0 and rss_b >= rss_f:
                 f_stat = ((rss_b - rss_f) / df_num) / (rss_f / df_den)
                 if scipy_available and scipy_f is not None and np.isfinite(f_stat):

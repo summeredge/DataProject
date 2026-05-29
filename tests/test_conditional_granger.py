@@ -65,3 +65,29 @@ def test_conditional_granger_with_control_columns():
     row = out.iloc[0]
     assert "c" in str(row["control_columns"])
     assert str(row["status"]).startswith("ok") or str(row["status"]).startswith("skipped")
+
+
+def test_conditional_granger_controls_common_driver_effect():
+    n = 260
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(123)
+    c = rng.normal(size=n)
+    x = c + rng.normal(scale=0.05, size=n)
+    y = np.zeros(n)
+    for t in range(1, n):
+        y[t] = 0.9 * c[t - 1] + rng.normal(scale=0.05)
+    frame = pd.DataFrame({"target": y, "x": x, "c": c}, index=idx)
+
+    uncontrolled = run_conditional_granger_tests(frame, target="target", variables=["x"], maxlag=4, min_rows=80)
+    controlled = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        control_columns=["c"],
+        maxlag=4,
+        min_rows=80,
+    )
+
+    assert str(uncontrolled.iloc[0]["status"]).startswith("ok")
+    assert str(controlled.iloc[0]["status"]).startswith("ok")
+    assert float(controlled.iloc[0]["predictive_contribution"]) < float(uncontrolled.iloc[0]["predictive_contribution"])

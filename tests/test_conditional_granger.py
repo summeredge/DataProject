@@ -65,3 +65,43 @@ def test_conditional_granger_with_control_columns():
     row = out.iloc[0]
     assert "c" in str(row["control_columns"])
     assert str(row["status"]).startswith("ok") or str(row["status"]).startswith("skipped")
+
+
+def test_conditional_granger_controls_common_driver_marginal_contribution():
+    n = 320
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(123)
+    common_driver = rng.normal(size=n)
+    candidate = common_driver + 0.05 * rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.45 * target[t - 1] + 0.75 * common_driver[t - 1] + 0.05 * rng.normal()
+    frame = pd.DataFrame(
+        {"target": target, "candidate": candidate, "common_driver": common_driver},
+        index=idx,
+    )
+
+    uncontrolled = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["candidate"],
+        maxlag=3,
+        min_rows=100,
+    ).iloc[0]
+    controlled = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["candidate"],
+        control_columns=["common_driver"],
+        maxlag=3,
+        min_rows=100,
+    ).iloc[0]
+
+    assert str(uncontrolled["status"]).startswith("ok")
+    assert str(controlled["status"]).startswith("ok")
+    if not pd.isna(uncontrolled["min_p_value"]):
+        assert float(uncontrolled["min_p_value"]) < 0.001
+    if not pd.isna(controlled["min_p_value"]):
+        assert float(controlled["min_p_value"]) > 0.05
+    assert float(uncontrolled["predictive_contribution"]) > 0.5
+    assert float(controlled["predictive_contribution"]) < 0.01

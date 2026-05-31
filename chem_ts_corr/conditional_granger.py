@@ -68,22 +68,27 @@ def run_conditional_granger_tests(
         for lag in range(1, maxlag + 1):
             df = pd.DataFrame(index=frame.index)
             df[y_name] = pd.to_numeric(frame[target], errors="coerce")
-            # baseline: target lags
+            # baseline model: target lags + control lags
             for l in range(1, maxlag + 1):
                 df[f"y_lag_{l}"] = pd.to_numeric(frame[target], errors="coerce").shift(l)
-            # full adds candidate lag + control lags
-            df[f"x_lag_{lag}"] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
+            control_lag_cols = []
             for c in controls:
                 for l in range(1, maxlag + 1):
-                    df[f"{c}_lag_{l}"] = pd.to_numeric(frame[c], errors="coerce").shift(l)
+                    col = f"{c}_lag_{l}"
+                    df[col] = pd.to_numeric(frame[c], errors="coerce").shift(l)
+                    control_lag_cols.append(col)
+            # full model adds exactly the candidate lag being tested.
+            candidate_lag_col = f"x_lag_{lag}"
+            df[candidate_lag_col] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
             df = df.dropna()
             n = len(df)
             if n < min_rows:
                 continue
 
             y = df[y_name].to_numpy(dtype=float)
-            base_cols = [c for c in df.columns if c.startswith("y_lag_")]
-            full_cols = base_cols + [f"x_lag_{lag}"] + [c for c in df.columns if c not in [y_name, *base_cols, f"x_lag_{lag}"]]
+            target_lag_cols = [f"y_lag_{l}" for l in range(1, maxlag + 1)]
+            base_cols = target_lag_cols + control_lag_cols
+            full_cols = base_cols + [candidate_lag_col]
 
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
             x_full = np.column_stack([np.ones(n), df[full_cols].to_numpy(dtype=float)])
@@ -102,11 +107,14 @@ def run_conditional_granger_tests(
             rmse_f = float(np.sqrt(np.mean(resid_f * resid_f)))
             pred_contrib = max(0.0, (rmse_b - rmse_f) / rmse_b) if rmse_b > 0 else 0.0
 
-            p_value = np.nan
             p = x_base.shape[1]
             q = x_full.shape[1]
-            df_num = max(1, q - p)
-            df_den = max(1, n - q)
+            df_num = q - p
+            df_den = n - q
+            if df_num <= 0 or df_den <= 0:
+                continue
+
+            p_value = np.nan
             if rss_f > 0 and rss_b >= rss_f:
                 f_stat = ((rss_b - rss_f) / df_num) / (rss_f / df_den)
                 if scipy_available and scipy_f is not None and np.isfinite(f_stat):

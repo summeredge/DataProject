@@ -69,8 +69,11 @@ def run_conditional_granger_tests(
             df = pd.DataFrame(index=frame.index)
             df[y_name] = pd.to_numeric(frame[target], errors="coerce")
             # baseline model: target lags + control lags
+            y_lag_cols = []
             for l in range(1, maxlag + 1):
-                df[f"y_lag_{l}"] = pd.to_numeric(frame[target], errors="coerce").shift(l)
+                col = f"y_lag_{l}"
+                df[col] = pd.to_numeric(frame[target], errors="coerce").shift(l)
+                y_lag_cols.append(col)
             control_lag_cols = []
             for c in controls:
                 for l in range(1, maxlag + 1):
@@ -78,17 +81,16 @@ def run_conditional_granger_tests(
                     df[col] = pd.to_numeric(frame[c], errors="coerce").shift(l)
                     control_lag_cols.append(col)
             # full model adds exactly the candidate lag being tested.
-            candidate_lag_col = f"x_lag_{lag}"
-            df[candidate_lag_col] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
+            x_lag_col = f"x_lag_{lag}"
+            df[x_lag_col] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
             df = df.dropna()
             n = len(df)
             if n < min_rows:
                 continue
 
             y = df[y_name].to_numpy(dtype=float)
-            target_lag_cols = [f"y_lag_{l}" for l in range(1, maxlag + 1)]
-            base_cols = target_lag_cols + control_lag_cols
-            full_cols = base_cols + [candidate_lag_col]
+            base_cols = y_lag_cols + control_lag_cols
+            full_cols = base_cols + [x_lag_col]
 
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
             x_full = np.column_stack([np.ones(n), df[full_cols].to_numpy(dtype=float)])

@@ -4,6 +4,21 @@ import pandas as pd
 from chem_ts_corr.conditional_granger import run_conditional_granger_tests
 
 
+EXPECTED_OUT_COLS = [
+    "variable",
+    "status",
+    "best_lag",
+    "min_p_value",
+    "fdr_q_value",
+    "baseline_rmse",
+    "full_rmse",
+    "predictive_contribution",
+    "control_columns",
+    "n_rows",
+    "interpretation",
+]
+
+
 def test_conditional_granger_detects_predictive_candidate():
     n = 220
     idx = pd.date_range("2024-01-01", periods=n, freq="h")
@@ -36,11 +51,7 @@ def test_conditional_granger_keeps_output_columns_when_insufficient_rows():
     frame = pd.DataFrame({"target": np.arange(n, dtype=float), "x": np.arange(n, dtype=float)}, index=idx)
     out = run_conditional_granger_tests(frame, target="target", variables=["x"], maxlag=8, min_rows=60)
     assert out.iloc[0]["status"] == "skipped: insufficient rows"
-    for c in [
-        "variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse",
-        "predictive_contribution", "control_columns", "n_rows", "interpretation",
-    ]:
-        assert c in out.columns
+    assert list(out.columns) == EXPECTED_OUT_COLS
 
 
 def test_conditional_granger_with_control_columns():
@@ -101,4 +112,7 @@ def test_conditional_granger_controls_common_driver_effect():
     assert str(controlled["status"]).startswith("ok")
     assert uncontrolled_contribution > 0.5
     assert controlled_contribution < uncontrolled_contribution
+    assert controlled_contribution < uncontrolled_contribution * 0.05
     assert controlled_contribution < 0.01
+    assert controlled["interpretation"] == "predictive validation only; not a causal conclusion"
+    assert list(controlled.index) == EXPECTED_OUT_COLS

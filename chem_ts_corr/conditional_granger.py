@@ -65,24 +65,27 @@ def run_conditional_granger_tests(
 
         best = None
         y_name = target
+        y_series = pd.to_numeric(frame[target], errors="coerce")
+        x_series = pd.to_numeric(frame[variable], errors="coerce")
+        control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in controls}
         for lag in range(1, maxlag + 1):
             df = pd.DataFrame(index=frame.index)
-            df[y_name] = pd.to_numeric(frame[target], errors="coerce")
+            df[y_name] = y_series
             # baseline model: target lags + control lags
             y_lag_cols = []
             for l in range(1, maxlag + 1):
                 col = f"y_lag_{l}"
-                df[col] = pd.to_numeric(frame[target], errors="coerce").shift(l)
+                df[col] = y_series.shift(l)
                 y_lag_cols.append(col)
             control_lag_cols = []
-            for c in controls:
+            for c, series in control_series.items():
                 for l in range(1, maxlag + 1):
                     col = f"{c}_lag_{l}"
-                    df[col] = pd.to_numeric(frame[c], errors="coerce").shift(l)
+                    df[col] = series.shift(l)
                     control_lag_cols.append(col)
             # full model adds exactly the candidate lag being tested.
             x_lag_col = f"x_lag_{lag}"
-            df[x_lag_col] = pd.to_numeric(frame[variable], errors="coerce").shift(lag)
+            df[x_lag_col] = x_series.shift(lag)
             df = df.dropna()
             n = len(df)
             if n < min_rows:

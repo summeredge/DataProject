@@ -19,6 +19,7 @@ import pandas as pd
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import load_timeseries_csv
 from chem_ts_corr.causality import run_granger_tests
+from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.pipeline import run_analysis
 
@@ -41,6 +42,8 @@ DOWNLOAD_FILES = {
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
     "causal_review_candidates.csv",
+    "conditional_granger_scores.csv",
+    "causal_review_report.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -118,6 +121,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/run_model":
                 self._send_json(_run_model_response(self))
+                return
+            if self.path in {"/run_causal_review", "/api/run_causal_review"}:
+                self._send_json(_run_causal_review_response(self))
                 return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
@@ -431,6 +437,56 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 
+def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    candidates = _safe_read_result_csv(output_dir / "causal_review_candidates.csv")
+    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+    if candidates.empty:
+        raise ValueError("请先完成主筛查并生成 causal_review_candidates.csv")
+
+    risk_filter = _list_field(form, "risk_flag_filter")
+    candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
+    scaled = _scaled_frame_for_secondary(config)
+    result = run_causal_review_stage(
+        frame=scaled,
+        target=config.target,
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        risk_flags=risk,
+        control_columns=_list_field(form, "control_columns") or config.residual_control_columns or config.capacity_columns,
+        maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
+        min_rows=_int_field(form, "min_rows", 60),
+        top_n=_optional_int_field(form, "top_n"),
+    )
+    conditional = result["conditional_granger_scores"]
+    report = result["causal_review_report"]
+    conditional.to_csv(output_dir / "conditional_granger_scores.csv", index=False, encoding="utf-8-sig")
+    report.to_csv(output_dir / "causal_review_report.csv", index=False, encoding="utf-8-sig")
+    return {
+        "conditionalGrangerScores": _records(conditional.head(500)),
+        "causalReviewReport": _records(report.head(500)),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "v0.4 三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _filter_candidates_by_risk_flags(
+    candidates: pd.DataFrame, risk_flags: pd.DataFrame, selected_flags: list[str]
+) -> pd.DataFrame:
+    if not selected_flags or candidates.empty or risk_flags.empty:
+        return candidates.copy(deep=True)
+    if "variable" not in candidates.columns or "variable" not in risk_flags.columns or "risk_flags" not in risk_flags.columns:
+        return candidates.copy(deep=True)
+    selected = {flag.lower() for flag in selected_flags}
+    risk_text = risk_flags["risk_flags"].fillna("").astype(str).str.lower()
+    mask = risk_text.apply(lambda value: any(flag in value for flag in selected))
+    variables = set(risk_flags.loc[mask, "variable"].astype(str))
+    return candidates[candidates["variable"].astype(str).isin(variables)].copy(deep=True)
+
 
 def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfig) -> list[str]:
     if ranked.empty or "variable" not in ranked.columns:
@@ -686,6 +742,11 @@ def _optional_float_field(form: dict[str, Any], name: str) -> float | None:
     return float(value) if value else None
 
 
+def _optional_int_field(form: dict[str, Any], name: str) -> int | None:
+    value = _field(form, name, "")
+    return int(value) if value else None
+
+
 def _list_field(form: dict[str, Any], name: str) -> list[str]:
     value = _field(form, name, "")
     return [item.strip() for item in value.split(",") if item.strip()]
@@ -825,6 +886,13 @@ INDEX_HTML = r"""<!doctype html>
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
     th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
+    .decision-badge { display:inline-block; border-radius:999px; padding:3px 8px; font-weight:700; font-size:12px; }
+    .decision-risk_limited_review { background:#fef3c7; color:#92400e; }
+    .decision-priority_review { background:#fee2e2; color:#991b1b; }
+    .decision-secondary_review { background:#ffedd5; color:#9a3412; }
+    .decision-not_recommended { background:#e5e7eb; color:#374151; }
+    .decision-insufficient_evidence { background:#dbeafe; color:#1e40af; }
+    .decision-manual_review_only { background:#7f1d1d; color:#fff; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } }
@@ -903,6 +971,10 @@ INDEX_HTML = r"""<!doctype html>
           <div id="forceIncludeOptions" class="multi-options"></div>
         </details>
       </label>
+      <div class="row">
+        <label>v0.4 Top N 候选变量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
+        <label>v0.4 risk_flags 过滤<input id="riskFlagFilter" placeholder="如 common_capacity_driver"></label>
+      </div>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
@@ -915,6 +987,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
+        <button class="tab-button" data-tab="causalReviewTab">v0.4复核</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
       </div>
 
@@ -986,6 +1059,20 @@ INDEX_HTML = r"""<!doctype html>
         <div id="importanceTable" class="empty">未启用模型解释。</div>
       </div>
 
+      <div id="causalReviewTab" class="tab-panel">
+        <h2>v0.4 三层复核</h2>
+        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置 Top N 和 risk_flags 过滤后运行。</div>
+        <div class="actions">
+          <button id="runCausalReview" disabled>运行 v0.4 三层复核</button>
+        </div>
+        <h2>Conditional Granger Scores</h2>
+        <div class="download-buttons" id="conditionalDownload"></div>
+        <div id="conditionalGrangerTable" class="empty">未运行 v0.4 条件 Granger 预测验证。</div>
+        <h2>Causal Review Report</h2>
+        <div class="download-buttons" id="causalReportDownload"></div>
+        <div id="causalReviewTable" class="empty">未运行 v0.4 三层复核。</div>
+      </div>
+
       <div id="downloadsTab" class="tab-panel">
         <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
@@ -1000,6 +1087,8 @@ let lastRows = [];
 let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
+let lastConditionalRows = [];
+let lastCausalReportRows = [];
 let sortState = { column: "score", direction: "desc" };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
@@ -1010,6 +1099,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
 el("drawTrend").addEventListener("click", drawTrend);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
+el("runCausalReview").addEventListener("click", runCausalReview);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1200,9 +1290,13 @@ function renderAnalysisResult(data) {
   renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("importanceTable", lastImportanceRows);
+  renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
+  renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+  renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
+  el("runCausalReview").disabled = !currentRunId;
 }
 
 function sleep(ms) {
@@ -1232,6 +1326,7 @@ async function runModel() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   setStatus("正在运行模型解释...");
   el("runModel").disabled = true;
+  el("runCausalReview").disabled = true;
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
@@ -1245,6 +1340,34 @@ async function runModel() {
     setStatus(error.message || String(error));
   } finally {
     el("runModel").disabled = !currentRunId;
+    el("runCausalReview").disabled = !currentRunId;
+  }
+}
+
+async function runCausalReview() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  setStatus("正在运行 v0.4 三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
+  el("runCausalReview").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("top_n", el("causalTopN").value);
+    form.append("risk_flag_filter", el("riskFlagFilter").value.trim());
+    form.append("control_columns", getCapacitySelection().join(","));
+    form.append("maxlag", el("maxLag").value);
+    form.append("min_rows", "60");
+    const data = await postForm("/run_causal_review", form);
+    lastConditionalRows = data.conditionalGrangerScores || [];
+    lastCausalReportRows = data.causalReviewReport || [];
+    renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
+    renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+    renderReviewDownloads(data.downloads || []);
+    renderDownloads(data.downloads || []);
+    setStatus(data.message || "v0.4 三层复核完成。结果不是因果结论。");
+  } catch (error) {
+    setStatus(error.message || String(error));
+  } finally {
+    el("runCausalReview").disabled = !currentRunId;
   }
 }
 
@@ -1421,9 +1544,60 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
   if (targetId === "importanceTable") return "未启用模型解释，或没有可展示结果。";
+  if (targetId === "conditionalGrangerTable") return "未运行 v0.4 条件 Granger 预测验证，或没有可展示结果。";
+  if (targetId === "causalReviewTable") return "未运行 v0.4 三层复核，或没有可展示结果。";
   if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
   if (targetId === "overviewTop") return "暂无 Top 10 推荐变量。";
   return "无可展示结果。";
+}
+
+function conditionalGrangerColumns() {
+  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "control_columns", "n_rows", "interpretation"];
+}
+
+function causalReviewColumns() {
+  return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
+}
+
+function renderCausalReviewTable(targetId, rows) {
+  const container = el(targetId);
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = missingText(targetId);
+    return;
+  }
+  const columns = causalReviewColumns().filter((column) => column in rows[0]);
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
+  }
+  table.appendChild(body);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+}
+
+function formatReviewCell(column, value) {
+  if (column === "final_review_decision") {
+    const raw = String(value || "");
+    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatValue(raw))}</span>`;
+  }
+  return escapeHtml(formatValue(value));
+}
+
+function renderReviewDownloads(downloads) {
+  renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
+  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
+}
+
+function renderDownloadTarget(targetId, downloads, fileName) {
+  const container = el(targetId);
+  const item = (downloads || []).find((entry) => entry.name === fileName);
+  container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
 }
 
 function renderLagChart(rows, variables) {
@@ -1529,6 +1703,12 @@ function formatValue(value) {
       strong: "强",
       ok: "正常",
       skipped: "已跳过",
+      risk_limited_review: "风险受限复核",
+      priority_review: "优先复核",
+      secondary_review: "二级复核",
+      not_recommended: "暂不推荐",
+      insufficient_evidence: "证据不足",
+      manual_review_only: "仅人工复核",
     };
     return value
       .split(";")
@@ -1591,6 +1771,23 @@ function columnLabel(column) {
     corr_fdr_q_value: "相关FDR Q值",
     effective_n: "有效样本数",
     status: "状态",
+    best_lag: "最佳滞后",
+    min_p_value: "最小P值",
+    baseline_rmse: "基线RMSE",
+    full_rmse: "完整模型RMSE",
+    control_columns: "控制列",
+    n_rows: "样本行数",
+    interpretation: "解释",
+    candidate_grade: "候选等级",
+    review_tier: "复核层级",
+    review_priority: "复核优先级",
+    review_reason: "复核原因",
+    final_review_decision: "最终复核建议",
+    final_review_reason: "最终复核原因",
+    conditional_granger_status: "条件Granger状态",
+    conditional_best_lag: "条件最佳滞后",
+    conditional_min_p_value: "条件最小P值",
+    conditional_fdr_q_value: "条件FDR Q值",
   };
   return labels[column] || column;
 }
@@ -1610,6 +1807,8 @@ function reset() {
   lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
+  lastConditionalRows = [];
+  lastCausalReportRows = [];
   sortState = { column: "score", direction: "desc" };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
@@ -1631,6 +1830,7 @@ function reset() {
   el("analyze").disabled = true;
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
+  el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
   el("overview").innerHTML = "";
@@ -1649,6 +1849,14 @@ function reset() {
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用模型解释后显示结果。";
+  el("conditionalGrangerTable").className = "empty";
+  el("conditionalGrangerTable").textContent = "未运行 v0.4 条件 Granger 预测验证。";
+  el("causalReviewTable").className = "empty";
+  el("causalReviewTable").textContent = "未运行 v0.4 三层复核。";
+  el("conditionalDownload").innerHTML = "";
+  el("causalReportDownload").innerHTML = "";
+  el("causalTopN").value = "";
+  el("riskFlagFilter").value = "";
   setStatus("");
 }
 </script>

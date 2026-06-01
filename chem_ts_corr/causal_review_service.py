@@ -108,7 +108,6 @@ def _ensure_column(frame: pd.DataFrame, column: str) -> None:
 def _decide_review(row: pd.Series) -> tuple[str, str]:
     status = _text(row.get("conditional_granger_status"))
     risk_level = _text(row.get("risk_level")).lower()
-    risk_flags = _text(row.get("risk_flags"))
     q_value = _number(row.get("conditional_fdr_q_value"))
     contribution = _number(row.get("predictive_contribution"))
 
@@ -122,6 +121,11 @@ def _decide_review(row: pd.Series) -> tuple[str, str]:
             "manual_review_only",
             "风险等级较高，仅可进入人工复核和工艺解释，不是因果结论。",
         )
+    if _has_risk_limited_signal(row):
+        return (
+            "risk_limited_review",
+            "存在共同负荷驱动或稳定性风险，即使预测验证显著也仅限风险提示型人工复核，不是因果结论。",
+        )
     if q_value is not None and contribution is not None and q_value <= 0.05 and contribution >= 0.05:
         return (
             "priority_review",
@@ -132,15 +136,23 @@ def _decide_review(row: pd.Series) -> tuple[str, str]:
             "secondary_review",
             "条件 Granger 预测验证信号中等，可作为二级人工复核线索，不是因果结论。",
         )
-    if "common_capacity_driver" in risk_flags or "unstable_candidate" in risk_flags:
-        return (
-            "risk_limited_review",
-            "存在共同负荷驱动或稳定性风险，仅限风险提示型人工复核，不是因果结论。",
-        )
     return (
         "not_recommended",
         "预测验证证据不足，暂不建议进入优先复核队列，不是因果结论。",
     )
+
+
+def _has_risk_limited_signal(row: pd.Series) -> bool:
+    risk_flags = _text(row.get("risk_flags")).lower()
+    recommended_use = _text(row.get("recommended_use")).lower()
+    risk_limited_flags = {
+        "common_capacity_driver",
+        "unstable_candidate",
+        "unstable_across_regimes",
+        "unstable_over_time",
+    }
+    risk_limited_uses = {"capacity_driven", "unstable_candidate"}
+    return any(flag in risk_flags for flag in risk_limited_flags) or recommended_use in risk_limited_uses
 
 
 def _text(value: object) -> str:

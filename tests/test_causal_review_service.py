@@ -113,3 +113,25 @@ def test_causal_review_report_does_not_mutate_inputs_and_fills_missing_values():
     assert float(out.iloc[0]["final_score"]) == 0.7
     pd.testing.assert_frame_equal(candidates, original_candidates)
 
+
+def test_causal_review_report_risk_limited_takes_precedence():
+    ranked = pd.DataFrame([{"variable": "x1", "recommended_use": "capacity_driven"}])
+    candidates = pd.DataFrame([{"variable": "x1"}])
+    conditional = pd.DataFrame(
+        [
+            {
+                "variable": "x1",
+                "status": "ok",
+                "fdr_q_value": 0.01,
+                "predictive_contribution": 0.08,
+            }
+        ]
+    )
+    risks = pd.DataFrame([{"variable": "x1", "risk_flags": "common_capacity_driver"}])
+
+    out = build_causal_review_report(ranked, candidates, conditional, risk_flags=risks)
+    row = out.iloc[0]
+
+    assert row["final_review_decision"] == "risk_limited_review"
+    assert "not a causal conclusion" in row["interpretation"]
+    assert "不是因果结论" in row["final_review_reason"]

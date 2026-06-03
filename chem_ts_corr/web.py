@@ -973,7 +973,7 @@ INDEX_HTML = r"""<!doctype html>
       </label>
       <div class="row">
         <label>v0.4 Top N 候选变量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
-        <label>v0.4 risk_flags 过滤<input id="riskFlagFilter" placeholder="如 common_capacity_driver"></label>
+        <label>v0.4 risk_flags 包含过滤<input id="riskFlagFilter" placeholder="如 common_capacity_driver，留空表示不过滤"></label>
       </div>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -1061,16 +1061,16 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="causalReviewTab" class="tab-panel">
         <h2>v0.4 三层复核</h2>
-        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置 Top N 和 risk_flags 过滤后运行。</div>
+        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置 Top N 和 risk_flags 包含过滤后运行。</div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行 v0.4 三层复核</button>
         </div>
         <h2>Conditional Granger Scores</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
-        <div id="conditionalGrangerTable" class="empty">未运行 v0.4 条件 Granger 预测验证。</div>
+        <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>Causal Review Report</h2>
         <div class="download-buttons" id="causalReportDownload"></div>
-        <div id="causalReviewTable" class="empty">未运行 v0.4 三层复核。</div>
+        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
@@ -1283,6 +1283,8 @@ function renderAnalysisResult(data) {
   lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
+  lastConditionalRows = [];
+  lastCausalReportRows = [];
   renderOverview(data.overview || {});
   renderTable(applySort(lastRows));
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
@@ -1356,7 +1358,7 @@ async function runCausalReview() {
     form.append("control_columns", getCapacitySelection().join(","));
     form.append("maxlag", el("maxLag").value);
     form.append("min_rows", "60");
-    const data = await postForm("/run_causal_review", form);
+    const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
@@ -1544,8 +1546,8 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
   if (targetId === "importanceTable") return "未启用模型解释，或没有可展示结果。";
-  if (targetId === "conditionalGrangerTable") return "未运行 v0.4 条件 Granger 预测验证，或没有可展示结果。";
-  if (targetId === "causalReviewTable") return "未运行 v0.4 三层复核，或没有可展示结果。";
+  if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
+  if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
   if (targetId === "overviewTop") return "暂无 Top 10 推荐变量。";
   return "无可展示结果。";
@@ -1850,9 +1852,9 @@ function reset() {
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用模型解释后显示结果。";
   el("conditionalGrangerTable").className = "empty";
-  el("conditionalGrangerTable").textContent = "未运行 v0.4 条件 Granger 预测验证。";
+  el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
   el("causalReviewTable").className = "empty";
-  el("causalReviewTable").textContent = "未运行 v0.4 三层复核。";
+  el("causalReviewTable").textContent = "未运行 三层复核。";
   el("conditionalDownload").innerHTML = "";
   el("causalReportDownload").innerHTML = "";
   el("causalTopN").value = "";

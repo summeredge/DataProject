@@ -6,6 +6,7 @@ import pandas as pd
 
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.model_discovery import build_model_discovered_candidates
+from chem_ts_corr.near_miss import build_near_miss_candidates
 
 
 def write_outputs(
@@ -32,6 +33,13 @@ def write_outputs(
         risk_flags=risk_flags,
         max_lag=_metric_int(metrics, "max_lag"),
     )
+    near_miss = build_near_miss_candidates(
+        lag_scores,
+        ranked_features,
+        residual_corr_scores=residual_corr_scores,
+        lag_peak_quality=lag_peak_quality,
+        risk_flags=risk_flags,
+    )
 
     files = {
         "ranked_features.csv": ranked_features,
@@ -41,6 +49,7 @@ def write_outputs(
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
         "model_discovered_candidates.csv": model_discovered,
+        "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,
         "residual_corr_scores.csv": residual_corr_scores,
         "regime_scores.csv": regime_scores,

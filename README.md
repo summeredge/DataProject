@@ -192,6 +192,7 @@ python -m chem_ts_corr.cli analyze `
 - `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
 - `shap_or_importance.csv`：默认跳过，启用模型解释后输出结果
 - `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
+- `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
 ## 推荐工作流
 

@@ -417,6 +417,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     best_lags = _best_lags_from_ranked(ranked)
+    best_lags = _merge_near_miss_lags(best_lags, near_miss)
     scaled = _scaled_frame_for_secondary(config)
     variables = [variable for variable in variables if variable in scaled.columns]
     importance, metrics = fit_explainable_model(
@@ -532,6 +533,21 @@ def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
         str(row["variable"]): int(row["lag"])
         for _, row in ranked[["variable", "lag"]].dropna().iterrows()
     }
+
+
+def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:
+    merged = dict(best_lags)
+    if near_miss.empty or not {"variable", "lag"}.issubset(near_miss.columns):
+        return merged
+    for _, row in near_miss[["variable", "lag"]].dropna().iterrows():
+        variable = str(row["variable"]).strip()
+        if not variable or variable in merged:
+            continue
+        try:
+            merged[variable] = int(row["lag"])
+        except (TypeError, ValueError):
+            continue
+    return merged
 
 
 def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:

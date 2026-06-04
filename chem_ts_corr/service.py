@@ -116,7 +116,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     else:
         granger = pd.DataFrame([{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}])
 
-    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
+    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
     return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
 

@@ -1637,7 +1637,7 @@ function modelDiscoveredColumns() {
 }
 
 function conditionalGrangerColumns() {
-  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "control_columns", "n_rows", "interpretation"];
+  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
 }
 
 function causalReviewColumns() {
@@ -1895,6 +1895,9 @@ function columnLabel(column) {
     min_p_value: "最小P值",
     baseline_rmse: "基线RMSE",
     full_rmse: "完整模型RMSE",
+    condition_number: "最大条件数",
+    base_condition_number: "基线模型条件数",
+    full_condition_number: "完整模型条件数",
     control_columns: "控制列",
     n_rows: "样本行数",
     interpretation: "解释",

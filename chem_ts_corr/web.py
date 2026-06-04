@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.data import load_timeseries_csv
+from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv, read_timeseries_table
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
@@ -169,22 +169,27 @@ def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     file_item = form["file"] if "file" in form else None
     if file_item is None or not getattr(file_item, "filename", ""):
-        raise ValueError("请选择 CSV 文件")
+        raise ValueError("请选择 CSV、Excel 或 TXT 数据文件")
+
+    filename = Path(getattr(file_item, "filename", "upload.csv")).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
+        raise ValueError("仅支持 CSV、TXT、TSV、XLSX、XLS、XLSM 数据文件")
 
     file_id = uuid.uuid4().hex
-    upload_path = UPLOADS_DIR / f"{file_id}.csv"
+    upload_path = UPLOADS_DIR / f"{file_id}{suffix}"
     raw = file_item.file if isinstance(file_item.file, (bytes, bytearray)) else file_item.file.read()
     max_bytes = 100 * 1024 * 1024
     if len(raw) > max_bytes:
         raise ValueError("上传文件过大")
     upload_path.write_bytes(raw)
 
-    return {"file_id": file_id, "filename": Path(getattr(file_item, "filename", "upload.csv")).name}
+    return {"file_id": file_id, "filename": filename}
 
 
 def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
     path = _resolve_upload(file_id)
-    sample, used_encoding = _read_csv_sample(path, encoding)
+    sample, used_encoding = _read_data_sample(path, encoding)
     numeric_columns = [
         column
         for column in sample.columns
@@ -200,26 +205,8 @@ def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
     }
 
 
-def _read_csv_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
-    encodings = ["utf-8-sig", "gb18030"] if encoding == "auto" else [encoding]
-    last_error: Exception | None = None
-    for candidate in encodings:
-        try:
-            return (
-                pd.read_csv(
-                    path,
-                    encoding=candidate,
-                    nrows=5000,
-                    low_memory=False,
-                ),
-                candidate,
-            )
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise ValueError("CSV 编码识别失败，请手动选择 UTF-8 或 GBK / GB18030") from last_error
-    raise ValueError("CSV 读取失败")
+def _read_data_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
+    return read_timeseries_table(path, encoding=encoding, nrows=5000)
 
 
 def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
@@ -230,7 +217,7 @@ def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dic
     if not candidate:
         return {}
     try:
-        time_frame = pd.read_csv(path, encoding=encoding, usecols=[candidate], low_memory=False)
+        time_frame, _ = read_timeseries_table(path, encoding=encoding, usecols=[candidate])
         values = pd.to_datetime(time_frame[candidate], errors="coerce").dropna().sort_values()
     except Exception:
         return {"timeColumn": candidate}
@@ -644,7 +631,7 @@ def _summary_metrics(summary: str) -> dict[str, str]:
 def _resolve_encoding(path: Path, encoding: str) -> str:
     if encoding != "auto":
         return encoding
-    _, used_encoding = _read_csv_sample(path, "auto")
+    _, used_encoding = _read_data_sample(path, "auto")
     return used_encoding
 
 
@@ -674,11 +661,14 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _resolve_upload(file_id: str) -> Path:
-    path = (UPLOADS_DIR / f"{file_id}.csv").resolve()
-    if not path.exists():
+    matches = sorted(UPLOADS_DIR.glob(f"{file_id}.*"))
+    if not matches:
         raise FileNotFoundError("上传文件不存在，请重新上传")
+    path = matches[0].resolve()
     if UPLOADS_DIR.resolve() not in path.parents:
         raise ValueError("Invalid upload path")
+    if path.suffix.lower() not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
+        raise ValueError("Unsupported upload file type")
     return path
 
 
@@ -910,8 +900,8 @@ INDEX_HTML = r"""<!doctype html>
         <button id="analyze" disabled>开始分析</button>
         <button id="reset" class="secondary">清空</button>
       </div>
-      <label>CSV 数据文件
-        <input id="fileInput" type="file" accept=".csv,text/csv">
+      <label>数据文件（CSV / Excel / TXT）
+        <input id="fileInput" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
       </label>
       <label>文件编码
         <select id="encoding">
@@ -1171,7 +1161,7 @@ function updateForceIncludeSummary() {
 
 async function uploadFile() {
   const file = el("fileInput").files[0];
-  if (!file) return setStatus("请选择 CSV 文件。");
+  if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
   try {
     setStatus("正在上传文件...");
     const form = new FormData();

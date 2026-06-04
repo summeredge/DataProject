@@ -13,6 +13,9 @@ EXPECTED_OUT_COLS = [
     "baseline_rmse",
     "full_rmse",
     "predictive_contribution",
+    "base_condition_number",
+    "full_condition_number",
+    "condition_number",
     "control_columns",
     "n_rows",
     "interpretation",
@@ -33,6 +36,9 @@ def test_conditional_granger_detects_predictive_candidate():
     row = out.iloc[0]
     assert str(row["status"]).startswith("ok")
     assert float(row["predictive_contribution"]) >= 0
+    assert np.isfinite(float(row["condition_number"]))
+    assert "base_condition_number" in out.columns
+    assert "full_condition_number" in out.columns
     assert 1 <= int(row["best_lag"]) <= 4
     assert "not a causal conclusion" in str(row["interpretation"])
 
@@ -116,3 +122,61 @@ def test_conditional_granger_controls_common_driver_effect():
     assert controlled_contribution < 0.01
     assert controlled["interpretation"] == "predictive validation only; not a causal conclusion"
     assert list(controlled.index) == EXPECTED_OUT_COLS
+
+
+def test_conditional_granger_flags_high_collinearity_with_controls():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(321)
+    c = rng.normal(size=n)
+    x = c.copy()
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.55 * target[t - 1] + 0.5 * c[t - 1] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x, "c": c}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        control_columns=["c"],
+        maxlag=3,
+        min_rows=80,
+    )
+    row = out.iloc[0]
+
+    assert row["status"] == "high_collinearity_risk"
+    assert pd.isna(row["min_p_value"])
+    assert pd.isna(row["fdr_q_value"])
+    assert np.isfinite(float(row["predictive_contribution"]))
+    assert float(row["predictive_contribution"]) >= 0
+    assert (not np.isfinite(float(row["condition_number"]))) or float(row["condition_number"]) > 1e8
+    assert row["interpretation"] == "predictive validation only; not a causal conclusion"
+
+
+def test_conditional_granger_non_collinear_sample_keeps_ok_status_and_condition_numbers():
+    n = 220
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(654)
+    x = rng.normal(size=n)
+    c = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.45 * target[t - 1] + 0.3 * x[t - 1] + 0.2 * c[t - 1] + 0.05 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x, "c": c}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        control_columns=["c"],
+        maxlag=3,
+        min_rows=80,
+    )
+    row = out.iloc[0]
+
+    assert str(row["status"]).startswith("ok")
+    assert "condition_number" in out.columns
+    assert np.isfinite(float(row["base_condition_number"]))
+    assert np.isfinite(float(row["full_condition_number"]))
+    assert float(row["condition_number"]) <= 1e8

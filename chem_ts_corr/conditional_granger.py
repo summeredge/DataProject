@@ -13,6 +13,9 @@ OUT_COLS = [
     "baseline_rmse",
     "full_rmse",
     "predictive_contribution",
+    "base_condition_number",
+    "full_condition_number",
+    "condition_number",
     "control_columns",
     "n_rows",
     "interpretation",
@@ -50,6 +53,9 @@ def run_conditional_granger_tests(
             "baseline_rmse": np.nan,
             "full_rmse": np.nan,
             "predictive_contribution": 0.0,
+            "base_condition_number": np.nan,
+            "full_condition_number": np.nan,
+            "condition_number": np.nan,
             "control_columns": ",".join(controls),
             "n_rows": 0,
             "interpretation": "predictive validation only; not a causal conclusion",
@@ -97,6 +103,14 @@ def run_conditional_granger_tests(
 
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
             x_full = np.column_stack([np.ones(n), df[full_cols].to_numpy(dtype=float)])
+            base_condition_number = _condition_number(x_base)
+            full_condition_number = _condition_number(x_full)
+            condition_number = max(base_condition_number, full_condition_number)
+            collinearity_status = (
+                "high_collinearity_risk"
+                if (not np.isfinite(condition_number) or condition_number > 1e8)
+                else "ok"
+            )
 
             try:
                 b_coef, *_ = np.linalg.lstsq(x_base, y, rcond=None)
@@ -120,7 +134,7 @@ def run_conditional_granger_tests(
                 continue
 
             p_value = np.nan
-            if rss_f > 0 and rss_b >= rss_f:
+            if collinearity_status == "ok" and rss_f > 0 and rss_b >= rss_f:
                 f_stat = ((rss_b - rss_f) / df_num) / (rss_f / df_den)
                 if scipy_available and scipy_f is not None and np.isfinite(f_stat):
                     p_value = float(scipy_f.sf(max(0.0, f_stat), df_num, df_den))
@@ -132,6 +146,10 @@ def run_conditional_granger_tests(
                 "baseline_rmse": rmse_b,
                 "full_rmse": rmse_f,
                 "predictive_contribution": pred_contrib,
+                "base_condition_number": base_condition_number,
+                "full_condition_number": full_condition_number,
+                "condition_number": condition_number,
+                "collinearity_status": collinearity_status,
             }
             if best is None:
                 best = candidate
@@ -151,14 +169,22 @@ def run_conditional_granger_tests(
             rows.append(base_row)
             continue
 
+        status = (
+            "high_collinearity_risk"
+            if best["collinearity_status"] == "high_collinearity_risk"
+            else ("ok" if scipy_available else "ok: scipy unavailable, p_value is NaN")
+        )
         base_row.update(
             {
-                "status": "ok" if scipy_available else "ok: scipy unavailable, p_value is NaN",
+                "status": status,
                 "best_lag": int(best["lag"]),
                 "min_p_value": best["p_value"],
                 "baseline_rmse": best["baseline_rmse"],
                 "full_rmse": best["full_rmse"],
                 "predictive_contribution": best["predictive_contribution"],
+                "base_condition_number": best["base_condition_number"],
+                "full_condition_number": best["full_condition_number"],
+                "condition_number": best["condition_number"],
                 "n_rows": int(best["n_rows"]),
             }
         )
@@ -168,6 +194,13 @@ def run_conditional_granger_tests(
     if not out.empty:
         out["fdr_q_value"] = _benjamini_hochberg(out["min_p_value"])
     return out
+
+
+def _condition_number(matrix: np.ndarray) -> float:
+    try:
+        return float(np.linalg.cond(matrix))
+    except Exception:
+        return float("inf")
 
 
 def _benjamini_hochberg(values: pd.Series) -> pd.Series:

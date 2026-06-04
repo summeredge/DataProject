@@ -26,6 +26,87 @@ OUT_COLS = [
     "interpretation",
 ]
 
+VARIABLE_IMPORTANCE_COLS = [
+    "variable",
+    "best_model_feature",
+    "best_model_lag",
+    "max_importance",
+    "total_importance",
+    "feature_count",
+    "importance_rank",
+    "method",
+    "ranked_feature_rank",
+    "ranked_final_score",
+    "risk_flags",
+    "recommended_use",
+    "recommended_action",
+    "interpretation",
+]
+
+
+def build_model_variable_importance(
+    importance: pd.DataFrame,
+    ranked_features: pd.DataFrame | None = None,
+    risk_flags: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Aggregate lag-level model importance into one conservative row per variable.
+
+    This summary is intended for model-explanation review only. It does not
+    alter screening scores and does not claim causality.
+    """
+    if importance.empty:
+        return pd.DataFrame(columns=VARIABLE_IMPORTANCE_COLS)
+
+    frame = _normalized_importance(importance)
+    if frame.empty:
+        return pd.DataFrame(columns=VARIABLE_IMPORTANCE_COLS)
+    if "method" not in frame.columns:
+        frame["method"] = pd.NA
+
+    ranked_lookup = _ranked_lookup(ranked_features if ranked_features is not None else pd.DataFrame())
+    risk_lookup = _risk_lookup(risk_flags)
+
+    rows: list[dict[str, object]] = []
+    for variable, group in frame.groupby("variable", sort=False):
+        if pd.isna(variable) or str(variable).strip() == "":
+            continue
+        variable_name = str(variable)
+        ordered = group.sort_values(["importance"], ascending=[False], kind="mergesort")
+        best = ordered.iloc[0]
+        ranked_meta = ranked_lookup.get(variable_name, {})
+        risk_meta = risk_lookup.get(variable_name, {})
+        rows.append(
+            {
+                "variable": variable_name,
+                "best_model_feature": best["feature"],
+                "best_model_lag": best["lag"],
+                "max_importance": float(best["importance"]),
+                "total_importance": float(group["importance"].sum()),
+                "feature_count": int(len(group)),
+                "method": best.get("method", pd.NA),
+                "ranked_feature_rank": ranked_meta.get("ranked_feature_rank", pd.NA),
+                "ranked_final_score": ranked_meta.get("ranked_final_score", pd.NA),
+                "risk_flags": _first_non_empty(ranked_meta.get("risk_flags"), risk_meta.get("risk_flags")),
+                "recommended_use": _first_non_empty(
+                    ranked_meta.get("recommended_use"), risk_meta.get("recommended_use")
+                ),
+                "recommended_action": _first_non_empty(
+                    ranked_meta.get("recommended_action"), risk_meta.get("recommended_action")
+                ),
+                "interpretation": INTERPRETATION,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=VARIABLE_IMPORTANCE_COLS)
+
+    result = pd.DataFrame(rows)
+    result = result.sort_values(
+        ["total_importance", "max_importance", "variable"], ascending=[False, False, True]
+    ).reset_index(drop=True)
+    result["importance_rank"] = range(1, len(result) + 1)
+    return result[VARIABLE_IMPORTANCE_COLS]
+
 
 def build_model_discovered_candidates(
     importance: pd.DataFrame,

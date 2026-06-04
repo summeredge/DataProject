@@ -21,7 +21,7 @@ from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
-from chem_ts_corr.model_discovery import build_model_discovered_candidates
+from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
 
 
@@ -40,6 +40,7 @@ DOWNLOAD_FILES = {
     "risk_flags.csv",
     "model_lift_scores.csv",
     "model_discovered_candidates.csv",
+    "model_variable_importance.csv",
     "near_miss_candidates.csv",
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
@@ -328,6 +329,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
+    model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
     model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
@@ -347,6 +349,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "modelLiftScores": _records(lift.head(50)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
+        "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
@@ -424,8 +427,10 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         max_features=config.max_model_features,
         random_state=config.random_state,
         best_lags=best_lags,
+        lag_mode="best_only",
     )
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+    model_variable_importance = build_model_variable_importance(importance, ranked, risk_flags=risk)
     model_discovered = build_model_discovered_candidates(
         importance,
         ranked,
@@ -434,9 +439,11 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         max_lag=config.max_lag,
     )
     importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
+    model_variable_importance.to_csv(output_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig")
     model_discovered.to_csv(output_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig")
     return {
         "importance": _records(importance.head(200)),
+        "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "modelMetrics": metrics,
         "downloads": _download_links(run_id, output_dir),
@@ -1081,7 +1088,10 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <h2>Granger 验证</h2>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
-        <h2>模型解释</h2>
+        <h2>模型解释变量排序</h2>
+        <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
+        <div id="modelVariableImportanceTable" class="empty">运行模型解释后显示变量排序。</div>
+        <h2>模型解释特征明细</h2>
         <div id="importanceTable" class="empty">未启用模型解释。</div>
         <h2>模型解释补充候选</h2>
         <div class="help">该表用于发现模型解释中靠前、但主筛查前 N 个未优先覆盖的补充候选。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
@@ -1116,6 +1126,7 @@ let lastRows = [];
 let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
+let lastModelVariableRows = [];
 let lastNearMissRows = [];
 let lastModelDiscoveredRows = [];
 let lastConditionalRows = [];
@@ -1314,6 +1325,7 @@ function renderAnalysisResult(data) {
   lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
+  lastModelVariableRows = [];
   lastNearMissRows = data.nearMissCandidates || [];
   lastModelDiscoveredRows = [];
   lastConditionalRows = [];
@@ -1325,6 +1337,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
+  renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
   renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
@@ -1369,7 +1382,9 @@ async function runModel() {
     form.append("run_id", currentRunId);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
+    lastModelVariableRows = data.modelVariableImportance || [];
     lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
+    renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
     renderGenericTable("importanceTable", lastImportanceRows);
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
@@ -1582,6 +1597,7 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
+  if (targetId === "modelVariableImportanceTable") return "运行模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行模型解释后显示补充候选。";
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
@@ -1594,6 +1610,10 @@ function missingText(targetId) {
 
 function nearMissColumns() {
   return ["variable", "near_miss_score", "lag", "direction", "raw_score", "residual_corr", "lag_quality", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "near_miss_reason", "interpretation"];
+}
+
+function modelVariableImportanceColumns() {
+  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "total_importance", "feature_count", "importance_rank", "method", "ranked_feature_rank", "ranked_final_score", "risk_flags", "recommended_use", "recommended_action", "interpretation"];
 }
 
 function modelDiscoveredColumns() {
@@ -1875,6 +1895,8 @@ function columnLabel(column) {
     best_model_feature: "最佳模型特征",
     best_model_lag: "最佳模型滞后",
     max_importance: "最大重要性",
+    total_importance: "总重要性",
+    feature_count: "特征数量",
     importance_rank: "重要性排名",
     model_feature_count: "模型特征数量",
     nearby_lag_count: "滞后点数量",
@@ -1905,6 +1927,7 @@ function reset() {
   lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
+  lastModelVariableRows = [];
   lastNearMissRows = [];
   lastModelDiscoveredRows = [];
   lastConditionalRows = [];
@@ -1949,6 +1972,8 @@ function reset() {
   el("trendLegend").innerHTML = "";
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
+  el("modelVariableImportanceTable").className = "empty";
+  el("modelVariableImportanceTable").textContent = "运行模型解释后显示变量排序。";
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";

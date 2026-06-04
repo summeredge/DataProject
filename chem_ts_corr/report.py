@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from chem_ts_corr.causal_review import build_causal_review_candidates
-from chem_ts_corr.model_discovery import build_model_discovered_candidates
+from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.near_miss import build_near_miss_candidates
 
 
@@ -27,6 +27,11 @@ def write_outputs(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    model_variable_importance = build_model_variable_importance(
+        importance,
+        ranked_features,
+        risk_flags=risk_flags,
+    )
     model_discovered = build_model_discovered_candidates(
         importance,
         ranked_features,
@@ -48,6 +53,7 @@ def write_outputs(
         "lag_scores.csv": lag_scores,
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
+        "model_variable_importance.csv": model_variable_importance,
         "model_discovered_candidates.csv": model_discovered,
         "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,

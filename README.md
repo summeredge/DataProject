@@ -191,6 +191,7 @@ python -m chem_ts_corr.cli analyze `
 - `model_lift_scores.csv`：TimeSeriesSplit 下 AR baseline 与 AR + candidate lag features 的误差改善
 - `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
 - `shap_or_importance.csv`：默认跳过，启用模型解释后输出结果
+- `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
 
 ## 推荐工作流
 

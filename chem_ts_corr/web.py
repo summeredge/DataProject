@@ -21,6 +21,7 @@ from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
+from chem_ts_corr.model_discovery import build_model_discovered_candidates
 from chem_ts_corr.pipeline import run_analysis
 
 
@@ -38,6 +39,7 @@ DOWNLOAD_FILES = {
     "regime_scores.csv",
     "risk_flags.csv",
     "model_lift_scores.csv",
+    "model_discovered_candidates.csv",
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
@@ -325,6 +327,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
+    model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
     top10_variables = set(ranked.head(20)["variable"].astype(str)) if not ranked.empty else set()
@@ -342,6 +345,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "modelLiftScores": _records(lift.head(50)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
+        "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "downloads": _download_links(run_id, output_dir),
     }
 
@@ -415,9 +419,19 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         random_state=config.random_state,
         best_lags=best_lags,
     )
+    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+    model_discovered = build_model_discovered_candidates(
+        importance,
+        ranked,
+        risk_flags=risk,
+        screening_top_n=config.top_k,
+        max_lag=config.max_lag,
+    )
     importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
+    model_discovered.to_csv(output_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig")
     return {
         "importance": _records(importance.head(200)),
+        "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "modelMetrics": metrics,
         "downloads": _download_links(run_id, output_dir),
     }
@@ -1054,6 +1068,9 @@ INDEX_HTML = r"""<!doctype html>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
         <h2>模型解释</h2>
         <div id="importanceTable" class="empty">未启用模型解释。</div>
+        <h2>模型解释补充候选</h2>
+        <div class="help">该表用于发现模型解释中靠前、但主筛查前 N 个未优先覆盖的补充候选。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
+        <div id="modelDiscoveredTable" class="empty">运行模型解释后显示补充候选。</div>
       </div>
 
       <div id="causalReviewTab" class="tab-panel">
@@ -1084,6 +1101,7 @@ let lastRows = [];
 let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
+let lastModelDiscoveredRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let sortState = { column: "score", direction: "desc" };
@@ -1280,6 +1298,7 @@ function renderAnalysisResult(data) {
   lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
+  lastModelDiscoveredRows = [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
   renderOverview(data.overview || {});
@@ -1289,6 +1308,7 @@ function renderAnalysisResult(data) {
   renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("importanceTable", lastImportanceRows);
+  renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
   renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
   renderReviewDownloads(data.downloads || []);
@@ -1331,7 +1351,9 @@ async function runModel() {
     form.append("run_id", currentRunId);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
+    lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
     renderGenericTable("importanceTable", lastImportanceRows);
+    renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
     setStatus(`模型解释完成。${metrics}`);
@@ -1543,11 +1565,16 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
   if (targetId === "importanceTable") return "未启用模型解释，或没有可展示结果。";
+  if (targetId === "modelDiscoveredTable") return "运行模型解释后显示补充候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
+}
+
+function modelDiscoveredColumns() {
+  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
 }
 
 function conditionalGrangerColumns() {
@@ -1723,9 +1750,19 @@ function formatValue(value) {
       medium: "中",
       "predictive validation only": "仅作预测验证",
       "not a causal conclusion": "不是因果结论",
+      "model explanation only": "仅作模型解释",
+      model_only_signal: "模型补充线索",
+      multi_lag_model_signal: "多滞后模型线索",
+      model_lag_boundary_risk: "模型滞后边界风险",
+      synchronous_or_leakage_risk: "同步或泄漏风险",
+      screening_lag_boundary_risk: "初筛滞后边界风险",
+      target_lead_risk: "目标领先风险",
+      stability_risk: "稳定性风险",
+      model_supported_screening_candidate: "模型支持的初筛候选",
     };
     if (map[value]) return map[value];
     if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
+    if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     return value
       .split(/[;,，；]/)
       .map((item) => {
@@ -1804,6 +1841,17 @@ function columnLabel(column) {
     conditional_best_lag: "条件最佳滞后",
     conditional_min_p_value: "条件最小P值",
     conditional_fdr_q_value: "条件FDR Q值",
+    best_model_feature: "最佳模型特征",
+    best_model_lag: "最佳模型滞后",
+    max_importance: "最大重要性",
+    importance_rank: "重要性排名",
+    model_feature_count: "模型特征数量",
+    nearby_lag_count: "滞后点数量",
+    ranked_feature_rank: "初筛排名",
+    ranked_final_score: "初筛综合得分",
+    in_screening_top_n: "在初筛前N内",
+    missing_from_screening_top_n: "初筛前N遗漏",
+    discovery_reason: "发现原因",
   };
   return labels[column] || column;
 }
@@ -1823,6 +1871,7 @@ function reset() {
   lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
+  lastModelDiscoveredRows = [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
   sortState = { column: "score", direction: "desc" };
@@ -1865,6 +1914,8 @@ function reset() {
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用模型解释后显示结果。";
+  el("modelDiscoveredTable").className = "empty";
+  el("modelDiscoveredTable").textContent = "运行模型解释后显示补充候选。";
   el("conditionalGrangerTable").className = "empty";
   el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
   el("causalReviewTable").className = "empty";

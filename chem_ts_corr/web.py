@@ -457,7 +457,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "conditionalGrangerScores": _records(conditional.head(500)),
         "causalReviewReport": _records(report.head(500)),
         "downloads": _download_links(run_id, output_dir),
-        "message": "v0.4 三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+        "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
     }
 
 
@@ -468,7 +468,14 @@ def _filter_candidates_by_risk_flags(
         return candidates.copy(deep=True)
     if "variable" not in candidates.columns or "variable" not in risk_flags.columns or "risk_flags" not in risk_flags.columns:
         return candidates.copy(deep=True)
-    selected = {flag.lower() for flag in selected_flags}
+    aliases = {
+        "共同负荷驱动": "common_capacity_driver",
+        "不稳定候选": "unstable_candidate",
+        "跨工况不稳定": "unstable_across_regimes",
+        "时序不稳定": "unstable_over_time",
+        "滞后边界": "lag_boundary",
+    }
+    selected = {aliases.get(flag, flag).lower() for flag in selected_flags}
     risk_text = risk_flags["risk_flags"].fillna("").astype(str).str.lower()
     mask = risk_text.apply(lambda value: any(flag in value for flag in selected))
     variables = set(risk_flags.loc[mask, "variable"].astype(str))
@@ -916,7 +923,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div class="row">
         <label>最大滞后点数<input id="maxLag" type="number" min="0" max="5000" value="12"></label>
-        <label>输出 Top K<input id="topK" type="number" min="1" max="2000" value="50"></label>
+        <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="50"></label>
       </div>
       <div class="row">
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
@@ -962,8 +969,8 @@ INDEX_HTML = r"""<!doctype html>
         </details>
       </label>
       <div class="row">
-        <label>v0.4 Top N 候选变量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
-        <label>v0.4 risk_flags 包含过滤<input id="riskFlagFilter" placeholder="如 common_capacity_driver，留空表示不过滤"></label>
+        <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
+        <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
       </div>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -977,20 +984,20 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
-        <button class="tab-button" data-tab="causalReviewTab">v0.4复核</button>
+        <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
       </div>
 
       <div id="overviewTab" class="tab-panel active">
         <h2>总览</h2>
         <div id="overview" class="overview-grid"></div>
-        <h2>Top 10 推荐变量</h2>
+        <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
       <div id="candidatesTab" class="tab-panel">
         <h2>候选变量</h2>
-        <div class="help">默认只展示 ranked_features.csv 的核心列和 Top 50，完整结果请到下载页获取。</div>
+        <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
         <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
@@ -1002,7 +1009,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="lagTab" class="tab-panel">
         <h2>滞后分析</h2>
-        <div class="help">默认绘制 Top 5 变量的 lag-score 曲线；完整 lag_scores.csv 请到下载页获取。</div>
+        <div class="help">默认绘制前 5 个变量的滞后得分曲线；完整滞后明细请到下载页获取。</div>
         <div id="lagChart" class="chart empty">暂无滞后曲线。</div>
       </div>
 
@@ -1050,15 +1057,15 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="causalReviewTab" class="tab-panel">
-        <h2>v0.4 三层复核</h2>
-        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置 Top N 和 risk_flags 包含过滤后运行。</div>
+        <h2>三层复核</h2>
+        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
         <div class="actions">
-          <button id="runCausalReview" disabled>运行 v0.4 三层复核</button>
+          <button id="runCausalReview" disabled>运行三层复核</button>
         </div>
-        <h2>Conditional Granger Scores</h2>
+        <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>Causal Review Report</h2>
+        <h2>三层复核报告</h2>
         <div class="download-buttons" id="causalReportDownload"></div>
         <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
       </div>
@@ -1338,7 +1345,7 @@ async function runModel() {
 
 async function runCausalReview() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行 v0.4 三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
+  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
   el("runCausalReview").disabled = true;
   try {
     const form = new FormData();
@@ -1355,7 +1362,7 @@ async function runCausalReview() {
     renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
-    setStatus(data.message || "v0.4 三层复核完成。结果不是因果结论。");
+    setStatus(data.message || "三层复核完成。结果不是因果结论。");
   } catch (error) {
     setStatus(error.message || String(error));
   } finally {
@@ -1539,7 +1546,7 @@ function missingText(targetId) {
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
-  if (targetId === "overviewTop") return "暂无 Top 10 推荐变量。";
+  if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
 
@@ -1623,8 +1630,8 @@ function renderLagChart(rows, variables) {
     <rect width="${width}" height="${height}" fill="#fff"/>
     <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
     <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">lag-score curve</text>
-    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">lag ${minLag} 到 ${maxLag}</text>
+    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">滞后得分曲线</text>
+    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">滞后 ${minLag} 到 ${maxLag}</text>
     ${paths}
   </svg><div class="status" style="text-align:center">${legend}</div>`;
 }
@@ -1672,6 +1679,8 @@ function formatValue(value) {
     const map = {
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
+      lag_boundary: "滞后边界命中",
+      lag_boundary_flag: "滞后边界命中",
       formula_coupled_reference: "公式耦合参考",
       strong_screening_candidate: "强初筛候选",
       prediction_candidate: "预测候选",
@@ -1685,6 +1694,7 @@ function formatValue(value) {
       formula_like: "公式类变量",
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
+      closed_loop_suspect: "疑似闭环反馈",
       target_leads_variable: "目标领先变量",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量差",
@@ -1701,9 +1711,23 @@ function formatValue(value) {
       not_recommended: "暂不推荐",
       insufficient_evidence: "证据不足",
       manual_review_only: "仅人工复核",
+      candidate_leads_target: "变量领先目标",
+      target_leads_candidate: "目标领先变量",
+      target_leads_variable: "目标领先变量",
+      synchronous: "同步变化",
+      unknown: "未知",
+      positive: "正向",
+      negative: "负向",
+      strong: "强",
+      weak: "弱",
+      medium: "中",
+      "predictive validation only": "仅作预测验证",
+      "not a causal conclusion": "不是因果结论",
     };
+    if (map[value]) return map[value];
+    if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
     return value
-      .split(";")
+      .split(/[;,，；]/)
       .map((item) => {
         const key = item.trim();
         if (!key) return "";

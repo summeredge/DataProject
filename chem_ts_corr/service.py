@@ -37,7 +37,7 @@ def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str]
     return valid, warnings
 
 
-def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> AnalysisTables:
+def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_callback=None) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,
         diagnostics,
@@ -50,6 +50,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         rolling_corr_scores,
     )
 
+    _progress(progress_callback, "预处理中")
     numeric = select_numeric_frame(frame, config.target)
     roles = load_roles(config, list(numeric.columns))
     numeric = apply_ignore_roles(numeric, roles, config.target)
@@ -75,6 +76,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
         )
     )
 
+    _progress(progress_callback, "正在计算滞后相关")
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)
     excluded_controls = set()
@@ -85,12 +87,23 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     best_lags = _best_lag_map(raw_ranked)
     residual_controls = config.residual_control_columns or config.capacity_columns
 
+    _progress(progress_callback, "正在计算残差相关")
     residual = residual_corr_scores(scaled, config.target, residual_controls, config.max_lag)
+    _progress(progress_callback, "正在计算工况稳定性")
     regime, stability = regime_scores(scaled, config.target, config.segment_column, config.max_lag)
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
-    lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
-    rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
+    _progress(progress_callback, "正在计算模型提升评分")
+    if config.skip_model_lift:
+        lift = _skipped_model_lift_scores(candidate_variables)
+    else:
+        lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
+    _progress(progress_callback, "正在计算滚动稳定性")
+    if config.skip_rolling_corr:
+        rolling = _skipped_rolling_corr_scores(candidate_variables)
+    else:
+        rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
+    _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
     ranked = final_ranked_features(
         raw_ranked,
@@ -116,7 +129,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig) -> Analys
     else:
         granger = pd.DataFrame([{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}])
 
-    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
+    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "skip_model_lift": str(config.skip_model_lift), "skip_rolling_corr": str(config.skip_rolling_corr), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
     return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
 
@@ -125,3 +138,56 @@ def _best_lag_map(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
         return {}
     return {str(row["variable"]): int(row["lag"]) for _, row in ranked[["variable", "lag"]].dropna().iterrows()}
+
+
+def _progress(progress_callback, message: str) -> None:
+    if progress_callback is not None:
+        progress_callback(message)
+
+
+def _skipped_model_lift_scores(candidate_variables: list[str]) -> pd.DataFrame:
+    cols = ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"]
+    return pd.DataFrame(
+        [
+            {
+                "variable": variable,
+                "status": "skipped: user disabled model lift scoring",
+                "ar_baseline_rmse": pd.NA,
+                "candidate_rmse": pd.NA,
+                "model_lift": pd.NA,
+            }
+            for variable in candidate_variables
+        ],
+        columns=cols,
+    )
+
+
+def _skipped_rolling_corr_scores(candidate_variables: list[str]) -> pd.DataFrame:
+    cols = [
+        "variable",
+        "best_lag",
+        "best_score",
+        "rolling_corr_median",
+        "rolling_abs_corr_median",
+        "rolling_corr_iqr",
+        "rolling_sign_consistency",
+        "valid_window_count",
+        "rolling_stability",
+    ]
+    return pd.DataFrame(
+        [
+            {
+                "variable": variable,
+                "best_lag": pd.NA,
+                "best_score": pd.NA,
+                "rolling_corr_median": pd.NA,
+                "rolling_abs_corr_median": pd.NA,
+                "rolling_corr_iqr": pd.NA,
+                "rolling_sign_consistency": pd.NA,
+                "valid_window_count": 0,
+                "rolling_stability": pd.NA,
+            }
+            for variable in candidate_variables
+        ],
+        columns=cols,
+    )

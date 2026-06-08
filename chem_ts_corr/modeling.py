@@ -11,12 +11,14 @@ def build_lag_features(
     candidate_variables: list[str],
     max_features: int,
     best_lags: dict[str, int] | None = None,
+    lag_mode: str = "best_only",
 ) -> tuple[pd.DataFrame, pd.Series]:
     feature_parts: list[pd.Series] = []
     for variable in candidate_variables:
         if variable == target:
             continue
-        for lag in _nearby_lags(best_lags.get(variable) if best_lags else None, max_lag):
+        selected_lags = _selected_lags(best_lags.get(variable) if best_lags else None, max_lag, lag_mode)
+        for lag in selected_lags:
             feature_parts.append(frame[variable].shift(lag).rename(f"{variable}__lag_{lag}"))
 
     if not feature_parts:
@@ -37,6 +39,7 @@ def fit_explainable_model(
     max_features: int,
     random_state: int,
     best_lags: dict[str, int] | None = None,
+    lag_mode: str = "best_only",
 ) -> tuple[pd.DataFrame, dict[str, float | str]]:
     try:
         from sklearn.ensemble import RandomForestRegressor
@@ -45,7 +48,15 @@ def fit_explainable_model(
     except Exception:
         return pd.DataFrame(), {"model_status": "skipped: scikit-learn is not installed"}
 
-    x, y = build_lag_features(frame, target, max_lag, candidate_variables, max_features, best_lags)
+    x, y = build_lag_features(
+        frame,
+        target,
+        max_lag,
+        candidate_variables,
+        max_features,
+        best_lags,
+        lag_mode=lag_mode,
+    )
     if x.empty or len(x) < 30:
         return pd.DataFrame(), {"model_status": "skipped: insufficient rows"}
 
@@ -99,6 +110,20 @@ def _try_shap_importance(
     return pd.DataFrame(
         {"feature": sample.columns, "importance": mean_abs, "method": "mean_abs_shap"}
     )
+
+
+def _selected_lags(best_lag: int | None, max_lag: int, lag_mode: str) -> list[int]:
+    if lag_mode == "best_only":
+        return [_best_only_lag(best_lag, max_lag)]
+    if lag_mode == "nearby":
+        return _nearby_lags(best_lag, max_lag)
+    raise ValueError('lag_mode must be "best_only" or "nearby"')
+
+
+def _best_only_lag(best_lag: int | None, max_lag: int) -> int:
+    if best_lag is None or pd.isna(best_lag):
+        return 0
+    return min(max_lag, max(0, int(abs(best_lag))))
 
 
 def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[int]:

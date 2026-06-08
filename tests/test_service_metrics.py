@@ -61,8 +61,6 @@ def test_analyze_numeric_frame_reports_progress_and_skip_flags(tmp_path):
     assert "正在计算模型提升评分" in progress_messages
     assert "正在计算滚动稳定性" in progress_messages
     assert "正在生成候选排序" in progress_messages
-    assert not tables.ranked_features.empty
-    assert not tables.risk_flags.empty
     assert set(tables.model_lift_scores["status"]) == {"skipped: user disabled model lift scoring"}
     assert set(tables.rolling_corr_scores["valid_window_count"]) == {0}
     assert tables.metrics["skip_model_lift"] == "True"

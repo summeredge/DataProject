@@ -28,3 +28,4 @@ def test_analyze_numeric_frame_metrics_include_max_lag(tmp_path):
     tables = analyze_numeric_frame(frame, config)
 
     assert tables.metrics["max_lag"] == 7.0
+    assert tables.metrics["top_k"] == 2.0

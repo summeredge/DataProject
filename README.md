@@ -1,10 +1,10 @@
-# 化工装置工业时序筛查项目
+# 化工装置工业时序数据筛查
 
 本项目用于工业装置历史时序数据的四层筛查。用户指定一个目标变量后，程序会从大量过程变量中快速筛出相关性线索，并结合残差相关、工况稳定性、风险标签和预测提升给出候选变量排序。
 
-默认策略强调效率，不运行 PCMCI、Transfer Entropy、XGBoost、SHAP 等耗时算法。高级算法只作为后续小范围复核手段。
+默认策略强调效率：第一阶段默认不运行 PCMCI、Transfer Entropy、XGBoost、LightGBM、全量 DTW，也默认不运行 SHAP。Granger 与模型解释保留为二阶段复核接口，不参与主评分。
 
-## 默认分析方法
+## 第一阶段默认分析方法（已更新）
 
 默认只执行轻量方法：
 
@@ -13,13 +13,13 @@
 - 标准化：消除量纲影响
 - Pearson 相关：线性同步和滞后关系
 - Spearman 相关：单调非线性关系，比 Pearson 稳健
-- p 值与 r²：输出每个滞后点的统计显著性和解释比例
+- p 值、q 值与 r²：输出每个滞后点的统计显著性与多重比较校正（Pearson/Spearman）
 - 工况分段：可按负荷代表列切分低/中/高负荷或自定义范围
 - 去趋势/差分：减少共同趋势造成的伪相关
 - 滞后扫描：在 `[-max_lag, +max_lag]` 范围内寻找最强相关滞后
-- 残差相关：支持配置多个 CAPACITY 控制列，分别剔除负荷/产量等共同驱动后再计算相关
-- 工况稳定性：输出低/中/高工况下的强度、符号和滞后一致性
-- 变量排序：综合原始相关、残差相关、工况稳定性、滞后方向、模型提升和风险惩罚输出候选变量
+- 残差相关：支持多列残差控制（residual control columns），对 target 与 candidate 分别多元回归残差化后再做滞后相关
+- 工况稳定性：输出低/中/高工况下的强度、符号一致性、滞后一致性及稳定性指标
+- 变量排序：综合 raw/residual 相关、工况稳定性、滚动稳定性、lag 峰值质量、model lift、风险惩罚输出候选变量
 - 方向判断：同步变化、变量领先目标、变量滞后目标
 
 ## 后续可选方法
@@ -127,7 +127,8 @@ python -m chem_ts_corr.cli analyze `
   --detrend-window 48 `
   --segment-column 负荷 `
   --segment-mode mid `
-  --capacity-columns 负荷,进料量 `
+  --residual-control-columns 负荷,进料量 `
+  --force-include-variables 关键变量A,关键变量B `
   --output reports/big_data_run
 ```
 
@@ -136,10 +137,12 @@ python -m chem_ts_corr.cli analyze `
 - `--encoding`：CSV 编码，中文 Windows CSV 常用 `gb18030`
 - `--preprocess-mode`：`raw`、`detrend`、`diff`、`detrend_diff`
 - `--detrend-window`：滑动均值去趋势窗口点数
-- `--segment-column`：负荷代表列
+- `--segment-column`：负荷代表列（仅用于工况分段）
 - `--segment-mode`：`all`、`low`、`mid`、`high`、`custom`
 - `--segment-min / --segment-max`：自定义工况范围
-- `--capacity-columns`：残差相关使用的 CAPACITY 控制列，可配置多列，和工况分段列相互独立
+- `--residual-control-columns`：残差相关控制列（多列逗号分隔）
+- `--capacity-columns`：向后兼容别名（等价 residual control columns）
+- `--force-include-variables`：强制进入滚动稳定性复核的变量列表
 
 如果后续要对筛选后的变量追加 Granger：
 
@@ -176,15 +179,21 @@ python -m chem_ts_corr.cli analyze `
 ## 输出文件
 
 - `summary.md`：分析摘要
-- `ranked_features.csv`：候选变量排序，包含 `final_score`、风险标签和建议动作
-- `lag_scores.csv`：各变量、各滞后点的相关性明细，包含 `effective_n` 和 `corr_fdr_q_value`
+- `ranked_features.csv`：候选变量排序主表
+- `recommended_candidates.csv`：推荐候选（含 `candidate_grade`、`recommended_use`）
+- `lag_scores.csv`：各变量/各滞后点明细，包含 `effective_n`、`pearson_q`、`spearman_q`、`corr_q_value`、`lag_boundary_flag`
+- `lag_peak_quality.csv`：lag 峰值质量（`best_lag`、`peak_sharpness`、`lag_quality`）
 - `diagnostics.csv`：缺失、长缺失段、异常跳变比例、饱和比例等数据质量诊断
 - `residual_corr_scores.csv`：剔除一个或多个 CAPACITY 控制列后的残差相关
-- `regime_scores.csv`：低/中/高工况下的相关结果和工况稳定性指标
-- `risk_flags.csv`：公式泄漏、共同负荷驱动、闭环反馈、目标领先变量、跨工况不稳定、数据质量风险
+- `regime_scores.csv`：低/中/高工况相关结果与稳定性指标（含符号一致性、滞后一致性、CV 等）
+- `rolling_corr_scores.csv`：滚动相关稳定性（`rolling_corr_median`、`rolling_corr_iqr`、`rolling_sign_consistency`、`rolling_stability`）
+- `risk_flags.csv`：数据质量、公式型变量、共同驱动、闭环、目标领先、跨工况不稳定、时序不稳定、lag 边界、低提升等风险标记
 - `model_lift_scores.csv`：TimeSeriesSplit 下 AR baseline 与 AR + candidate lag features 的误差改善
 - `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
-- `shap_or_importance.csv`：默认跳过，启用模型解释后输出结果
+- `shap_or_importance.csv`：默认跳过，启用模型解释后输出特征级重要性明细
+- `model_variable_importance.csv`：模型解释变量排序，按变量汇总随机森林/SHAP 重要性且每个变量仅展示最强 lag；该文件不代表因果结论，不改变主筛查综合得分。
+- `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
+- `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
 ## 推荐工作流
 

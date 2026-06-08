@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from chem_ts_corr.causal_review import build_causal_review_candidates
+from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
+from chem_ts_corr.near_miss import build_near_miss_candidates
 
 
 def write_outputs(
@@ -25,6 +27,26 @@ def write_outputs(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    model_variable_importance = build_model_variable_importance(
+        importance,
+        ranked_features,
+        risk_flags=risk_flags,
+    )
+    model_discovered = build_model_discovered_candidates(
+        importance,
+        ranked_features,
+        risk_flags=risk_flags,
+        max_lag=_metric_int(metrics, "max_lag"),
+    )
+    near_miss = build_near_miss_candidates(
+        lag_scores,
+        ranked_features,
+        residual_corr_scores=residual_corr_scores,
+        lag_peak_quality=lag_peak_quality,
+        risk_flags=risk_flags,
+        screening_top_n=_metric_int(metrics, "top_k") or 50,
+    )
+
     files = {
         "ranked_features.csv": ranked_features,
         "recommended_candidates.csv": build_recommended_candidates(ranked_features),
@@ -32,6 +54,9 @@ def write_outputs(
         "lag_scores.csv": lag_scores,
         "granger_tests.csv": granger_tests,
         "shap_or_importance.csv": importance,
+        "model_variable_importance.csv": model_variable_importance,
+        "model_discovered_candidates.csv": model_discovered,
+        "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,
         "residual_corr_scores.csv": residual_corr_scores,
         "regime_scores.csv": regime_scores,
@@ -54,6 +79,15 @@ def write_outputs(
         risk_flags if risk_flags is not None else pd.DataFrame(),
     )
     (output_dir / "summary.md").write_text(summary, encoding="utf-8")
+
+
+
+def _metric_int(metrics: dict[str, float | str], key: str) -> int | None:
+    value = metrics.get(key)
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    return int(numeric)
 
 
 def build_markdown_summary(

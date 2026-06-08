@@ -981,9 +981,9 @@ INDEX_HTML = r"""<!doctype html>
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:6px; background:#fff; }
+    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:6px; }
     .table-wrap::after { content:"拖动右下角可调整表格宽度"; display:block; padding:4px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    table { width:100%; min-width:max-content; border-collapse:collapse; font-size:13px; background:#fff; }
+    table { width:max-content; min-width:100%; border-collapse:collapse; font-size:13px; }
     th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
     th { position:sticky; top:0; background:#eef2f6; z-index:1; }
     th.sortable { cursor:pointer; user-select:none; }

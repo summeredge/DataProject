@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict
 import json
 import threading
+import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,9 +18,11 @@ from types import SimpleNamespace
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.data import load_timeseries_csv
+from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv, read_timeseries_table
 from chem_ts_corr.causality import run_granger_tests
+from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
+from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
 
 
@@ -37,10 +40,15 @@ DOWNLOAD_FILES = {
     "regime_scores.csv",
     "risk_flags.csv",
     "model_lift_scores.csv",
+    "model_discovered_candidates.csv",
+    "model_variable_importance.csv",
+    "near_miss_candidates.csv",
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
     "causal_review_candidates.csv",
+    "conditional_granger_scores.csv",
+    "causal_review_report.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -73,6 +81,8 @@ class _Handler(BaseHTTPRequestHandler):
                 encoding = _single(params, "encoding", "utf-8-sig")
                 self._send_json(_columns_response(file_id, encoding))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/trend":
@@ -80,6 +90,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_trend_response(params))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/status":
@@ -87,6 +99,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_task_status_response(_single(params, "task_id")))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/result":
@@ -94,6 +108,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_task_result_response(_single(params, "task_id")))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/download":
@@ -101,6 +117,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_download(_single(params, "run_id"), _single(params, "file"))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         self._send_json({"error": "Not found"}, status=404)
@@ -119,8 +137,13 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/run_model":
                 self._send_json(_run_model_response(self))
                 return
+            if self.path in {"/run_causal_review", "/api/run_causal_review"}:
+                self._send_json(_run_causal_review_response(self))
+                return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
+            if _is_client_disconnect(exc):
+                return
             self._send_json({"error": str(exc)}, status=400)
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -128,19 +151,27 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send_json(self, data: dict[str, Any], status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as exc:
+            if not _is_client_disconnect(exc):
+                raise
 
     def _send_text(self, text: str, content_type: str) -> None:
         body = text.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as exc:
+            if not _is_client_disconnect(exc):
+                raise
 
     def _send_download(self, run_id: str, file_name: str) -> None:
         if file_name not in DOWNLOAD_FILES:
@@ -151,34 +182,54 @@ class _Handler(BaseHTTPRequestHandler):
 
         content_type = "text/csv; charset=utf-8" if path.suffix == ".csv" else "text/markdown; charset=utf-8"
         body = path.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Disposition", f'attachment; filename="{file_name}"')
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Disposition", f'attachment; filename="{file_name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as exc:
+            if not _is_client_disconnect(exc):
+                raise
+
+
+def _is_client_disconnect(exc: BaseException) -> bool:
+    if isinstance(exc, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)):
+        return True
+    if isinstance(exc, OSError):
+        if getattr(exc, "winerror", None) in {10053, 10054}:
+            return True
+        if getattr(exc, "errno", None) in {32, 54, 104}:
+            return True
+    return False
 
 
 def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     file_item = form["file"] if "file" in form else None
     if file_item is None or not getattr(file_item, "filename", ""):
-        raise ValueError("请选择 CSV 文件")
+        raise ValueError("请选择 CSV、Excel 或 TXT 数据文件")
+
+    filename = Path(getattr(file_item, "filename", "upload.csv")).name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
+        raise ValueError("仅支持 CSV、TXT、TSV、XLSX、XLS、XLSM 数据文件")
 
     file_id = uuid.uuid4().hex
-    upload_path = UPLOADS_DIR / f"{file_id}.csv"
+    upload_path = UPLOADS_DIR / f"{file_id}{suffix}"
     raw = file_item.file if isinstance(file_item.file, (bytes, bytearray)) else file_item.file.read()
     max_bytes = 100 * 1024 * 1024
     if len(raw) > max_bytes:
         raise ValueError("上传文件过大")
     upload_path.write_bytes(raw)
 
-    return {"file_id": file_id, "filename": Path(getattr(file_item, "filename", "upload.csv")).name}
+    return {"file_id": file_id, "filename": filename}
 
 
 def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
     path = _resolve_upload(file_id)
-    sample, used_encoding = _read_csv_sample(path, encoding)
+    sample, used_encoding = _read_data_sample(path, encoding)
     numeric_columns = [
         column
         for column in sample.columns
@@ -194,26 +245,8 @@ def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
     }
 
 
-def _read_csv_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
-    encodings = ["utf-8-sig", "gb18030"] if encoding == "auto" else [encoding]
-    last_error: Exception | None = None
-    for candidate in encodings:
-        try:
-            return (
-                pd.read_csv(
-                    path,
-                    encoding=candidate,
-                    nrows=5000,
-                    low_memory=False,
-                ),
-                candidate,
-            )
-        except UnicodeDecodeError as exc:
-            last_error = exc
-            continue
-    if last_error is not None:
-        raise ValueError("CSV 编码识别失败，请手动选择 UTF-8 或 GBK / GB18030") from last_error
-    raise ValueError("CSV 读取失败")
+def _read_data_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
+    return read_timeseries_table(path, encoding=encoding, nrows=5000)
 
 
 def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
@@ -224,7 +257,7 @@ def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dic
     if not candidate:
         return {}
     try:
-        time_frame = pd.read_csv(path, encoding=encoding, usecols=[candidate], low_memory=False)
+        time_frame, _ = read_timeseries_table(path, encoding=encoding, usecols=[candidate])
         values = pd.to_datetime(time_frame[candidate], errors="coerce").dropna().sort_values()
     except Exception:
         return {"timeColumn": candidate}
@@ -289,14 +322,17 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
+        skip_model_lift=_bool_field(form, "skip_model_lift"),
+        skip_rolling_corr=_bool_field(form, "skip_rolling_corr"),
     )
     task_id = uuid.uuid4().hex
     with TASKS_LOCK:
         TASKS[task_id] = {
-        "status": "running",
-        "message": "后台分析中",
-        "run_id": run_id,
-    }
+            "status": "running",
+            "message": "等待后台分析启动",
+            "run_id": run_id,
+            "start_time": time.time(),
+        }
     thread = threading.Thread(
         target=_analyze_task,
         args=(task_id, config, file_id),
@@ -309,18 +345,26 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
     try:
         _write_run_config(config.output_dir, config, file_id)
-        run_analysis(config)
+
+        def progress(message: str) -> None:
+            with TASKS_LOCK:
+                task = TASKS.get(task_id)
+                if task is not None:
+                    task["message"] = message
+
+        run_analysis(config, progress_callback=progress)
         with TASKS_LOCK:
             TASKS[task_id].update(
                 {
                     "status": "done",
                     "message": "分析完成",
+                    "end_time": time.time(),
                     "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
                 }
             )
     except Exception as exc:
         with TASKS_LOCK:
-            TASKS[task_id].update({"status": "error", "message": str(exc), "error": str(exc)})
+            TASKS[task_id].update({"status": "error", "message": str(exc), "error": str(exc), "end_time": time.time()})
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
@@ -332,6 +376,9 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
+    model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
+    model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
+    near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
     top10_variables = set(ranked.head(20)["variable"].astype(str)) if not ranked.empty else set()
@@ -349,6 +396,9 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "modelLiftScores": _records(lift.head(50)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
+        "modelVariableImportance": _records(model_variable_importance.head(200)),
+        "modelDiscoveredCandidates": _records(model_discovered.head(200)),
+        "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
     }
 
@@ -364,7 +414,16 @@ def _task_status_response(task_id: str) -> dict[str, Any]:
         "message": task.get("message", ""),
         "error": task.get("error", ""),
         "run_id": task.get("run_id", ""),
+        "elapsed_seconds": _elapsed_seconds(task),
     }
+
+
+def _elapsed_seconds(task: dict[str, Any]) -> float:
+    start = task.get("start_time")
+    if not start:
+        return 0.0
+    end = task.get("end_time") or time.time()
+    return round(max(0.0, float(end) - float(start)), 1)
 
 
 def _task_result_response(task_id: str) -> dict[str, Any]:
@@ -411,8 +470,12 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     if ranked.empty:
         raise ValueError("请先完成主筛查")
     variables = _secondary_variables_from_ranked(ranked, config)
+    near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
+    variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     best_lags = _best_lags_from_ranked(ranked)
+    best_lags = _merge_near_miss_lags(best_lags, near_miss)
     scaled = _scaled_frame_for_secondary(config)
+    variables = [variable for variable in variables if variable in scaled.columns]
     importance, metrics = fit_explainable_model(
         scaled,
         target=config.target,
@@ -421,15 +484,86 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         max_features=config.max_model_features,
         random_state=config.random_state,
         best_lags=best_lags,
+        lag_mode="best_only",
+    )
+    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+    model_variable_importance = build_model_variable_importance(importance, ranked, risk_flags=risk)
+    model_discovered = build_model_discovered_candidates(
+        importance,
+        ranked,
+        risk_flags=risk,
+        screening_top_n=config.top_k,
+        max_lag=config.max_lag,
     )
     importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
+    model_variable_importance.to_csv(output_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig")
+    model_discovered.to_csv(output_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig")
     return {
         "importance": _records(importance.head(200)),
+        "modelVariableImportance": _records(model_variable_importance.head(200)),
+        "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "modelMetrics": metrics,
         "downloads": _download_links(run_id, output_dir),
     }
 
 
+
+def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    candidates = _safe_read_result_csv(output_dir / "causal_review_candidates.csv")
+    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+    if candidates.empty:
+        raise ValueError("请先完成主筛查并生成 causal_review_candidates.csv")
+
+    risk_filter = _list_field(form, "risk_flag_filter")
+    candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
+    scaled = _scaled_frame_for_secondary(config)
+    result = run_causal_review_stage(
+        frame=scaled,
+        target=config.target,
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        risk_flags=risk,
+        control_columns=_list_field(form, "control_columns") or config.residual_control_columns or config.capacity_columns,
+        maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
+        min_rows=_int_field(form, "min_rows", 60),
+        top_n=_optional_int_field(form, "top_n"),
+    )
+    conditional = result["conditional_granger_scores"]
+    report = result["causal_review_report"]
+    conditional.to_csv(output_dir / "conditional_granger_scores.csv", index=False, encoding="utf-8-sig")
+    report.to_csv(output_dir / "causal_review_report.csv", index=False, encoding="utf-8-sig")
+    return {
+        "conditionalGrangerScores": _records(conditional.head(500)),
+        "causalReviewReport": _records(report.head(500)),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _filter_candidates_by_risk_flags(
+    candidates: pd.DataFrame, risk_flags: pd.DataFrame, selected_flags: list[str]
+) -> pd.DataFrame:
+    if not selected_flags or candidates.empty or risk_flags.empty:
+        return candidates.copy(deep=True)
+    if "variable" not in candidates.columns or "variable" not in risk_flags.columns or "risk_flags" not in risk_flags.columns:
+        return candidates.copy(deep=True)
+    aliases = {
+        "共同负荷驱动": "common_capacity_driver",
+        "不稳定候选": "unstable_candidate",
+        "跨工况不稳定": "unstable_across_regimes",
+        "时序不稳定": "unstable_over_time",
+        "滞后边界": "lag_boundary",
+    }
+    selected = {aliases.get(flag, flag).lower() for flag in selected_flags}
+    risk_text = risk_flags["risk_flags"].fillna("").astype(str).str.lower()
+    mask = risk_text.apply(lambda value: any(flag in value for flag in selected))
+    variables = set(risk_flags.loc[mask, "variable"].astype(str))
+    return candidates[candidates["variable"].astype(str).isin(variables)].copy(deep=True)
 
 
 def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfig) -> list[str]:
@@ -442,6 +576,12 @@ def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfi
         forced = [v for v in (config.force_include_variables or []) if v]
     return list(dict.fromkeys(top + forced))
 
+def _near_miss_variables(near_miss: pd.DataFrame, limit: int = 10) -> list[str]:
+    if near_miss.empty or "variable" not in near_miss.columns:
+        return []
+    return near_miss.head(limit)["variable"].dropna().astype(str).tolist()
+
+
 def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
         return {}
@@ -449,6 +589,21 @@ def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
         str(row["variable"]): int(row["lag"])
         for _, row in ranked[["variable", "lag"]].dropna().iterrows()
     }
+
+
+def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:
+    merged = dict(best_lags)
+    if near_miss.empty or not {"variable", "lag"}.issubset(near_miss.columns):
+        return merged
+    for _, row in near_miss[["variable", "lag"]].dropna().iterrows():
+        variable = str(row["variable"]).strip()
+        if not variable or variable in merged:
+            continue
+        try:
+            merged[variable] = int(row["lag"])
+        except (TypeError, ValueError):
+            continue
+    return merged
 
 
 def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
@@ -588,7 +743,7 @@ def _summary_metrics(summary: str) -> dict[str, str]:
 def _resolve_encoding(path: Path, encoding: str) -> str:
     if encoding != "auto":
         return encoding
-    _, used_encoding = _read_csv_sample(path, "auto")
+    _, used_encoding = _read_data_sample(path, "auto")
     return used_encoding
 
 
@@ -618,11 +773,14 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _resolve_upload(file_id: str) -> Path:
-    path = (UPLOADS_DIR / f"{file_id}.csv").resolve()
-    if not path.exists():
+    matches = sorted(UPLOADS_DIR.glob(f"{file_id}.*"))
+    if not matches:
         raise FileNotFoundError("上传文件不存在，请重新上传")
+    path = matches[0].resolve()
     if UPLOADS_DIR.resolve() not in path.parents:
         raise ValueError("Invalid upload path")
+    if path.suffix.lower() not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
+        raise ValueError("Unsupported upload file type")
     return path
 
 
@@ -684,6 +842,11 @@ def _float_field(form: dict[str, Any], name: str, default: float) -> float:
 def _optional_float_field(form: dict[str, Any], name: str) -> float | None:
     value = _field(form, name, "")
     return float(value) if value else None
+
+
+def _optional_int_field(form: dict[str, Any], name: str) -> int | None:
+    value = _field(form, name, "")
+    return int(value) if value else None
 
 
 def _list_field(form: dict[str, Any], name: str) -> list[str]:
@@ -818,13 +981,21 @@ INDEX_HTML = r"""<!doctype html>
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; border:1px solid var(--line); border-radius:6px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
+    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:6px; }
+    .table-wrap::after { content:"拖动右下角可调整表格宽度"; display:block; padding:4px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    table { width:max-content; min-width:100%; border-collapse:collapse; font-size:13px; }
     th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
     th { position:sticky; top:0; background:#eef2f6; z-index:1; }
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
     th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
+    .decision-badge { display:inline-block; border-radius:999px; padding:3px 8px; font-weight:700; font-size:12px; }
+    .decision-risk_limited_review { background:#fef3c7; color:#92400e; }
+    .decision-priority_review { background:#fee2e2; color:#991b1b; }
+    .decision-secondary_review { background:#ffedd5; color:#9a3412; }
+    .decision-not_recommended { background:#e5e7eb; color:#374151; }
+    .decision-insufficient_evidence { background:#dbeafe; color:#1e40af; }
+    .decision-manual_review_only { background:#7f1d1d; color:#fff; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } }
@@ -842,8 +1013,8 @@ INDEX_HTML = r"""<!doctype html>
         <button id="analyze" disabled>开始分析</button>
         <button id="reset" class="secondary">清空</button>
       </div>
-      <label>CSV 数据文件
-        <input id="fileInput" type="file" accept=".csv,text/csv">
+      <label>数据文件（CSV / Excel / TXT）
+        <input id="fileInput" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
       </label>
       <label>文件编码
         <select id="encoding">
@@ -858,12 +1029,14 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div class="row">
         <label>最大滞后点数<input id="maxLag" type="number" min="0" max="5000" value="12"></label>
-        <label>输出 Top K<input id="topK" type="number" min="1" max="2000" value="50"></label>
+        <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="50"></label>
       </div>
       <div class="row">
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
         <label>重采样规则<input id="resampleRule" placeholder="可留空，例如 5min"></label>
       </div>
+      <label><input id="skipModelLift" type="checkbox"> 跳过模型提升评分（大数据加速）</label>
+      <label><input id="skipRollingCorr" type="checkbox"> 跳过滚动稳定性评分（大数据加速）</label>
       <div class="row">
         <label>预处理模式
           <select id="preprocessMode">
@@ -903,6 +1076,10 @@ INDEX_HTML = r"""<!doctype html>
           <div id="forceIncludeOptions" class="multi-options"></div>
         </details>
       </label>
+      <div class="row">
+        <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
+        <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
+      </div>
       <div id="status" class="status"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
@@ -915,20 +1092,24 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
+        <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
       </div>
 
       <div id="overviewTab" class="tab-panel active">
         <h2>总览</h2>
         <div id="overview" class="overview-grid"></div>
-        <h2>Top 10 推荐变量</h2>
+        <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
       <div id="candidatesTab" class="tab-panel">
         <h2>候选变量</h2>
-        <div class="help">默认只展示 ranked_features.csv 的核心列和 Top 50，完整结果请到下载页获取。</div>
+        <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
         <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
+        <h2>轻量遗漏候选</h2>
+        <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
+        <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
       </div>
 
       <div id="risksTab" class="tab-panel">
@@ -939,7 +1120,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="lagTab" class="tab-panel">
         <h2>滞后分析</h2>
-        <div class="help">默认绘制 Top 5 变量的 lag-score 曲线；完整 lag_scores.csv 请到下载页获取。</div>
+        <div class="help">默认绘制前 5 个变量的滞后得分曲线；完整滞后明细请到下载页获取。</div>
         <div id="lagChart" class="chart empty">暂无滞后曲线。</div>
       </div>
 
@@ -975,15 +1156,35 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="validationTab" class="tab-panel">
         <h2>二次验证</h2>
-        <div class="help">先完成主筛查，再按需运行 Granger 预测验证或模型解释。结果会同步写入下载文件。</div>
+        <div class="help">先完成主筛查，再按需运行 Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
         <div class="actions">
           <button id="runGranger" disabled>运行 Granger 验证</button>
-          <button id="runModel" disabled>运行模型解释</button>
+          <button id="runModel" disabled>运行随机森林模型解释</button>
         </div>
         <h2>Granger 验证</h2>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
-        <h2>模型解释</h2>
-        <div id="importanceTable" class="empty">未启用模型解释。</div>
+        <h2>随机森林模型解释变量排序</h2>
+        <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
+        <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示变量排序。</div>
+        <h2>随机森林模型解释特征明细</h2>
+        <div id="importanceTable" class="empty">未启用随机森林模型解释。</div>
+        <h2>随机森林模型解释补充候选</h2>
+        <div class="help">该表用于发现随机森林模型解释中靠前、但主筛查前 N 个未优先覆盖的补充候选。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
+        <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示补充候选。</div>
+      </div>
+
+      <div id="causalReviewTab" class="tab-panel">
+        <h2>三层复核</h2>
+        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
+        <div class="actions">
+          <button id="runCausalReview" disabled>运行三层复核</button>
+        </div>
+        <h2>条件 Granger 预测验证结果</h2>
+        <div class="download-buttons" id="conditionalDownload"></div>
+        <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
+        <h2>三层复核报告</h2>
+        <div class="download-buttons" id="causalReportDownload"></div>
+        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
@@ -1000,6 +1201,11 @@ let lastRows = [];
 let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
+let lastModelVariableRows = [];
+let lastNearMissRows = [];
+let lastModelDiscoveredRows = [];
+let lastConditionalRows = [];
+let lastCausalReportRows = [];
 let sortState = { column: "score", direction: "desc" };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
@@ -1010,6 +1216,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
 el("drawTrend").addEventListener("click", drawTrend);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
+el("runCausalReview").addEventListener("click", runCausalReview);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1081,7 +1288,7 @@ function updateForceIncludeSummary() {
 
 async function uploadFile() {
   const file = el("fileInput").files[0];
-  if (!file) return setStatus("请选择 CSV 文件。");
+  if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
   try {
     setStatus("正在上传文件...");
     const form = new FormData();
@@ -1158,6 +1365,8 @@ async function analyze() {
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
+    form.append("skip_model_lift", el("skipModelLift").checked ? "true" : "false");
+    form.append("skip_rolling_corr", el("skipRollingCorr").checked ? "true" : "false");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
@@ -1177,7 +1386,7 @@ async function waitForAnalysisResult(taskId) {
     const statusResponse = await fetch(`/api/status?task_id=${encodeURIComponent(taskId)}`);
     const statusData = await statusResponse.json();
     if (!statusResponse.ok) throw new Error(statusData.error || "任务状态查询失败");
-    setStatus(statusData.message || "后台分析中...");
+    setStatus(formatTaskStatus(statusData));
     if (statusData.status === "error") throw new Error(statusData.error || statusData.message || "分析失败");
     if (statusData.status === "done") break;
   }
@@ -1187,22 +1396,40 @@ async function waitForAnalysisResult(taskId) {
   return resultData;
 }
 
+function formatTaskStatus(statusData) {
+  const message = statusData.message || "后台分析中...";
+  const elapsed = Number(statusData.elapsed_seconds || 0);
+  return elapsed > 0 ? `${message}（已运行 ${elapsed.toFixed(1)} 秒）` : message;
+}
+
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   lastRows = data.rankedFeatures || [];
   lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
+  lastModelVariableRows = [];
+  lastNearMissRows = data.nearMissCandidates || [];
+  lastModelDiscoveredRows = [];
+  lastConditionalRows = [];
+  lastCausalReportRows = [];
   renderOverview(data.overview || {});
   renderTable(applySort(lastRows));
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("riskTable", data.riskFlags || []);
+  renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
+  renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
+  renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
+  renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
+  renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+  renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
+  el("runCausalReview").disabled = !currentRunId;
 }
 
 function sleep(ms) {
@@ -1230,21 +1457,54 @@ async function runGranger() {
 
 async function runModel() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行模型解释...");
+  setStatus("正在运行随机森林模型解释...");
   el("runModel").disabled = true;
+  el("runCausalReview").disabled = true;
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
+    lastModelVariableRows = data.modelVariableImportance || [];
+    lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
+    renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
     renderGenericTable("importanceTable", lastImportanceRows);
+    renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
-    setStatus(`模型解释完成。${metrics}`);
+    setStatus(`随机森林模型解释完成。${metrics}`);
   } catch (error) {
     setStatus(error.message || String(error));
   } finally {
     el("runModel").disabled = !currentRunId;
+    el("runCausalReview").disabled = !currentRunId;
+  }
+}
+
+async function runCausalReview() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
+  el("runCausalReview").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("top_n", el("causalTopN").value);
+    form.append("risk_flag_filter", el("riskFlagFilter").value.trim());
+    form.append("control_columns", getCapacitySelection().join(","));
+    form.append("maxlag", el("maxLag").value);
+    form.append("min_rows", "60");
+    const data = await postForm("/api/run_causal_review", form);
+    lastConditionalRows = data.conditionalGrangerScores || [];
+    lastCausalReportRows = data.causalReviewReport || [];
+    renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
+    renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+    renderReviewDownloads(data.downloads || []);
+    renderDownloads(data.downloads || []);
+    setStatus(data.message || "三层复核完成。结果不是因果结论。");
+  } catch (error) {
+    setStatus(error.message || String(error));
+  } finally {
+    el("runCausalReview").disabled = !currentRunId;
   }
 }
 
@@ -1420,10 +1680,76 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
-  if (targetId === "importanceTable") return "未启用模型解释，或没有可展示结果。";
+  if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
+  if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
+  if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示补充候选。";
+  if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
+  if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
+  if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
-  if (targetId === "overviewTop") return "暂无 Top 10 推荐变量。";
+  if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
+}
+
+function nearMissColumns() {
+  return ["variable", "near_miss_score", "lag", "direction", "raw_score", "residual_corr", "lag_quality", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "near_miss_reason", "interpretation"];
+}
+
+function modelVariableImportanceColumns() {
+  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "total_importance", "feature_count", "importance_rank", "method", "ranked_feature_rank", "ranked_final_score", "risk_flags", "recommended_use", "recommended_action", "interpretation"];
+}
+
+function modelDiscoveredColumns() {
+  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
+}
+
+function conditionalGrangerColumns() {
+  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+}
+
+function causalReviewColumns() {
+  return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
+}
+
+function renderCausalReviewTable(targetId, rows) {
+  const container = el(targetId);
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = missingText(targetId);
+    return;
+  }
+  const columns = causalReviewColumns().filter((column) => column in rows[0]);
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  const body = document.createElement("tbody");
+  for (const row of rows) {
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
+  }
+  table.appendChild(body);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+}
+
+function formatReviewCell(column, value) {
+  if (column === "final_review_decision") {
+    const raw = String(value || "");
+    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatValue(raw))}</span>`;
+  }
+  return escapeHtml(formatValue(value));
+}
+
+function renderReviewDownloads(downloads) {
+  renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
+  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
+}
+
+function renderDownloadTarget(targetId, downloads, fileName) {
+  const container = el(targetId);
+  const item = (downloads || []).find((entry) => entry.name === fileName);
+  container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
 }
 
 function renderLagChart(rows, variables) {
@@ -1457,8 +1783,8 @@ function renderLagChart(rows, variables) {
     <rect width="${width}" height="${height}" fill="#fff"/>
     <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
     <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">lag-score curve</text>
-    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">lag ${minLag} 到 ${maxLag}</text>
+    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">滞后得分曲线</text>
+    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">滞后 ${minLag} 到 ${maxLag}</text>
     ${paths}
   </svg><div class="status" style="text-align:center">${legend}</div>`;
 }
@@ -1506,6 +1832,8 @@ function formatValue(value) {
     const map = {
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
+      lag_boundary: "滞后边界命中",
+      lag_boundary_flag: "滞后边界命中",
       formula_coupled_reference: "公式耦合参考",
       strong_screening_candidate: "强初筛候选",
       prediction_candidate: "预测候选",
@@ -1519,6 +1847,7 @@ function formatValue(value) {
       formula_like: "公式类变量",
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
+      closed_loop_suspect: "疑似闭环反馈",
       target_leads_variable: "目标领先变量",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量差",
@@ -1529,9 +1858,47 @@ function formatValue(value) {
       strong: "强",
       ok: "正常",
       skipped: "已跳过",
+      risk_limited_review: "风险受限复核",
+      priority_review: "优先复核",
+      secondary_review: "二级复核",
+      not_recommended: "暂不推荐",
+      insufficient_evidence: "证据不足",
+      manual_review_only: "仅人工复核",
+      candidate_leads_target: "变量领先目标",
+      target_leads_candidate: "目标领先变量",
+      target_leads_variable: "目标领先变量",
+      synchronous: "同步变化",
+      unknown: "未知",
+      positive: "正向",
+      negative: "负向",
+      strong: "强",
+      weak: "弱",
+      medium: "中",
+      "predictive validation only": "仅作预测验证",
+      "not a causal conclusion": "不是因果结论",
+      "model explanation only": "仅作模型解释",
+      model_only_signal: "模型补充线索",
+      multi_lag_model_signal: "多滞后模型线索",
+      model_lag_boundary_risk: "模型滞后边界风险",
+      synchronous_or_leakage_risk: "同步或泄漏风险",
+      screening_lag_boundary_risk: "初筛滞后边界风险",
+      target_lead_risk: "目标领先风险",
+      stability_risk: "稳定性风险",
+      model_supported_screening_candidate: "模型支持的初筛候选",
+      raw_lag_signal: "滞后相关线索",
+      residual_signal: "残差相关线索",
+      clear_lag_peak: "滞后峰值清晰",
+      lag_boundary_risk: "滞后边界风险",
+      data_or_formula_risk: "数据质量或公式泄漏风险",
+      near_miss_candidate: "遗漏候选线索",
+      "screening near-miss only": "仅作轻量遗漏筛查",
     };
+    if (map[value]) return map[value];
+    if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
+    if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
+    if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
     return value
-      .split(";")
+      .split(/[;,，；]/)
       .map((item) => {
         const key = item.trim();
         if (!key) return "";
@@ -1591,6 +1958,43 @@ function columnLabel(column) {
     corr_fdr_q_value: "相关FDR Q值",
     effective_n: "有效样本数",
     status: "状态",
+    best_lag: "最佳滞后",
+    min_p_value: "最小P值",
+    baseline_rmse: "基准模型RMSE",
+    full_rmse: "完整模型RMSE",
+    condition_number: "最大条件数",
+    base_condition_number: "基准模型条件数",
+    full_condition_number: "完整模型条件数",
+    control_columns: "控制列",
+    n_rows: "有效样本数",
+    interpretation: "解释边界",
+    candidate_grade: "候选等级",
+    review_tier: "复核层级",
+    review_priority: "复核优先级",
+    review_reason: "复核原因",
+    final_review_decision: "最终复核建议",
+    final_review_reason: "最终复核原因",
+    conditional_granger_status: "条件Granger状态",
+    conditional_best_lag: "条件最佳滞后",
+    conditional_min_p_value: "条件最小P值",
+    conditional_fdr_q_value: "条件FDR Q值",
+    best_model_feature: "最强模型特征",
+    best_model_lag: "最强模型滞后",
+    max_importance: "最大重要性",
+    total_importance: "变量总重要性",
+    feature_count: "模型特征数",
+    importance_rank: "重要性排名",
+    model_feature_count: "模型特征数量",
+    nearby_lag_count: "滞后点数量",
+    ranked_feature_rank: "主筛查排名",
+    ranked_final_score: "主筛查得分",
+    in_screening_top_n: "在初筛前N内",
+    missing_from_screening_top_n: "未进入主筛查TopN",
+    discovery_reason: "模型发现原因",
+    near_miss_score: "遗漏候选得分",
+    raw_score: "原始滞后得分",
+    near_miss_reason: "遗漏候选原因",
+    lag_quality: "滞后峰值质量",
   };
   return labels[column] || column;
 }
@@ -1610,6 +2014,11 @@ function reset() {
   lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
+  lastModelVariableRows = [];
+  lastNearMissRows = [];
+  lastModelDiscoveredRows = [];
+  lastConditionalRows = [];
+  lastCausalReportRows = [];
   sortState = { column: "score", direction: "desc" };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
@@ -1628,9 +2037,12 @@ function reset() {
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
+  el("skipModelLift").checked = false;
+  el("skipRollingCorr").checked = false;
   el("analyze").disabled = true;
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
+  el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
   el("overview").innerHTML = "";
@@ -1640,6 +2052,8 @@ function reset() {
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
   el("riskTable").className = "empty";
   el("riskTable").textContent = "暂无风险诊断结果。";
+  el("nearMissTable").className = "empty";
+  el("nearMissTable").textContent = "完成主筛查后显示轻量遗漏候选。";
   el("lagChart").className = "chart empty";
   el("lagChart").textContent = "暂无滞后曲线。";
   el("trendChart").className = "chart empty";
@@ -1647,8 +2061,20 @@ function reset() {
   el("trendLegend").innerHTML = "";
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
+  el("modelVariableImportanceTable").className = "empty";
+  el("modelVariableImportanceTable").textContent = "运行随机森林模型解释后显示变量排序。";
   el("importanceTable").className = "empty";
-  el("importanceTable").textContent = "启用模型解释后显示结果。";
+  el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
+  el("modelDiscoveredTable").className = "empty";
+  el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示补充候选。";
+  el("conditionalGrangerTable").className = "empty";
+  el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
+  el("causalReviewTable").className = "empty";
+  el("causalReviewTable").textContent = "未运行 三层复核。";
+  el("conditionalDownload").innerHTML = "";
+  el("causalReportDownload").innerHTML = "";
+  el("causalTopN").value = "";
+  el("riskFlagFilter").value = "";
   setStatus("");
 }
 </script>

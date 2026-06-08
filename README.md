@@ -1,4 +1,4 @@
-# 化工装置工业时序筛查项目
+# 化工装置工业时序数据筛查
 
 本项目用于工业装置历史时序数据的四层筛查。用户指定一个目标变量后，程序会从大量过程变量中快速筛出相关性线索，并结合残差相关、工况稳定性、风险标签和预测提升给出候选变量排序。
 
@@ -63,7 +63,7 @@ start_app.bat
 
 使用流程：
 
-1. 浏览器上传 CSV。
+1. 浏览器上传 CSV、TSV、TXT 或 Excel（`.xlsx`、`.xls`、`.xlsm`）数据。
 2. 选择编码、时间列、目标列。
 3. 设置滞后、预处理、工况分段等参数。
 4. 点击“开始分析”。
@@ -94,12 +94,12 @@ python -m chem_ts_corr.cli serve
 
 打开浏览器中的本地地址后，可以通过界面完成：
 
-- 上传 CSV 数据
+- 上传 CSV、TSV、TXT 或 Excel 数据
 - 选择时间列
 - 选择目标变量
-- 设置最大滞后点数、Top K、有效数据比例和重采样规则
+- 设置最大滞后点数、Top K、有效数据比例、重采样规则，并可在大数据场景跳过模型提升评分/滚动稳定性评分以加速
 - 点击“开始分析”
-- 下载候选变量排序、滞后明细等 CSV 结果
+- 查看可调整宽度的结果表格，并下载候选变量排序、滞后明细等 CSV 结果
 
 运行轻量初筛：
 
@@ -134,7 +134,8 @@ python -m chem_ts_corr.cli analyze `
 
 常用参数：
 
-- `--encoding`：CSV 编码，中文 Windows CSV 常用 `gb18030`
+- `--input`：支持 CSV、TSV、TXT 与 Excel 文件；TXT/TSV 会自动尝试分隔符，Excel 依赖 `openpyxl` / `xlrd`
+- `--encoding`：文本文件编码，中文 Windows CSV/TXT 常用 `gb18030`
 - `--preprocess-mode`：`raw`、`detrend`、`diff`、`detrend_diff`
 - `--detrend-window`：滑动均值去趋势窗口点数
 - `--segment-column`：负荷代表列（仅用于工况分段）
@@ -143,6 +144,8 @@ python -m chem_ts_corr.cli analyze `
 - `--residual-control-columns`：残差相关控制列（多列逗号分隔）
 - `--capacity-columns`：向后兼容别名（等价 residual control columns）
 - `--force-include-variables`：强制进入滚动稳定性复核的变量列表
+- Web 大数据加速选项：可勾选“跳过模型提升评分（大数据加速）”和“跳过滚动稳定性评分（大数据加速）”，用于缩短主筛查耗时；这两个选项不会改变 `ranked_features.final_score` 的计算公式，只会将对应模块输出标记为跳过/缺省。
+- Web 结果表格：多数结果表支持横向滚动，右下角可拖动调整表格宽度，便于查看宽表字段。
 
 如果后续要对筛选后的变量追加 Granger：
 
@@ -190,7 +193,10 @@ python -m chem_ts_corr.cli analyze `
 - `risk_flags.csv`：数据质量、公式型变量、共同驱动、闭环、目标领先、跨工况不稳定、时序不稳定、lag 边界、低提升等风险标记
 - `model_lift_scores.csv`：TimeSeriesSplit 下 AR baseline 与 AR + candidate lag features 的误差改善
 - `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
-- `shap_or_importance.csv`：默认跳过，启用模型解释后输出结果
+- `shap_or_importance.csv`：默认跳过，启用模型解释后输出特征级重要性明细
+- `model_variable_importance.csv`：模型解释变量排序，按变量汇总随机森林/SHAP 重要性且每个变量仅展示最强 lag；该文件不代表因果结论，不改变主筛查综合得分。
+- `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
+- `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
 ## 推荐工作流
 

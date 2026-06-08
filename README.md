@@ -1,4 +1,4 @@
-# 化工装置工业时序筛查项目
+# 化工装置工业时序数据筛查
 
 本项目用于工业装置历史时序数据的四层筛查。用户指定一个目标变量后，程序会从大量过程变量中快速筛出相关性线索，并结合残差相关、工况稳定性、风险标签和预测提升给出候选变量排序。
 
@@ -190,7 +190,10 @@ python -m chem_ts_corr.cli analyze `
 - `risk_flags.csv`：数据质量、公式型变量、共同驱动、闭环、目标领先、跨工况不稳定、时序不稳定、lag 边界、低提升等风险标记
 - `model_lift_scores.csv`：TimeSeriesSplit 下 AR baseline 与 AR + candidate lag features 的误差改善
 - `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
-- `shap_or_importance.csv`：默认跳过，启用模型解释后输出结果
+- `shap_or_importance.csv`：默认跳过，启用模型解释后输出特征级重要性明细
+- `model_variable_importance.csv`：模型解释变量排序，按变量汇总随机森林/SHAP 重要性且每个变量仅展示最强 lag；该文件不代表因果结论，不改变主筛查综合得分。
+- `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
+- `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
 ## 推荐工作流
 

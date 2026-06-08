@@ -34,6 +34,8 @@ class AnalysisConfig:
     max_interpolate_gap_points: int = 5
     interpolate_limit_area: str = "inside"
     max_upload_size_mb: int = 100
+    skip_model_lift: bool = False
+    skip_rolling_corr: bool = False
 
     def resolved_granger_maxlag(self) -> int:
         if self.granger_maxlag is not None:

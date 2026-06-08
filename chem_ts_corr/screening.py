@@ -227,6 +227,13 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
     return pd.DataFrame(rows, columns=cols)
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return default
+    return float(numeric)
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
@@ -243,26 +250,33 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     rows = []
     for _, row in ranked.iterrows():
         variable = str(row.get("variable", ""))
-        raw_corr = float(row.get("score", 0) or 0)
-        residual_corr = float(residual_map.get(variable, raw_corr))
-        regime_stability = float(stability_map.get(variable, {}).get("regime_stability_final", 1.0) or 1.0)
+        raw_corr = _safe_float(row.get("score", 0), default=0.0)
+        residual_corr = _safe_float(residual_map.get(variable, raw_corr), default=raw_corr)
+        regime_stability = _safe_float(
+            stability_map.get(variable, {}).get("regime_stability_final", 1.0), default=1.0
+        )
         d = diag_map.get(variable, {})
         poor_quality = (
-            float(d.get("missing_rate", 0) or 0) > 0.2
-            or float(d.get("saturation_ratio", 0) or 0) > 0.2
-            or float(d.get("abnormal_jump_ratio", 0) or 0) > 0.01
+            _safe_float(d.get("missing_rate", 0), default=0.0) > 0.2
+            or _safe_float(d.get("saturation_ratio", 0), default=0.0) > 0.2
+            or _safe_float(d.get("abnormal_jump_ratio", 0), default=0.0) > 0.01
         )
+        lag_value = int(_safe_float(row.get("lag", 0), default=0.0))
         formula_like = _looks_like_formula_variable(variable)
-        strong_formula = formula_like and raw_corr > 0.98 and int(row.get("lag", 0) or 0) == 0
+        strong_formula = formula_like and raw_corr > 0.98 and lag_value == 0
         common_capacity = bool(control_columns) and raw_corr >= 0.5 and residual_corr < raw_corr * 0.65
-        closed_loop = roles.get(variable) == "MV" and int(row.get("lag", 0) or 0) < 0
-        target_leads = int(row.get("lag", 0) or 0) < 0
+        closed_loop = roles.get(variable) == "MV" and lag_value < 0
+        target_leads = lag_value < 0
         unstable_reg = regime_stability < 0.5
-        unstable_time = float(roll_map.get(variable, {}).get("rolling_stability", 1.0) or 1.0) < 0.35
+        unstable_time = _safe_float(
+            roll_map.get(variable, {}).get("rolling_stability", 1.0), default=1.0
+        ) < 0.35
         lag_boundary = bool(lag_map.get(variable, {}).get("lag_boundary_flag", False))
         lift_info = lift_map.get(variable, {})
-        low_lift = str(lift_info.get("status", "")).startswith("ok") and float(lift_info.get("model_lift", 0.0) or 0.0) < 0.01
-        residual_collinearity = float(residual_cond_map.get(variable, 0) or 0) > 1e8
+        low_lift = str(lift_info.get("status", "")).startswith("ok") and _safe_float(
+            lift_info.get("model_lift", 0.0), default=0.0
+        ) < 0.01
+        residual_collinearity = _safe_float(residual_cond_map.get(variable, 0), default=0.0) > 1e8
 
         flags = [name for name, active in [
             ("formula_like", formula_like),

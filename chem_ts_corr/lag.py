@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from statistics import NormalDist
-
 import numpy as np
 import pandas as pd
 
@@ -28,20 +26,18 @@ def _corr_p_value(r: float, n: int) -> float:
     t_stat = abs_r * np.sqrt(df / max(1e-15, 1 - abs_r * abs_r))
     try:
         from scipy.stats import t as student_t  # type: ignore
-
-        return float(2 * student_t.sf(t_stat, df))
     except Exception:
-        return float(2 * (1 - NormalDist().cdf(t_stat)))
+        return np.nan
+    return float(2 * student_t.sf(t_stat, df))
 
 
 def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.DataFrame:
-    rows: list[dict[str, float | int | str]] = []
+    rows: list[dict[str, float | int | str | bool]] = []
     target_series = frame[target]
 
     for variable in frame.columns:
         if variable == target:
             continue
-
         series = frame[variable]
         for lag in range(-max_lag, max_lag + 1):
             shifted = series.shift(lag)
@@ -60,36 +56,58 @@ def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.Dat
                     "spearman_p": spearman["p_value"],
                     "spearman_r2": spearman["r2"],
                     "n": pearson["n"],
-                    "effective_n": pearson["n"],
                     "abs_pearson": abs(pearson_r) if not np.isnan(pearson_r) else np.nan,
                     "abs_spearman": abs(spearman_r) if not np.isnan(spearman_r) else np.nan,
+                    "lag_boundary_flag": abs(lag) == max_lag,
                 }
             )
 
     result = pd.DataFrame(rows)
     if not result.empty:
+        result["pearson_q"] = _benjamini_hochberg(result["pearson_p"])
+        result["spearman_q"] = _benjamini_hochberg(result["spearman_p"])
         use_pearson = result["abs_pearson"] >= result["abs_spearman"]
         result["p_value"] = np.where(use_pearson, result["pearson_p"], result["spearman_p"])
-        result["corr_fdr_q_value"] = _benjamini_hochberg(result["p_value"])
+        result["corr_q_value"] = np.where(use_pearson, result["pearson_q"], result["spearman_q"])
+        result["p_value_status"] = np.where(result["p_value"].isna(), "scipy_unavailable_or_invalid", "ok")
     return result
 
 
 def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
     if lag_scores.empty:
         return lag_scores
-
     ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
+    ranked = ranked.dropna(subset=["score"])
+    if ranked.empty:
+        return pd.DataFrame(columns=list(lag_scores.columns) + ["score", "method", "p_value", "r2", "corr_q_value", "direction"])
     idx = ranked.groupby("variable")["score"].idxmax()
     best = ranked.loc[idx].sort_values("score", ascending=False).reset_index(drop=True)
-
     use_pearson = best["abs_pearson"] >= best["abs_spearman"]
     best["method"] = np.where(use_pearson, "pearson", "spearman")
     best["p_value"] = np.where(use_pearson, best["pearson_p"], best["spearman_p"])
     best["r2"] = np.where(use_pearson, best["pearson_r2"], best["spearman_r2"])
-    if "corr_fdr_q_value" in best.columns:
-        best["corr_fdr_q_value"] = best["corr_fdr_q_value"]
+    best["corr_q_value"] = np.where(use_pearson, best["pearson_q"], best["spearman_q"])
     best["direction"] = best["lag"].map(describe_lag_direction)
     return best
+
+
+def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFrame:
+    if lag_scores.empty:
+        return pd.DataFrame(columns=["variable", "best_lag", "best_score", "nearby_score_mean", "peak_sharpness", "lag_boundary_flag", "lag_quality"])
+    ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
+    rows = []
+    for var, g in ranked.groupby("variable"):
+        g = g.dropna(subset=["score"])
+        if g.empty:
+            continue
+        best = g.sort_values("score", ascending=False).iloc[0]
+        bl = int(best["lag"])
+        nearby = g[g["lag"].between(bl - 1, bl + 1)]["score"].mean()
+        peak_sharpness = float(best["score"] - (nearby if pd.notna(nearby) else 0.0))
+        boundary = abs(bl) == max_lag
+        lag_quality = max(0.0, min(1.0, float(best["score"]) - max(0.0, -peak_sharpness) - (0.15 if boundary else 0.0)))
+        rows.append({"variable": var, "best_lag": bl, "best_score": float(best["score"]), "nearby_score_mean": float(nearby if pd.notna(nearby) else 0.0), "peak_sharpness": peak_sharpness, "lag_boundary_flag": boundary, "lag_quality": lag_quality})
+    return pd.DataFrame(rows)
 
 
 def describe_lag_direction(lag: int) -> str:

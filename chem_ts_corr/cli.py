@@ -5,7 +5,6 @@ from pathlib import Path
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.pipeline import run_analysis
-from chem_ts_corr.web import run_server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -36,7 +35,17 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument(
         "--capacity-columns",
         default="",
-        help="comma-separated capacity/load columns used for residual correlation control",
+        help="backward-compatible alias of residual control columns",
+    )
+    analyze.add_argument(
+        "--residual-control-columns",
+        default="",
+        help="comma-separated control columns used for residual correlation control",
+    )
+    analyze.add_argument(
+        "--force-include-variables",
+        default="",
+        help="comma-separated variables to force include in rolling stability review",
     )
     analyze.add_argument("--roles", dest="roles_path", type=Path, default=None, help="optional CSV with columns: variable,role")
     analyze.add_argument(
@@ -50,6 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--enable-model", action="store_true", help="run optional model explanation")
     analyze.add_argument("--granger-maxlag", type=int, default=None)
     analyze.add_argument("--max-model-features", type=int, default=300)
+    analyze.add_argument("--max-interpolate-gap-points", type=int, default=5)
+    analyze.add_argument("--interpolate-limit-area", choices=["inside", "outside"], default="inside")
+    analyze.add_argument(
+        "--exclude-control-columns-from-candidates",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="exclude residual/capacity control columns from top-k candidates by default",
+    )
 
     serve = subparsers.add_parser("serve", help="run the local web UI")
     serve.add_argument("--host", default="127.0.0.1")
@@ -78,14 +95,21 @@ def main() -> None:
             segment_min=args.segment_min,
             segment_max=args.segment_max,
             capacity_columns=[item for item in args.capacity_columns.split(",") if item],
+            residual_control_columns=[item for item in args.residual_control_columns.split(",") if item] or [item for item in args.capacity_columns.split(",") if item],
+            force_include_variables=[item for item in args.force_include_variables.split(",") if item],
             roles_path=args.roles_path,
             enable_granger=args.enable_granger,
             enable_model=args.enable_model,
             granger_maxlag=args.granger_maxlag,
             max_model_features=args.max_model_features,
+            max_interpolate_gap_points=args.max_interpolate_gap_points,
+            interpolate_limit_area=args.interpolate_limit_area,
+            exclude_control_columns_from_candidates=args.exclude_control_columns_from_candidates,
         )
         run_analysis(config)
     elif args.command == "serve":
+        from chem_ts_corr.web import run_server
+
         run_server(args.host, args.port, open_browser=not args.no_open)
 
 

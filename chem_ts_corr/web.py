@@ -1035,8 +1035,8 @@ INDEX_HTML = r"""<!doctype html>
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
         <label>重采样规则<input id="resampleRule" placeholder="可留空，例如 5min"></label>
       </div>
-      <label><input id="skipModelLift" type="checkbox"> 跳过模型提升评分（大数据加速）</label>
-      <label><input id="skipRollingCorr" type="checkbox"> 跳过滚动稳定性评分（大数据加速）</label>
+      <label class="check"><input id="skipModelLift" type="checkbox"> 跳过模型提升评分（大数据加速）</label>
+      <label class="check"><input id="skipRollingCorr" type="checkbox"> 跳过滚动稳定性评分（大数据加速）</label>
       <div class="row">
         <label>预处理模式
           <select id="preprocessMode">

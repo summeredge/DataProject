@@ -389,7 +389,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
 
 
 def _grade_candidate(row: pd.Series) -> str:
-    score = float(row.get("final_score", 0) or 0)
+    score = _safe_float(row.get("final_score", 0), default=0.0)
     if score >= 0.75:
         return "A"
     if score >= 0.6:
@@ -402,7 +402,8 @@ def _grade_candidate(row: pd.Series) -> str:
 
 
 def _recommend_use(row: pd.Series) -> str:
-    flags = str(row.get("risk_flags", "") or "")
+    risk_value = row.get("risk_flags", "")
+    flags = "" if pd.isna(risk_value) else str(risk_value)
     grade = str(row.get("candidate_grade", "E"))
     if "poor_data_quality" in flags:
         return "poor_quality_variable"
@@ -410,8 +411,8 @@ def _recommend_use(row: pd.Series) -> str:
         return "closed_loop_suspect"
     if "common_capacity_driver" in flags:
         return "capacity_driven"
-    raw_corr = float(row.get("raw_corr", 0) or 0)
-    lag = int(row.get("lag", 0) or 0)
+    raw_corr = _safe_float(row.get("raw_corr", 0), default=0.0)
+    lag = int(_safe_float(row.get("lag", 0), default=0.0))
     has_formula = "formula_like" in flags
     has_strong_formula = "strong_formula_leakage" in flags
     has_common = "common_capacity_driver" in flags
@@ -421,15 +422,16 @@ def _recommend_use(row: pd.Series) -> str:
         return "unstable_candidate"
     if grade == "A":
         return "strong_screening_candidate"
-    if grade == "B" and float(row.get("model_lift_score", 0) or 0) > 0.05:
+    if grade == "B" and _safe_float(row.get("model_lift_score", 0), default=0.0) > 0.05:
         return "prediction_candidate"
-    if int(row.get("lag", 0) or 0) < 0:
+    if int(_safe_float(row.get("lag", 0), default=0.0)) < 0:
         return "state_indicator"
     return "manual_review_required"
 
 
 def _recommended_action(row: pd.Series) -> str:
-    use = str(row.get("recommended_use", "manual_review_required"))
+    use_value = row.get("recommended_use", "manual_review_required")
+    use = "manual_review_required" if pd.isna(use_value) else str(use_value)
     mapping = {
         "strong_screening_candidate": "优先进入机理复核",
         "prediction_candidate": "可作为预测候选",

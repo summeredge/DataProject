@@ -1221,8 +1221,6 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <h2>增强筛选结果</h2>
         <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
-        <h3>增强筛选摘要</h3>
-        <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
         <h3>模型提升评分</h3>
         <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
         <h3>滚动稳定性评分</h3>
@@ -1271,7 +1269,6 @@ let lastNearMissRows = [];
 let lastModelDiscoveredRows = [];
 let lastEnhancedLiftRows = [];
 let lastEnhancedRollingRows = [];
-let lastEnhancedSummaryRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let sortState = { column: "score", direction: "desc" };
@@ -1477,8 +1474,7 @@ function renderAnalysisResult(data) {
   lastModelVariableRows = [];
   lastNearMissRows = data.nearMissCandidates || [];
   lastModelDiscoveredRows = [];
-  lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
-  const hasEnhancedScreening = lastEnhancedSummaryRows.length > 0;
+  const hasEnhancedScreening = (data.enhancedValidationSummary || []).length > 0;
   lastEnhancedLiftRows = hasEnhancedScreening ? (data.modelLiftScores || []) : [];
   lastEnhancedRollingRows = hasEnhancedScreening ? (data.rollingCorrScores || []) : [];
   lastConditionalRows = [];
@@ -1491,7 +1487,6 @@ function renderAnalysisResult(data) {
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
   renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
-  renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
   renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
   renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
@@ -1518,8 +1513,6 @@ async function runEnhancedScreening() {
     const data = await postForm("/api/run_enhanced_screening", form);
     lastEnhancedLiftRows = data.modelLiftScores || [];
     lastEnhancedRollingRows = data.rollingCorrScores || [];
-    lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
-    renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
     renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
     renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
     renderDownloads(data.downloads || []);
@@ -1775,7 +1768,6 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
-  if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
   if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
   if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
   if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
@@ -1798,10 +1790,6 @@ function modelVariableImportanceColumns() {
 
 function modelDiscoveredColumns() {
   return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
-}
-
-function enhancedSummaryColumns() {
-  return ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use", "status", "model_lift", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "interpretation"];
 }
 
 function modelLiftColumns() {
@@ -2095,7 +2083,6 @@ function reset() {
   lastModelDiscoveredRows = [];
   lastEnhancedLiftRows = [];
   lastEnhancedRollingRows = [];
-  lastEnhancedSummaryRows = [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
   sortState = { column: "score", direction: "desc" };
@@ -2141,8 +2128,6 @@ function reset() {
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";
   el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示补充候选。";
-  el("enhancedSummaryTable").className = "empty";
-  el("enhancedSummaryTable").textContent = "点击“运行增强筛选”后显示增强筛选摘要。";
   el("enhancedLiftTable").className = "empty";
   el("enhancedLiftTable").textContent = "点击“运行增强筛选”后显示模型提升评分。";
   el("enhancedRollingTable").className = "empty";

@@ -49,6 +49,7 @@ DOWNLOAD_FILES = {
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
+    "enhanced_validation_summary.csv",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -136,6 +137,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/run_model":
                 self._send_json(_run_model_response(self))
+                return
+            if self.path == "/api/run_enhanced_screening":
+                self._send_json(_run_enhanced_screening_response(self))
                 return
             if self.path in {"/run_causal_review", "/api/run_causal_review"}:
                 self._send_json(_run_causal_review_response(self))
@@ -322,8 +326,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
-        skip_model_lift=_bool_field(form, "skip_model_lift"),
-        skip_rolling_corr=_bool_field(form, "skip_rolling_corr"),
+        skip_model_lift=True,
+        skip_rolling_corr=True,
     )
     task_id = uuid.uuid4().hex
     with TASKS_LOCK:
@@ -374,6 +378,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
+    rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
+    enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
@@ -394,6 +400,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
         "modelLiftScores": _records(lift.head(50)),
+        "rollingCorrScores": _records(rolling.head(50)),
+        "enhancedValidationSummary": _records(enhanced.head(200)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
@@ -436,6 +444,71 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
     if task.get("status") != "done":
         return {"task_id": task_id, "status": task.get("status", "running")}
     return task["result"]
+
+
+def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    from chem_ts_corr.screening import model_lift_scores, rolling_corr_scores
+
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    if ranked.empty:
+        raise ValueError("请先完成主筛查并生成 ranked_features.csv")
+
+    variables = [variable for variable in _secondary_variables_from_ranked(ranked, config) if variable != config.target]
+    if not variables:
+        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
+
+    scaled = _scaled_frame_for_secondary(config)
+    variables = [variable for variable in variables if variable in scaled.columns]
+    if not variables:
+        raise ValueError("候选变量在预处理后的数据中不存在，请检查上传数据和配置")
+
+    best_lags = _best_lags_from_ranked(ranked)
+    lift = model_lift_scores(scaled, config.target, variables, config.max_lag, best_lags=best_lags)
+    rolling = rolling_corr_scores(scaled, config.target, variables, config.max_lag)
+    enhanced = _enhanced_validation_summary(ranked, lift, rolling)
+
+    lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
+    rolling.to_csv(output_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig")
+    enhanced.to_csv(output_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig")
+
+    return {
+        "modelLiftScores": _records(lift.head(200)),
+        "rollingCorrScores": _records(rolling.head(200)),
+        "enhancedValidationSummary": _records(enhanced.head(200)),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "增强筛选完成：结果用于补充验证预测增益和时间稳定性，不代表因果结论。",
+    }
+
+
+def _enhanced_validation_summary(
+    ranked: pd.DataFrame, model_lift: pd.DataFrame, rolling: pd.DataFrame
+) -> pd.DataFrame:
+    if ranked.empty or "variable" not in ranked.columns:
+        return pd.DataFrame()
+    columns = [
+        column
+        for column in ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"]
+        if column in ranked.columns
+    ]
+    summary = ranked[columns].copy(deep=True)
+    if not model_lift.empty:
+        summary = summary.merge(
+            model_lift[[c for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"] if c in model_lift.columns]],
+            on="variable",
+            how="left",
+        )
+    if not rolling.empty:
+        summary = summary.merge(
+            rolling[[c for c in ["variable", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "valid_window_count"] if c in rolling.columns]],
+            on="variable",
+            how="left",
+        )
+    summary["interpretation"] = "enhanced screening only; not a causal conclusion"
+    return summary
 
 
 def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -1035,8 +1108,6 @@ INDEX_HTML = r"""<!doctype html>
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
         <label>重采样规则<input id="resampleRule" placeholder="可留空，例如 5min"></label>
       </div>
-      <label class="check"><input id="skipModelLift" type="checkbox"> 跳过模型提升评分（大数据加速）</label>
-      <label class="check"><input id="skipRollingCorr" type="checkbox"> 跳过滚动稳定性评分（大数据加速）</label>
       <div class="row">
         <label>预处理模式
           <select id="preprocessMode">
@@ -1088,8 +1159,6 @@ INDEX_HTML = r"""<!doctype html>
       <div class="tabs">
         <button class="tab-button active" data-tab="overviewTab">总览</button>
         <button class="tab-button" data-tab="candidatesTab">候选变量</button>
-        <button class="tab-button" data-tab="risksTab">风险诊断</button>
-        <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
         <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
@@ -1110,18 +1179,6 @@ INDEX_HTML = r"""<!doctype html>
         <h2>轻量遗漏候选</h2>
         <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
         <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
-      </div>
-
-      <div id="risksTab" class="tab-panel">
-        <h2>风险诊断</h2>
-        <div class="help">仅展示有风险标签的变量。无风险或文件不存在时显示未启用/无结果。</div>
-        <div id="riskTable" class="empty">暂无风险诊断结果。</div>
-      </div>
-
-      <div id="lagTab" class="tab-panel">
-        <h2>滞后分析</h2>
-        <div class="help">默认绘制前 5 个变量的滞后得分曲线；完整滞后明细请到下载页获取。</div>
-        <div id="lagChart" class="chart empty">暂无滞后曲线。</div>
       </div>
 
       <div id="trendTab" class="tab-panel">
@@ -1156,11 +1213,20 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="validationTab" class="tab-panel">
         <h2>二次验证</h2>
-        <div class="help">先完成主筛查，再按需运行 Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
+        <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
         <div class="actions">
+          <button id="runEnhancedScreening" disabled>运行增强筛选</button>
           <button id="runGranger" disabled>运行 Granger 验证</button>
           <button id="runModel" disabled>运行随机森林模型解释</button>
         </div>
+        <h2>增强筛选结果</h2>
+        <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
+        <h3>增强筛选摘要</h3>
+        <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
+        <h3>模型提升评分</h3>
+        <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
+        <h3>滚动稳定性评分</h3>
+        <div id="enhancedRollingTable" class="empty">点击“运行增强筛选”后显示滚动稳定性评分。</div>
         <h2>Granger 验证</h2>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
         <h2>随机森林模型解释变量排序</h2>
@@ -1198,12 +1264,14 @@ INDEX_HTML = r"""<!doctype html>
 let fileId = "";
 let currentRunId = "";
 let lastRows = [];
-let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
 let lastModelVariableRows = [];
 let lastNearMissRows = [];
 let lastModelDiscoveredRows = [];
+let lastEnhancedLiftRows = [];
+let lastEnhancedRollingRows = [];
+let lastEnhancedSummaryRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let sortState = { column: "score", direction: "desc" };
@@ -1214,6 +1282,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
 }
 el("drawTrend").addEventListener("click", drawTrend);
+el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
@@ -1365,8 +1434,6 @@ async function analyze() {
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
-    form.append("skip_model_lift", el("skipModelLift").checked ? "true" : "false");
-    form.append("skip_rolling_corr", el("skipRollingCorr").checked ? "true" : "false");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
@@ -1405,28 +1472,33 @@ function formatTaskStatus(statusData) {
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   lastRows = data.rankedFeatures || [];
-  lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
   lastModelVariableRows = [];
   lastNearMissRows = data.nearMissCandidates || [];
   lastModelDiscoveredRows = [];
+  lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
+  const hasEnhancedScreening = lastEnhancedSummaryRows.length > 0;
+  lastEnhancedLiftRows = hasEnhancedScreening ? (data.modelLiftScores || []) : [];
+  lastEnhancedRollingRows = hasEnhancedScreening ? (data.rollingCorrScores || []) : [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
   renderOverview(data.overview || {});
   renderTable(applySort(lastRows));
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
-  renderGenericTable("riskTable", data.riskFlags || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
-  renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
   renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
+  renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
+  renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
+  renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
   renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
+  el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
@@ -1434,6 +1506,29 @@ function renderAnalysisResult(data) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runEnhancedScreening() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  setStatus("正在运行增强筛选：补充验证预测增益和时间稳定性...");
+  el("runEnhancedScreening").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    const data = await postForm("/api/run_enhanced_screening", form);
+    lastEnhancedLiftRows = data.modelLiftScores || [];
+    lastEnhancedRollingRows = data.rollingCorrScores || [];
+    lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
+    renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
+    renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
+    renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
+    renderDownloads(data.downloads || []);
+    setStatus(data.message || "增强筛选完成。结果不代表因果结论。");
+  } catch (error) {
+    setStatus(error.message || String(error));
+  } finally {
+    el("runEnhancedScreening").disabled = !currentRunId;
+  }
 }
 
 async function runGranger() {
@@ -1680,13 +1775,15 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
 
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
+  if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
+  if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
+  if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
   if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示补充候选。";
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
-  if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -1701,6 +1798,18 @@ function modelVariableImportanceColumns() {
 
 function modelDiscoveredColumns() {
   return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
+}
+
+function enhancedSummaryColumns() {
+  return ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use", "status", "model_lift", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "interpretation"];
+}
+
+function modelLiftColumns() {
+  return ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"];
+}
+
+function rollingCorrColumns() {
+  return ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_abs_corr_median", "rolling_corr_iqr", "rolling_sign_consistency", "valid_window_count", "rolling_stability"];
 }
 
 function conditionalGrangerColumns() {
@@ -1750,43 +1859,6 @@ function renderDownloadTarget(targetId, downloads, fileName) {
   const container = el(targetId);
   const item = (downloads || []).find((entry) => entry.name === fileName);
   container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
-}
-
-function renderLagChart(rows, variables) {
-  const container = el("lagChart");
-  const selected = rows.filter((row) => variables.includes(row.variable));
-  if (!selected.length) {
-    container.className = "chart empty";
-    container.textContent = "未启用滞后分析，或没有可展示结果。";
-    return;
-  }
-  const colors = ["#176b87", "#c2410c", "#6d28d9", "#15803d", "#b45309"];
-  const width = 960, height = 320, pad = { left: 54, right: 20, top: 24, bottom: 42 };
-  const minLag = Math.min(...selected.map((row) => Number(row.lag)));
-  const maxLag = Math.max(...selected.map((row) => Number(row.lag)));
-  const maxScore = Math.max(0.01, ...selected.map((row) => Number(row.score || row.abs_pearson || 0)));
-  const x = (lag) => pad.left + ((lag - minLag) / Math.max(1, maxLag - minLag)) * (width - pad.left - pad.right);
-  const y = (score) => pad.top + (1 - score / maxScore) * (height - pad.top - pad.bottom);
-  const paths = variables.map((variable, idx) => {
-    const points = selected
-      .filter((row) => row.variable === variable)
-      .sort((a, b) => Number(a.lag) - Number(b.lag))
-      .map((row) => `${x(Number(row.lag)).toFixed(2)},${y(Number(row.score || Math.max(row.abs_pearson || 0, row.abs_spearman || 0))).toFixed(2)}`)
-      .join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${colors[idx % colors.length]}" stroke-width="2.2"/>`;
-  }).join("");
-  const legend = variables.map((variable, idx) =>
-    `<span style="margin-right:14px;color:${colors[idx % colors.length]}">${escapeHtml(variable)}</span>`
-  ).join("");
-  container.className = "chart";
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}">
-    <rect width="${width}" height="${height}" fill="#fff"/>
-    <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">滞后得分曲线</text>
-    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">滞后 ${minLag} 到 ${maxLag}</text>
-    ${paths}
-  </svg><div class="status" style="text-align:center">${legend}</div>`;
 }
 
 function renderDownloads(downloads) {
@@ -1952,7 +2024,12 @@ function columnLabel(column) {
     regime_sign_consistency: "符号一致性",
     regime_lag_consistency: "滞后一致性",
     regime_count: "工况数量",
+    rolling_stability: "滚动稳定性",
+    rolling_corr_median: "滚动相关中位数",
+    rolling_sign_consistency: "滚动符号一致性",
     model_lift: "模型提升",
+    ar_baseline_rmse: "自回归基准RMSE",
+    candidate_rmse: "候选变量模型RMSE",
     predictive_contribution: "预测贡献",
     fdr_q_value: "FDR校正Q值",
     corr_fdr_q_value: "相关FDR Q值",
@@ -2011,12 +2088,14 @@ function reset() {
   fileId = "";
   currentRunId = "";
   lastRows = [];
-  lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
   lastModelVariableRows = [];
   lastNearMissRows = [];
   lastModelDiscoveredRows = [];
+  lastEnhancedLiftRows = [];
+  lastEnhancedRollingRows = [];
+  lastEnhancedSummaryRows = [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
   sortState = { column: "score", direction: "desc" };
@@ -2037,9 +2116,8 @@ function reset() {
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
-  el("skipModelLift").checked = false;
-  el("skipRollingCorr").checked = false;
   el("analyze").disabled = true;
+  el("runEnhancedScreening").disabled = true;
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
@@ -2050,12 +2128,8 @@ function reset() {
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
   el("table").className = "empty";
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
-  el("riskTable").className = "empty";
-  el("riskTable").textContent = "暂无风险诊断结果。";
   el("nearMissTable").className = "empty";
   el("nearMissTable").textContent = "完成主筛查后显示轻量遗漏候选。";
-  el("lagChart").className = "chart empty";
-  el("lagChart").textContent = "暂无滞后曲线。";
   el("trendChart").className = "chart empty";
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
   el("trendLegend").innerHTML = "";
@@ -2067,6 +2141,12 @@ function reset() {
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";
   el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示补充候选。";
+  el("enhancedSummaryTable").className = "empty";
+  el("enhancedSummaryTable").textContent = "点击“运行增强筛选”后显示增强筛选摘要。";
+  el("enhancedLiftTable").className = "empty";
+  el("enhancedLiftTable").textContent = "点击“运行增强筛选”后显示模型提升评分。";
+  el("enhancedRollingTable").className = "empty";
+  el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
   el("conditionalGrangerTable").className = "empty";
   el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
   el("causalReviewTable").className = "empty";

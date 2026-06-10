@@ -93,15 +93,17 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     regime, stability = regime_scores(scaled, config.target, config.segment_column, config.max_lag)
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
-    _progress(progress_callback, "正在计算模型提升评分")
     if config.skip_model_lift:
+        _progress(progress_callback, "已跳过模型提升评分")
         lift = _skipped_model_lift_scores(candidate_variables)
     else:
+        _progress(progress_callback, "正在计算模型提升评分")
         lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
-    _progress(progress_callback, "正在计算滚动稳定性")
     if config.skip_rolling_corr:
+        _progress(progress_callback, "已跳过滚动稳定性评分")
         rolling = _skipped_rolling_corr_scores(candidate_variables)
     else:
+        _progress(progress_callback, "正在计算滚动稳定性")
         rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)

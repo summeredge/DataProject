@@ -1159,8 +1159,6 @@ INDEX_HTML = r"""<!doctype html>
       <div class="tabs">
         <button class="tab-button active" data-tab="overviewTab">总览</button>
         <button class="tab-button" data-tab="candidatesTab">候选变量</button>
-        <button class="tab-button" data-tab="risksTab">风险诊断</button>
-        <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
         <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
@@ -1181,18 +1179,6 @@ INDEX_HTML = r"""<!doctype html>
         <h2>轻量遗漏候选</h2>
         <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
         <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
-      </div>
-
-      <div id="risksTab" class="tab-panel">
-        <h2>风险诊断</h2>
-        <div class="help">仅展示有风险标签的变量。无风险或文件不存在时显示未启用/无结果。</div>
-        <div id="riskTable" class="empty">暂无风险诊断结果。</div>
-      </div>
-
-      <div id="lagTab" class="tab-panel">
-        <h2>滞后分析</h2>
-        <div class="help">默认绘制前 5 个变量的滞后得分曲线；完整滞后明细请到下载页获取。</div>
-        <div id="lagChart" class="chart empty">暂无滞后曲线。</div>
       </div>
 
       <div id="trendTab" class="tab-panel">
@@ -1276,7 +1262,6 @@ INDEX_HTML = r"""<!doctype html>
 let fileId = "";
 let currentRunId = "";
 let lastRows = [];
-let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
 let lastModelVariableRows = [];
@@ -1484,7 +1469,6 @@ function formatTaskStatus(statusData) {
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   lastRows = data.rankedFeatures || [];
-  lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
   lastModelVariableRows = [];
@@ -1498,9 +1482,7 @@ function renderAnalysisResult(data) {
   renderOverview(data.overview || {});
   renderTable(applySort(lastRows));
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
-  renderGenericTable("riskTable", data.riskFlags || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
-  renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
@@ -1794,7 +1776,6 @@ function missingText(targetId) {
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
-  if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -1866,43 +1847,6 @@ function renderDownloadTarget(targetId, downloads, fileName) {
   const container = el(targetId);
   const item = (downloads || []).find((entry) => entry.name === fileName);
   container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
-}
-
-function renderLagChart(rows, variables) {
-  const container = el("lagChart");
-  const selected = rows.filter((row) => variables.includes(row.variable));
-  if (!selected.length) {
-    container.className = "chart empty";
-    container.textContent = "未启用滞后分析，或没有可展示结果。";
-    return;
-  }
-  const colors = ["#176b87", "#c2410c", "#6d28d9", "#15803d", "#b45309"];
-  const width = 960, height = 320, pad = { left: 54, right: 20, top: 24, bottom: 42 };
-  const minLag = Math.min(...selected.map((row) => Number(row.lag)));
-  const maxLag = Math.max(...selected.map((row) => Number(row.lag)));
-  const maxScore = Math.max(0.01, ...selected.map((row) => Number(row.score || row.abs_pearson || 0)));
-  const x = (lag) => pad.left + ((lag - minLag) / Math.max(1, maxLag - minLag)) * (width - pad.left - pad.right);
-  const y = (score) => pad.top + (1 - score / maxScore) * (height - pad.top - pad.bottom);
-  const paths = variables.map((variable, idx) => {
-    const points = selected
-      .filter((row) => row.variable === variable)
-      .sort((a, b) => Number(a.lag) - Number(b.lag))
-      .map((row) => `${x(Number(row.lag)).toFixed(2)},${y(Number(row.score || Math.max(row.abs_pearson || 0, row.abs_spearman || 0))).toFixed(2)}`)
-      .join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${colors[idx % colors.length]}" stroke-width="2.2"/>`;
-  }).join("");
-  const legend = variables.map((variable, idx) =>
-    `<span style="margin-right:14px;color:${colors[idx % colors.length]}">${escapeHtml(variable)}</span>`
-  ).join("");
-  container.className = "chart";
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}">
-    <rect width="${width}" height="${height}" fill="#fff"/>
-    <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">滞后得分曲线</text>
-    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">滞后 ${minLag} 到 ${maxLag}</text>
-    ${paths}
-  </svg><div class="status" style="text-align:center">${legend}</div>`;
 }
 
 function renderDownloads(downloads) {
@@ -2132,7 +2076,6 @@ function reset() {
   fileId = "";
   currentRunId = "";
   lastRows = [];
-  lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
   lastModelVariableRows = [];
@@ -2172,12 +2115,8 @@ function reset() {
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
   el("table").className = "empty";
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
-  el("riskTable").className = "empty";
-  el("riskTable").textContent = "暂无风险诊断结果。";
   el("nearMissTable").className = "empty";
   el("nearMissTable").textContent = "完成主筛查后显示轻量遗漏候选。";
-  el("lagChart").className = "chart empty";
-  el("lagChart").textContent = "暂无滞后曲线。";
   el("trendChart").className = "chart empty";
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
   el("trendLegend").innerHTML = "";

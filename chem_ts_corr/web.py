@@ -1257,8 +1257,6 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="causalReportDownload"></div>
         <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>综合证据复核</h2>
-        <div class="help">综合证据复核会整合已生成的增强筛选、Granger 和随机森林模型解释结果；如果这些结果尚未运行，则对应证据为空。该表仍不是因果结论。</div>
-        <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 综合证据复核。</div>
       </div>
 
@@ -1849,7 +1847,7 @@ function causalReviewColumns() {
 }
 
 function causalReviewEvidenceColumns() {
-  return ["variable", "candidate_grade", "final_score", "evidence_score", "evidence_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+  return ["variable", "candidate_grade", "final_score", "evidence_score", "evidence_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
 }
 
 function renderCausalReviewTable(targetId, rows) {
@@ -1885,7 +1883,7 @@ function formatReviewCell(column, value) {
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
   renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
-  renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
+  renderDownloadTarget("causalReportDownload", downloads, "causal_review_evidence.csv");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {

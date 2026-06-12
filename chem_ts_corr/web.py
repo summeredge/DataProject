@@ -2196,6 +2196,7 @@ function reset() {
   el("causalReviewEvidenceTable").textContent = "未运行 综合证据复核。";
   el("conditionalDownload").innerHTML = "";
   el("causalReportDownload").innerHTML = "";
+  el("causalEvidenceDownload").innerHTML = "";
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";
   setStatus("");

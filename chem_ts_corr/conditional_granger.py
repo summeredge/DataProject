@@ -35,10 +35,6 @@ def run_conditional_granger_tests(
     maxlag: int = 12,
     min_rows: int = 60,
     candidate_lags: dict[str, list[int]] | None = None,
-    baseline_maxlag: int | None = None,
-    lag_mode: str | None = None,
-    lag_window: int | None = None,
-    fallback_maxlag: int | None = None,
 ) -> pd.DataFrame:
     if target not in frame.columns:
         raise ValueError(f"target column not found: {target}")
@@ -91,24 +87,19 @@ def run_conditional_granger_tests(
         x_series = pd.to_numeric(frame[variable], errors="coerce")
         control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in controls}
         lag_values = _candidate_lags_for_variable(variable, maxlag, candidate_lags)
-        base_row["tested_lags"] = ",".join(str(lag) for lag in lag_values)
-        if not lag_values:
-            base_row["status"] = "skipped: no candidate lags"
-            rows.append(base_row)
-            continue
 
         base_df = pd.DataFrame(index=frame.index)
         base_df[y_name] = y_series
         # baseline model: target lags + control lags. Build these once per
         # variable because they do not change across candidate x lags.
         y_lag_cols = []
-        for l in range(1, baseline_lag_limit + 1):
+        for l in range(1, maxlag + 1):
             col = f"y_lag_{l}"
             base_df[col] = y_series.shift(l)
             y_lag_cols.append(col)
         control_lag_cols = []
         for c, series in control_series.items():
-            for l in range(1, baseline_lag_limit + 1):
+            for l in range(1, maxlag + 1):
                 col = f"{c}_lag_{l}"
                 base_df[col] = series.shift(l)
                 control_lag_cols.append(col)

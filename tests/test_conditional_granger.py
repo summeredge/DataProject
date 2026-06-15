@@ -239,7 +239,5 @@ def test_conditional_granger_respects_candidate_lags_and_keeps_columns():
         candidate_lags={"x": [3, 3, 0, 99]},
     )
 
-    row = out.iloc[0]
-    assert int(row["best_lag"]) == 3
-    assert row["tested_lags"] == "3"
+    assert int(out.iloc[0]["best_lag"]) == 3
     assert list(out.columns) == EXPECTED_OUT_COLS

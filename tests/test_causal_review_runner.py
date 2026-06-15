@@ -123,7 +123,7 @@ def test_causal_review_runner_ranked_window_passes_window_candidate_lags(monkeyp
     captured = {}
 
     def fake_run_conditional_granger_tests(**kwargs):
-        captured.update(kwargs)
+        captured["candidate_lags"] = kwargs["candidate_lags"]
         row = {col: np.nan for col in OUT_COLS}
         row["variable"] = "x"
         row["status"] = "ok"
@@ -149,17 +149,13 @@ def test_causal_review_runner_ranked_window_passes_window_candidate_lags(monkeyp
     )
 
     assert captured["candidate_lags"] == {"x": list(range(75, 86))}
-    assert captured["baseline_maxlag"] == 24
-    assert captured["lag_mode"] == "ranked_window"
-    assert captured["lag_window"] == 5
-    assert captured["fallback_maxlag"] == 24
 
 
 def test_causal_review_runner_best_only_passes_single_ranked_lag(monkeypatch):
     captured = {}
 
     def fake_run_conditional_granger_tests(**kwargs):
-        captured.update(kwargs)
+        captured["candidate_lags"] = kwargs["candidate_lags"]
         row = {col: np.nan for col in OUT_COLS}
         row["variable"] = "x"
         row["status"] = "ok"
@@ -180,18 +176,16 @@ def test_causal_review_runner_best_only_passes_single_ranked_lag(monkeypatch):
         maxlag=100,
         min_rows=80,
         conditional_lag_mode="best_only",
-        conditional_baseline_maxlag=12,
     )
 
     assert captured["candidate_lags"] == {"x": [80]}
-    assert captured["baseline_maxlag"] == 12
 
 
 def test_causal_review_runner_full_scan_passes_no_candidate_lags(monkeypatch):
     captured = {}
 
     def fake_run_conditional_granger_tests(**kwargs):
-        captured.update(kwargs)
+        captured["candidate_lags"] = kwargs["candidate_lags"]
         row = {col: np.nan for col in OUT_COLS}
         row["variable"] = "x"
         row["status"] = "ok"
@@ -215,8 +209,6 @@ def test_causal_review_runner_full_scan_passes_no_candidate_lags(monkeypatch):
     )
 
     assert captured["candidate_lags"] is None
-    assert captured["lag_mode"] == "full_scan"
-    assert captured["baseline_maxlag"] == 24
 
 
 def test_causal_review_runner_rejects_unknown_conditional_lag_mode():

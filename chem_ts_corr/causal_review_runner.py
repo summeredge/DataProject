@@ -30,7 +30,6 @@ def run_causal_review_stage(
     conditional_lag_mode: str = "ranked_window",
     conditional_lag_window: int = 5,
     conditional_fallback_maxlag: int = 24,
-    conditional_baseline_maxlag: int | None = 24,
 ) -> dict[str, pd.DataFrame]:
     """Run the standalone v0.4 causal-review stage.
 
@@ -71,10 +70,6 @@ def run_causal_review_stage(
         maxlag=maxlag,
         min_rows=min_rows,
         candidate_lags=candidate_lags,
-        baseline_maxlag=conditional_baseline_maxlag,
-        lag_mode=conditional_lag_mode,
-        lag_window=conditional_lag_window,
-        fallback_maxlag=conditional_fallback_maxlag,
     )
     causal_review_report = build_causal_review_report(
         ranked_features=ranked_features,

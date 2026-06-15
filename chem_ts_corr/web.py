@@ -607,6 +607,10 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
         min_rows=_int_field(form, "min_rows", 60),
         top_n=_optional_int_field(form, "top_n"),
+        conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
+        conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
+        conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
+        conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
@@ -1247,6 +1251,19 @@ INDEX_HTML = r"""<!doctype html>
       <div id="causalReviewTab" class="tab-panel">
         <h2>三层复核</h2>
         <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
+        <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。baseline 最大滞后用于控制目标自身惯性和控制列影响；候选变量仍可验证主筛查发现的长滞后。若需要完全复现旧逻辑，可将 baseline 最大滞后设置为与 maxlag 相同，并选择 full_scan。</div>
+        <div class="row">
+          <label>条件Granger滞后模式
+            <select id="conditionalLagMode">
+              <option value="ranked_window">围绕主筛查最佳滞后</option>
+              <option value="best_only">仅最佳滞后</option>
+              <option value="full_scan">全量扫描</option>
+            </select>
+          </label>
+          <label>条件Granger滞后窗口<input id="conditionalLagWindow" type="number" min="0" value="5"></label>
+          <label>条件Granger fallback 最大滞后<input id="conditionalFallbackMaxlag" type="number" min="1" value="24"></label>
+          <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
+        </div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行三层复核</button>
         </div>
@@ -1257,6 +1274,8 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="causalReportDownload"></div>
         <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>综合证据复核</h2>
+        <div class="help">综合证据复核会整合已生成的增强筛选、Granger 和随机森林模型解释结果；如果这些结果尚未运行，则对应证据为空。该表仍不是因果结论。</div>
+        <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 综合证据复核。</div>
       </div>
 
@@ -1598,6 +1617,10 @@ async function runCausalReview() {
     form.append("control_columns", getCapacitySelection().join(","));
     form.append("maxlag", el("maxLag").value);
     form.append("min_rows", "60");
+    form.append("conditional_lag_mode", el("conditionalLagMode").value);
+    form.append("conditional_lag_window", el("conditionalLagWindow").value);
+    form.append("conditional_fallback_maxlag", el("conditionalFallbackMaxlag").value);
+    form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
@@ -1839,7 +1862,7 @@ function rollingCorrColumns() {
 }
 
 function conditionalGrangerColumns() {
-  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+  return ["variable", "status", "best_lag", "tested_lags", "lag_mode", "lag_window", "fallback_maxlag", "baseline_maxlag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
 }
 
 function causalReviewColumns() {
@@ -1847,7 +1870,7 @@ function causalReviewColumns() {
 }
 
 function causalReviewEvidenceColumns() {
-  return ["variable", "candidate_grade", "final_score", "evidence_score", "evidence_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+  return ["variable", "candidate_grade", "final_score", "evidence_score", "evidence_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
 }
 
 function renderCausalReviewTable(targetId, rows) {
@@ -1883,7 +1906,7 @@ function formatReviewCell(column, value) {
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
   renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
-  renderDownloadTarget("causalReportDownload", downloads, "causal_review_evidence.csv");
+  renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {
@@ -2075,6 +2098,11 @@ function columnLabel(column) {
     full_condition_number: "完整模型条件数",
     control_columns: "控制列",
     n_rows: "有效样本数",
+    tested_lags: "实际测试滞后",
+    lag_mode: "滞后模式",
+    lag_window: "滞后窗口",
+    fallback_maxlag: "Fallback最大滞后",
+    baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
@@ -2199,6 +2227,10 @@ function reset() {
   el("causalEvidenceDownload").innerHTML = "";
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";
+  el("conditionalLagMode").value = "ranked_window";
+  el("conditionalLagWindow").value = "5";
+  el("conditionalFallbackMaxlag").value = "24";
+  el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
 </script>

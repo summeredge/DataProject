@@ -610,6 +610,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
         conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
         conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
+        conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
@@ -1261,6 +1262,7 @@ INDEX_HTML = r"""<!doctype html>
           </label>
           <label>条件Granger滞后窗口<input id="conditionalLagWindow" type="number" min="0" value="5"></label>
           <label>条件Granger fallback 最大滞后<input id="conditionalFallbackMaxlag" type="number" min="1" value="24"></label>
+          <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
         </div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行三层复核</button>
@@ -1630,6 +1632,7 @@ async function runCausalReview() {
     form.append("conditional_lag_mode", el("conditionalLagMode").value);
     form.append("conditional_lag_window", el("conditionalLagWindow").value);
     form.append("conditional_fallback_maxlag", el("conditionalFallbackMaxlag").value);
+    form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
@@ -2239,6 +2242,7 @@ function reset() {
   el("conditionalLagMode").value = "ranked_window";
   el("conditionalLagWindow").value = "5";
   el("conditionalFallbackMaxlag").value = "24";
+  el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
 </script>

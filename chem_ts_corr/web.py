@@ -1535,9 +1535,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function elapsedSeconds(startedAt) {
+  return ((performance.now() - startedAt) / 1000).toFixed(1);
+}
+
+function appendElapsed(message, startedAt) {
+  return `${message} 总耗时：${elapsedSeconds(startedAt)} 秒。`;
+}
+
 async function runEnhancedScreening() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行增强筛选：补充验证预测增益和时间稳定性...");
+  const startedAt = performance.now();
+  setStatus("正在运行增强筛选：补充验证预测增益和时间稳定性...（计时中）");
   el("runEnhancedScreening").disabled = true;
   try {
     const form = new FormData();
@@ -1550,9 +1559,9 @@ async function runEnhancedScreening() {
     renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
     renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
     renderDownloads(data.downloads || []);
-    setStatus(data.message || "增强筛选完成。结果不代表因果结论。");
+    setStatus(appendElapsed(data.message || "增强筛选完成。结果不代表因果结论。", startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
     el("runEnhancedScreening").disabled = !currentRunId;
   }
@@ -1560,7 +1569,8 @@ async function runEnhancedScreening() {
 
 async function runGranger() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行 Granger 二级验证...");
+  const startedAt = performance.now();
+  setStatus("正在运行 Granger 二级验证...（计时中）");
   el("runGranger").disabled = true;
   try {
     const form = new FormData();
@@ -1569,9 +1579,9 @@ async function runGranger() {
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
     renderDownloads(data.downloads || []);
-    setStatus("Granger 二级验证完成。");
+    setStatus(appendElapsed("Granger 二级验证完成。", startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
     el("runGranger").disabled = !currentRunId;
   }
@@ -1579,7 +1589,8 @@ async function runGranger() {
 
 async function runModel() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行随机森林模型解释...");
+  const startedAt = performance.now();
+  setStatus("正在运行随机森林模型解释...（计时中）");
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
   try {
@@ -1594,9 +1605,9 @@ async function runModel() {
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
-    setStatus(`随机森林模型解释完成。${metrics}`);
+    setStatus(appendElapsed(`随机森林模型解释完成。${metrics}`, startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
     el("runModel").disabled = !currentRunId;
     el("runCausalReview").disabled = !currentRunId;
@@ -1605,7 +1616,8 @@ async function runModel() {
 
 async function runCausalReview() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
+  const startedAt = performance.now();
+  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...（计时中）");
   el("runCausalReview").disabled = true;
   try {
     const form = new FormData();
@@ -1627,9 +1639,9 @@ async function runCausalReview() {
     renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
-    setStatus(data.message || "三层复核完成。结果不是因果结论。");
+    setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
     el("runCausalReview").disabled = !currentRunId;
   }

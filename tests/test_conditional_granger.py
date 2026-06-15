@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from chem_ts_corr.conditional_granger import run_conditional_granger_tests
+from chem_ts_corr.conditional_granger import build_candidate_lag_windows, run_conditional_granger_tests
 
 
 EXPECTED_OUT_COLS = [
@@ -18,6 +18,11 @@ EXPECTED_OUT_COLS = [
     "condition_number",
     "control_columns",
     "n_rows",
+    "tested_lags",
+    "lag_mode",
+    "lag_window",
+    "fallback_maxlag",
+    "baseline_maxlag",
     "interpretation",
 ]
 
@@ -180,3 +185,61 @@ def test_conditional_granger_non_collinear_sample_keeps_ok_status_and_condition_
     assert np.isfinite(float(row["base_condition_number"]))
     assert np.isfinite(float(row["full_condition_number"]))
     assert float(row["condition_number"]) <= 1e8
+
+
+def test_build_candidate_lag_windows_centers_long_ranked_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 80}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=100, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(75, 86))
+
+
+def test_build_candidate_lag_windows_clips_at_maxlag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 58}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=60, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(53, 61))
+
+
+def test_build_candidate_lag_windows_clips_at_one():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 3}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=100, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(1, 9))
+
+
+def test_build_candidate_lag_windows_uses_fallback_for_missing_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": np.nan}])
+
+    out = build_candidate_lag_windows(ranked, ["x", "missing"], maxlag=10, window=5, fallback_maxlag=6)
+
+    assert out["x"] == list(range(1, 7))
+    assert out["missing"] == list(range(1, 7))
+
+
+def test_conditional_granger_respects_candidate_lags_and_keeps_columns():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(987)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(10, n):
+        target[t] = 0.4 * target[t - 1] + 0.5 * x[t - 10] + 0.01 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=12,
+        min_rows=80,
+        candidate_lags={"x": [3, 3, 0, 99]},
+    )
+
+    row = out.iloc[0]
+    assert int(row["best_lag"]) == 3
+    assert row["tested_lags"] == "3"
+    assert list(out.columns) == EXPECTED_OUT_COLS

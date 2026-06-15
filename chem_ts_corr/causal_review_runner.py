@@ -6,7 +6,11 @@ import pandas as pd
 
 from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
 from chem_ts_corr.causal_review_service import REPORT_COLUMNS, build_causal_review_report
-from chem_ts_corr.conditional_granger import OUT_COLS, run_conditional_granger_tests
+from chem_ts_corr.conditional_granger import (
+    OUT_COLS,
+    build_candidate_lag_windows,
+    run_conditional_granger_tests,
+)
 
 
 def run_causal_review_stage(
@@ -23,6 +27,10 @@ def run_causal_review_stage(
     maxlag: int = 12,
     min_rows: int = 60,
     top_n: int | None = None,
+    conditional_lag_mode: str = "ranked_window",
+    conditional_lag_window: int = 5,
+    conditional_fallback_maxlag: int = 24,
+    conditional_baseline_maxlag: int | None = 24,
 ) -> dict[str, pd.DataFrame]:
     """Run the standalone v0.4 causal-review stage.
 
@@ -47,6 +55,14 @@ def run_causal_review_stage(
         model_variable_importance=model_variable_importance,
     )
 
+    candidate_lags = _conditional_candidate_lags(
+        ranked_features=ranked_features,
+        variables=variables,
+        maxlag=maxlag,
+        mode=conditional_lag_mode,
+        window=conditional_lag_window,
+        fallback_maxlag=conditional_fallback_maxlag,
+    )
     conditional_granger_scores = run_conditional_granger_tests(
         frame=frame,
         target=target,
@@ -54,6 +70,11 @@ def run_causal_review_stage(
         control_columns=control_columns,
         maxlag=maxlag,
         min_rows=min_rows,
+        candidate_lags=candidate_lags,
+        baseline_maxlag=conditional_baseline_maxlag,
+        lag_mode=conditional_lag_mode,
+        lag_window=conditional_lag_window,
+        fallback_maxlag=conditional_fallback_maxlag,
     )
     causal_review_report = build_causal_review_report(
         ranked_features=ranked_features,
@@ -74,6 +95,32 @@ def run_causal_review_stage(
         "causal_review_report": causal_review_report,
         "causal_review_evidence": causal_review_evidence,
     }
+
+
+def _conditional_candidate_lags(
+    *,
+    ranked_features: pd.DataFrame,
+    variables: list[str],
+    maxlag: int,
+    mode: str,
+    window: int,
+    fallback_maxlag: int,
+) -> dict[str, list[int]] | None:
+    if mode == "full_scan":
+        return None
+    if mode == "ranked_window":
+        effective_window = window
+    elif mode == "best_only":
+        effective_window = 0
+    else:
+        raise ValueError(f"unsupported conditional_lag_mode: {mode}")
+    return build_candidate_lag_windows(
+        ranked_features=ranked_features,
+        variables=variables,
+        maxlag=maxlag,
+        window=effective_window,
+        fallback_maxlag=fallback_maxlag,
+    )
 
 
 def _select_candidates(causal_review_candidates: pd.DataFrame, top_n: int | None) -> pd.DataFrame:

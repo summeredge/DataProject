@@ -18,6 +18,11 @@ OUT_COLS = [
     "condition_number",
     "control_columns",
     "n_rows",
+    "tested_lags",
+    "lag_mode",
+    "lag_window",
+    "fallback_maxlag",
+    "baseline_maxlag",
     "interpretation",
 ]
 
@@ -29,11 +34,17 @@ def run_conditional_granger_tests(
     control_columns: list[str] | None = None,
     maxlag: int = 12,
     min_rows: int = 60,
+    candidate_lags: dict[str, list[int]] | None = None,
+    baseline_maxlag: int | None = None,
+    lag_mode: str | None = None,
+    lag_window: int | None = None,
+    fallback_maxlag: int | None = None,
 ) -> pd.DataFrame:
     if target not in frame.columns:
         raise ValueError(f"target column not found: {target}")
 
     controls = [c for c in (control_columns or []) if c in frame.columns and c != target]
+    baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
 
     scipy_f = None
@@ -58,6 +69,11 @@ def run_conditional_granger_tests(
             "condition_number": np.nan,
             "control_columns": ",".join(controls),
             "n_rows": 0,
+            "tested_lags": "",
+            "lag_mode": lag_mode or "",
+            "lag_window": np.nan if lag_window is None else int(lag_window),
+            "fallback_maxlag": np.nan if fallback_maxlag is None else int(fallback_maxlag),
+            "baseline_maxlag": baseline_lag_limit,
             "interpretation": "predictive validation only; not a causal conclusion",
         }
         if variable not in frame.columns:
@@ -74,31 +90,39 @@ def run_conditional_granger_tests(
         y_series = pd.to_numeric(frame[target], errors="coerce")
         x_series = pd.to_numeric(frame[variable], errors="coerce")
         control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in controls}
-        for lag in range(1, maxlag + 1):
-            df = pd.DataFrame(index=frame.index)
-            df[y_name] = y_series
-            # baseline model: target lags + control lags
-            y_lag_cols = []
-            for l in range(1, maxlag + 1):
-                col = f"y_lag_{l}"
-                df[col] = y_series.shift(l)
-                y_lag_cols.append(col)
-            control_lag_cols = []
-            for c, series in control_series.items():
-                for l in range(1, maxlag + 1):
-                    col = f"{c}_lag_{l}"
-                    df[col] = series.shift(l)
-                    control_lag_cols.append(col)
+        lag_values = _candidate_lags_for_variable(variable, maxlag, candidate_lags)
+        base_row["tested_lags"] = ",".join(str(lag) for lag in lag_values)
+        if not lag_values:
+            base_row["status"] = "skipped: no candidate lags"
+            rows.append(base_row)
+            continue
+
+        base_df = pd.DataFrame(index=frame.index)
+        base_df[y_name] = y_series
+        # baseline model: target lags + control lags. Build these once per
+        # variable because they do not change across candidate x lags.
+        y_lag_cols = []
+        for l in range(1, baseline_lag_limit + 1):
+            col = f"y_lag_{l}"
+            base_df[col] = y_series.shift(l)
+            y_lag_cols.append(col)
+        control_lag_cols = []
+        for c, series in control_series.items():
+            for l in range(1, baseline_lag_limit + 1):
+                col = f"{c}_lag_{l}"
+                base_df[col] = series.shift(l)
+                control_lag_cols.append(col)
+        base_cols = y_lag_cols + control_lag_cols
+
+        for lag in lag_values:
             # full model adds exactly the candidate lag being tested.
             x_lag_col = f"x_lag_{lag}"
-            df[x_lag_col] = x_series.shift(lag)
-            df = df.dropna()
+            df = base_df.assign(**{x_lag_col: x_series.shift(lag)}).dropna()
             n = len(df)
             if n < min_rows:
                 continue
 
             y = df[y_name].to_numpy(dtype=float)
-            base_cols = y_lag_cols + control_lag_cols
             full_cols = base_cols + [x_lag_col]
 
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
@@ -194,6 +218,80 @@ def run_conditional_granger_tests(
     if not out.empty:
         out["fdr_q_value"] = _benjamini_hochberg(out["min_p_value"])
     return out
+
+
+def build_candidate_lag_windows(
+    ranked_features: pd.DataFrame,
+    variables: list[str],
+    maxlag: int,
+    window: int = 5,
+    fallback_maxlag: int = 24,
+) -> dict[str, list[int]]:
+    ranked_lags: dict[str, object] = {}
+    if not ranked_features.empty and {"variable", "lag"}.issubset(ranked_features.columns):
+        for _, row in ranked_features.iterrows():
+            variable = row.get("variable")
+            if pd.isna(variable):
+                continue
+            name = str(variable)
+            if name not in ranked_lags:
+                ranked_lags[name] = row.get("lag")
+
+    out: dict[str, list[int]] = {}
+    safe_maxlag = int(maxlag)
+    safe_window = max(0, int(window))
+    safe_fallback_maxlag = max(1, int(fallback_maxlag))
+    for variable in variables:
+        name = str(variable)
+        center = _valid_lag_center(ranked_lags.get(name))
+        if center is None:
+            end = min(safe_maxlag, safe_fallback_maxlag)
+            lags = range(1, end + 1) if end >= 1 else range(0)
+        else:
+            start = max(1, center - safe_window)
+            end = min(safe_maxlag, center + safe_window)
+            lags = range(start, end + 1) if end >= start else range(0)
+        out[name] = sorted(set(int(lag) for lag in lags if 1 <= int(lag) <= safe_maxlag))
+    return out
+
+
+def _candidate_lags_for_variable(
+    variable: str,
+    maxlag: int,
+    candidate_lags: dict[str, list[int]] | None,
+) -> list[int]:
+    if candidate_lags is not None and variable in candidate_lags:
+        valid_lags = []
+        for lag in candidate_lags[variable]:
+            parsed = _valid_positive_lag(lag)
+            if parsed is not None and 1 <= parsed <= maxlag:
+                valid_lags.append(parsed)
+        return sorted(set(valid_lags))
+    return list(range(1, maxlag + 1))
+
+
+def _valid_lag_center(value: object) -> int | None:
+    lag = _parse_lag(value)
+    if lag is None:
+        return None
+    center = abs(lag)
+    return center if center >= 1 else None
+
+
+def _valid_positive_lag(value: object) -> int | None:
+    lag = _parse_lag(value)
+    if lag is None:
+        return None
+    return lag if lag >= 1 else None
+
+
+def _parse_lag(value: object) -> int | None:
+    try:
+        if pd.isna(value):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _condition_number(matrix: np.ndarray) -> float:

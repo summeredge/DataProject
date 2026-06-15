@@ -1859,7 +1859,7 @@ function rollingCorrColumns() {
 }
 
 function conditionalGrangerColumns() {
-  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+  return ["variable", "status", "best_lag", "tested_lags", "lag_mode", "lag_window", "fallback_maxlag", "baseline_maxlag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
 }
 
 function causalReviewColumns() {
@@ -2095,6 +2095,11 @@ function columnLabel(column) {
     full_condition_number: "完整模型条件数",
     control_columns: "控制列",
     n_rows: "有效样本数",
+    tested_lags: "实际测试滞后",
+    lag_mode: "滞后模式",
+    lag_window: "滞后窗口",
+    fallback_maxlag: "Fallback最大滞后",
+    baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
     candidate_grade: "候选等级",
     review_tier: "复核层级",

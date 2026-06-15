@@ -18,6 +18,11 @@ OUT_COLS = [
     "condition_number",
     "control_columns",
     "n_rows",
+    "tested_lags",
+    "lag_mode",
+    "lag_window",
+    "fallback_maxlag",
+    "baseline_maxlag",
     "interpretation",
 ]
 
@@ -35,6 +40,7 @@ def run_conditional_granger_tests(
         raise ValueError(f"target column not found: {target}")
 
     controls = [c for c in (control_columns or []) if c in frame.columns and c != target]
+    baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
 
     scipy_f = None
@@ -59,6 +65,11 @@ def run_conditional_granger_tests(
             "condition_number": np.nan,
             "control_columns": ",".join(controls),
             "n_rows": 0,
+            "tested_lags": "",
+            "lag_mode": lag_mode or "",
+            "lag_window": np.nan if lag_window is None else int(lag_window),
+            "fallback_maxlag": np.nan if fallback_maxlag is None else int(fallback_maxlag),
+            "baseline_maxlag": baseline_lag_limit,
             "interpretation": "predictive validation only; not a causal conclusion",
         }
         if variable not in frame.columns:

@@ -18,6 +18,11 @@ EXPECTED_OUT_COLS = [
     "condition_number",
     "control_columns",
     "n_rows",
+    "tested_lags",
+    "lag_mode",
+    "lag_window",
+    "fallback_maxlag",
+    "baseline_maxlag",
     "interpretation",
 ]
 

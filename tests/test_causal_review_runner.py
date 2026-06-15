@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS
@@ -116,3 +117,112 @@ def test_causal_review_runner_reads_optional_evidence_files(tmp_path):
     assert evidence["model_lift"] == 0.06
     assert evidence["rolling_stability"] == 0.8
     assert evidence["model_importance_rank"] == 2
+
+
+def test_causal_review_runner_ranked_window_passes_window_candidate_lags(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "lag": 80, "candidate_grade": "A", "final_score": 0.9}])
+    candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])
+
+    run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=100,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+        conditional_lag_window=5,
+        conditional_fallback_maxlag=24,
+    )
+
+    assert captured["candidate_lags"] == {"x": list(range(75, 86))}
+
+
+def test_causal_review_runner_best_only_passes_single_ranked_lag(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "lag": 80, "candidate_grade": "A", "final_score": 0.9}])
+    candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])
+
+    run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=100,
+        min_rows=80,
+        conditional_lag_mode="best_only",
+    )
+
+    assert captured["candidate_lags"] == {"x": [80]}
+
+
+def test_causal_review_runner_full_scan_passes_no_candidate_lags(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "lag": 80, "candidate_grade": "A", "final_score": 0.9}])
+    candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])
+
+    run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=100,
+        min_rows=80,
+        conditional_lag_mode="full_scan",
+    )
+
+    assert captured["candidate_lags"] is None
+
+
+def test_causal_review_runner_rejects_unknown_conditional_lag_mode():
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "lag": 2, "candidate_grade": "A", "final_score": 0.9}])
+    candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])
+
+    with pytest.raises(ValueError):
+        run_causal_review_stage(
+            frame=frame,
+            target="target",
+            ranked_features=ranked,
+            causal_review_candidates=candidates,
+            maxlag=10,
+            min_rows=80,
+            conditional_lag_mode="unknown",
+        )

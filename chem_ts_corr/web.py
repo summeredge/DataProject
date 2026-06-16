@@ -1770,7 +1770,7 @@ function renderTable(rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c])).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderTable(rows));
@@ -1811,7 +1811,7 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c])).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
@@ -1901,7 +1901,7 @@ function renderCausalReviewTable(targetId, rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c], formatReviewCell)).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));

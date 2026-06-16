@@ -241,3 +241,73 @@ def test_conditional_granger_respects_candidate_lags_and_keeps_columns():
 
     assert int(out.iloc[0]["best_lag"]) == 3
     assert list(out.columns) == EXPECTED_OUT_COLS
+
+
+def test_conditional_granger_records_explicit_baseline_maxlag():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(111)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(8, n):
+        target[t] = 0.35 * target[t - 1] + 0.4 * x[t - 8] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=80,
+        candidate_lags={"x": [8]},
+        baseline_maxlag=3,
+    )
+
+    row = out.iloc[0]
+    assert int(row["baseline_maxlag"]) == 3
+    assert row["tested_lags"] == "8"
+    assert int(row["best_lag"]) == 8
+
+
+def test_conditional_granger_defaults_baseline_maxlag_to_maxlag():
+    n = 160
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(222)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.4 * target[t - 1] + 0.3 * x[t - 1] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=7,
+        min_rows=80,
+        baseline_maxlag=None,
+    )
+
+    assert int(out.iloc[0]["baseline_maxlag"]) == 7
+    assert out.iloc[0]["tested_lags"] == "1,2,3,4,5,6,7"
+
+
+def test_conditional_granger_skips_empty_candidate_lags_and_records_tested_lags():
+    n = 160
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    frame = pd.DataFrame({"target": np.arange(n, dtype=float), "x": np.arange(n, dtype=float)}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=80,
+        candidate_lags={"x": []},
+        baseline_maxlag=3,
+    )
+
+    row = out.iloc[0]
+    assert row["status"] == "skipped: no candidate lags"
+    assert row["tested_lags"] == ""
+    assert int(row["baseline_maxlag"]) == 3

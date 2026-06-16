@@ -226,3 +226,39 @@ def test_causal_review_runner_rejects_unknown_conditional_lag_mode():
             min_rows=80,
             conditional_lag_mode="unknown",
         )
+
+
+def test_causal_review_runner_passes_conditional_baseline_maxlag(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured.update(kwargs)
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "lag": 4, "candidate_grade": "A", "final_score": 0.9}])
+    candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])
+
+    run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=20,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+        conditional_lag_window=2,
+        conditional_fallback_maxlag=6,
+        conditional_baseline_maxlag=3,
+    )
+
+    assert captured["baseline_maxlag"] == 3
+    assert captured["lag_mode"] == "ranked_window"
+    assert captured["lag_window"] == 2
+    assert captured["fallback_maxlag"] == 6

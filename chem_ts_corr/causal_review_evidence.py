@@ -35,7 +35,10 @@ EVIDENCE_COLUMNS = [
     "model_explanation_support",
     "evidence_score",
     "evidence_level",
+    "data_priority",
     "evidence_reason",
+    "statistical_limit_level",
+    "statistical_limit_reason",
     "risk_constraint_level",
     "integrated_review_decision",
     "integrated_review_reason",
@@ -44,6 +47,32 @@ EVIDENCE_COLUMNS = [
 
 
 RISK_ORDER = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
+
+STATISTICAL_LIMIT_FLAGS = {
+    "high_collinearity_risk",
+    "residual_collinearity",
+    "closed_loop_suspect",
+    "common_capacity_driver",
+    "unstable_over_time",
+    "unstable_across_regimes",
+    "lag_boundary",
+}
+
+HARD_DOWNGRADE_FLAGS = {
+    "poor_data_quality",
+    "strong_formula_leakage",
+    "target_leads_variable",
+}
+
+STATISTICAL_LIMIT_LEVELS = {
+    "high_collinearity_risk": "medium",
+    "closed_loop_suspect": "medium",
+    "common_capacity_driver": "medium",
+    "residual_collinearity": "weak",
+    "lag_boundary": "weak",
+    "unstable_over_time": "weak",
+    "unstable_across_regimes": "weak",
+}
 
 
 def build_causal_review_evidence(
@@ -139,7 +168,10 @@ def build_causal_review_evidence(
     assessed.columns = [
         "evidence_score",
         "evidence_level",
+        "data_priority",
         "evidence_reason",
+        "statistical_limit_level",
+        "statistical_limit_reason",
         "risk_constraint_level",
         "integrated_review_decision",
         "integrated_review_reason",
@@ -199,7 +231,7 @@ def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> None:
             frame[col] = pd.NA
 
 
-def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str]:
+def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, str, str, str]:
     score = 0.0
     reasons: list[str] = []
 
@@ -212,6 +244,7 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str]:
     conditional_status = _text(row.get("conditional_granger_status")).lower()
     conditional_q = _number(row.get("conditional_fdr_q_value"))
     contribution = _number(row.get("predictive_contribution"))
+    conditional_supported = conditional_status.startswith("ok") and conditional_q is not None and conditional_q <= 0.10
     if conditional_status.startswith("ok") and conditional_q is not None:
         if conditional_q <= 0.05:
             score += 2.0
@@ -228,6 +261,7 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str]:
             reasons.append("predictive_contribution_positive")
 
     granger_q = _number(row.get("granger_fdr_q_value"))
+    granger_supported = granger_q is not None and granger_q <= 0.10
     if granger_q is not None:
         if granger_q <= 0.05:
             score += 0.75
@@ -271,42 +305,128 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str]:
             model_support = "model_explanation_support"
             reasons.append("model_explanation_support")
 
-    risk_level = _risk_constraint_level(row)
+    score = round(score, 6)
+    statistical_limit_level, statistical_limit_reasons = _statistical_limit_assessment(row)
+    has_hard_downgrade = _has_hard_downgrade(row)
+    risk_level = _risk_constraint_level(row, statistical_limit_level, has_hard_downgrade)
     risk_reasons = _risk_reasons(row, risk_level)
     reasons.extend(reason for reason in risk_reasons if reason not in reasons)
 
+    data_priority = _data_priority(
+        grade=grade,
+        evidence_score=score,
+        importance_rank=importance_rank,
+        conditional_supported=conditional_supported,
+        contribution=contribution,
+        granger_supported=granger_supported,
+        sign_consistency=sign_consistency,
+    )
     evidence_level = _evidence_level(score, risk_level, conditional_status)
-    decision = _integrated_decision(evidence_level, risk_level)
-    integrated_reason = ";".join(reasons) if reasons else "no_supporting_predictive_evidence"
-    return round(score, 6), evidence_level, integrated_reason, risk_level, decision, integrated_reason, model_support
+    decision = _integrated_decision(evidence_level, risk_level, data_priority, statistical_limit_level, has_hard_downgrade)
+    integrated_reasons = list(reasons)
+    if has_hard_downgrade:
+        integrated_reasons.append("hard_downgrade_risk")
+    if decision in {"priority_review_with_statistical_limit", "secondary_review_with_statistical_limit"}:
+        integrated_reasons.extend(["statistical_test_limited"])
+        if data_priority == "high":
+            integrated_reasons.extend(["strong_data_evidence", "priority_preserved_due_to_strong_data_evidence"])
+        integrated_reasons.extend(statistical_limit_reasons)
+    integrated_reason = ";".join(dict.fromkeys(integrated_reasons)) if integrated_reasons else "no_supporting_predictive_evidence"
+    statistical_limit_reason = ";".join(statistical_limit_reasons)
+    evidence_reason = ";".join(dict.fromkeys(reasons)) if reasons else "no_supporting_predictive_evidence"
+    return (
+        score,
+        evidence_level,
+        data_priority,
+        evidence_reason,
+        statistical_limit_level,
+        statistical_limit_reason,
+        risk_level,
+        decision,
+        integrated_reason,
+        model_support,
+    )
 
 
-def _risk_constraint_level(row: pd.Series) -> str:
-    risk_text = ";".join(
+def _risk_text(row: pd.Series) -> str:
+    return ";".join(
         _text(row.get(col)).lower()
         for col in ["risk_flags", "recommended_use", "risk_level", "conditional_granger_status"]
     )
+
+
+def _has_hard_downgrade(row: pd.Series) -> bool:
+    risk_text = _risk_text(row)
+    return any(flag in risk_text for flag in HARD_DOWNGRADE_FLAGS)
+
+
+def _statistical_limit_assessment(row: pd.Series) -> tuple[str, list[str]]:
+    risk_text = _risk_text(row)
+    level = "none"
+    reasons: list[str] = []
+    for flag, flag_level in STATISTICAL_LIMIT_LEVELS.items():
+        if flag in risk_text:
+            level = _max_risk(level, flag_level)
+            reasons.append(_statistical_limit_reason(flag))
+    return level, reasons
+
+
+def _statistical_limit_reason(flag: str) -> str:
+    if flag == "high_collinearity_risk":
+        return "high_collinearity_limited_signal"
+    if flag == "closed_loop_suspect":
+        return "possible_closed_loop_or_primary_mv_candidate"
+    return flag
+
+
+def _data_priority(
+    *,
+    grade: str,
+    evidence_score: float,
+    importance_rank: float | None,
+    conditional_supported: bool,
+    contribution: float | None,
+    granger_supported: bool,
+    sign_consistency: float | None,
+) -> str:
+    has_positive_contribution = contribution is not None and contribution > 0
+    if (
+        grade in {"A", "B"}
+        or evidence_score >= 3.5
+        or (importance_rank is not None and importance_rank <= 5)
+        or (conditional_supported and has_positive_contribution)
+        or (granger_supported and sign_consistency is not None and sign_consistency >= 0.8)
+    ):
+        return "high"
+    if (
+        grade in {"C", "D"}
+        or evidence_score >= 2.0
+        or (importance_rank is not None and importance_rank <= 10)
+        or (sign_consistency is not None and sign_consistency >= 0.7)
+        or has_positive_contribution
+    ):
+        return "medium"
+    return "low"
+
+
+def _risk_constraint_level(row: pd.Series, statistical_limit_level: str, has_hard_downgrade: bool) -> str:
+    risk_text = _risk_text(row)
     declared_risk_level = _text(row.get("risk_level")).lower()
     level = "none"
-    if declared_risk_level in {"strong", "high"}:
+    if has_hard_downgrade:
+        level = _max_risk(level, "strong")
+    elif declared_risk_level in {"strong", "high"} and not any(flag in risk_text for flag in STATISTICAL_LIMIT_FLAGS):
         level = _max_risk(level, "strong")
     elif declared_risk_level == "medium":
         level = _max_risk(level, "medium")
     elif declared_risk_level == "weak":
         level = _max_risk(level, "weak")
-    if any(flag in risk_text for flag in ["strong_formula_leakage", "poor_data_quality", "target_leads_variable", "closed_loop_suspect"]):
-        level = _max_risk(level, "strong")
-    if "common_capacity_driver" in risk_text:
-        level = _max_risk(level, "medium")
-    if any(flag in risk_text for flag in ["lag_boundary", "residual_collinearity", "unstable_over_time", "unstable_across_regimes"]):
-        level = _max_risk(level, "weak")
-    if _text(row.get("conditional_granger_status")).lower() == "high_collinearity_risk":
-        level = _max_risk(level, "medium")
+    level = _max_risk(level, statistical_limit_level)
     return level
 
 
 def _risk_reasons(row: pd.Series, risk_level: str) -> list[str]:
-    risk_text = ";".join(_text(row.get(col)).lower() for col in ["risk_flags", "recommended_use", "conditional_granger_status"])
+    risk_text = _risk_text(row)
     reasons: list[str] = []
     mapping = [
         ("strong_formula_leakage", "strong_formula_leakage_risk"),
@@ -345,21 +465,31 @@ def _evidence_level(score: float, risk_level: str, conditional_status: str) -> s
     return "not_supported"
 
 
-def _integrated_decision(evidence_level: str, risk_level: str) -> str:
-    if risk_level == "strong":
+def _integrated_decision(
+    evidence_level: str,
+    risk_level: str,
+    data_priority: str,
+    statistical_limit_level: str,
+    has_hard_downgrade: bool,
+) -> str:
+    if has_hard_downgrade:
         return "manual_review_only"
-    if evidence_level == "strong_predictive_evidence" and risk_level in {"none", "weak"}:
+    if data_priority == "high" and statistical_limit_level in {"medium", "strong"}:
+        return "priority_review_with_statistical_limit"
+    if evidence_level == "strong_predictive_evidence" and statistical_limit_level in {"none", "weak"}:
         return "priority_review"
-    if evidence_level == "moderate_predictive_evidence" and risk_level != "strong":
+    if evidence_level == "moderate_predictive_evidence":
+        if statistical_limit_level in {"medium", "strong"}:
+            return "secondary_review_with_statistical_limit"
         return "secondary_review"
-    if evidence_level == "risk_limited_evidence":
-        return "risk_limited_review"
-    if evidence_level == "insufficient_evidence":
-        return "insufficient_evidence"
     if evidence_level == "weak_or_incomplete_evidence":
         return "manual_review_only"
     if evidence_level == "not_supported":
         return "not_recommended"
+    if evidence_level == "insufficient_evidence":
+        return "insufficient_evidence"
+    if risk_level == "strong":
+        return "manual_review_only"
     return "manual_review_only"
 
 

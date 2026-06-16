@@ -610,6 +610,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
         conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
         conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
+        conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
@@ -1251,6 +1252,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>三层复核</h2>
         <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
         <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</div>
+        <div class="help">高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</div>
         <div class="row">
           <label>条件Granger滞后模式
             <select id="conditionalLagMode">
@@ -1261,6 +1263,7 @@ INDEX_HTML = r"""<!doctype html>
           </label>
           <label>条件Granger滞后窗口<input id="conditionalLagWindow" type="number" min="0" value="5"></label>
           <label>条件Granger fallback 最大滞后<input id="conditionalFallbackMaxlag" type="number" min="1" value="24"></label>
+          <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
         </div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行三层复核</button>
@@ -1299,7 +1302,7 @@ let lastEnhancedRollingRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
-let sortState = { column: "score", direction: "desc" };
+let tableSortStates = { table: { column: "final_score", direction: "desc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 
@@ -1510,7 +1513,7 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   renderOverview(data.overview || {});
-  renderTable(applySort(lastRows));
+  renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -1630,6 +1633,7 @@ async function runCausalReview() {
     form.append("conditional_lag_mode", el("conditionalLagMode").value);
     form.append("conditional_lag_window", el("conditionalLagWindow").value);
     form.append("conditional_fallback_maxlag", el("conditionalFallbackMaxlag").value);
+    form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
@@ -1758,20 +1762,17 @@ function renderTable(rows) {
     el("table").textContent = "没有可展示的候选变量。";
     return;
   }
+  const targetId = "table";
   const columns = coreCandidateColumns();
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => {
-    const mark = sortState.column === c ? (sortState.direction === "asc" ? "↑" : "↓") : "";
-    return `<th class="sortable" data-column="${escapeHtml(c)}">${escapeHtml(columnLabel(c))}<span class="sort-mark">${mark}</span></th>`;
-  }).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
-  for (const header of table.querySelectorAll("th.sortable")) {
-    header.addEventListener("click", () => sortByColumn(header.dataset.column));
-  }
+  attachSortableHeaders(table, targetId, () => renderTable(rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1803,13 +1804,16 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
     return;
   }
   const columns = (preferredColumns || Object.keys(rows[0])).filter((column) => column in rows[0]);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1879,7 +1883,7 @@ function causalReviewColumns() {
 }
 
 function causalReviewEvidenceColumns() {
-  return ["variable", "candidate_grade", "final_score", "evidence_score", "evidence_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+  return ["variable", "candidate_grade", "final_score", "data_priority", "evidence_score", "evidence_level", "statistical_limit_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "statistical_limit_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
 }
 
 function renderCausalReviewTable(targetId, rows) {
@@ -1890,13 +1894,16 @@ function renderCausalReviewTable(targetId, rows) {
     return;
   }
   const columns = causalReviewColumns().filter((column) => column in rows[0]);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1935,18 +1942,43 @@ function renderDownloads(downloads) {
   }
 }
 
-function sortByColumn(column) {
-  if (sortState.column === column) {
-    sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
-  } else {
-    sortState = { column, direction: "asc" };
+function ensureTableSortState(targetId, defaultColumn = null) {
+  if (!tableSortStates[targetId]) {
+    tableSortStates[targetId] = { column: defaultColumn, direction: "asc" };
   }
-  renderTable(applySort(lastRows));
 }
 
-function applySort(rows) {
-  const direction = sortState.direction === "asc" ? 1 : -1;
-  const column = sortState.column;
+function sortableHeaderHtml(targetId, column) {
+  const state = tableSortStates[targetId] || {};
+  const mark = state.column === column ? (state.direction === "asc" ? "↑" : "↓") : "";
+  return `<th class="sortable" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
+}
+
+function attachSortableHeaders(table, targetId, rerender) {
+  for (const header of table.querySelectorAll("th.sortable")) {
+    header.addEventListener("click", () => {
+      updateTableSortState(targetId, header.dataset.column);
+      rerender();
+    });
+  }
+}
+
+function updateTableSortState(targetId, column) {
+  ensureTableSortState(targetId, column);
+  const state = tableSortStates[targetId];
+  if (state.column === column) {
+    state.direction = state.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.column = column;
+    state.direction = "asc";
+  }
+}
+
+function sortedRowsForTable(targetId, rows) {
+  const state = tableSortStates[targetId];
+  if (!state || !state.column) return rows.slice();
+  const direction = state.direction === "asc" ? 1 : -1;
+  const column = state.column;
   return rows.slice().sort((a, b) => compareValues(a[column], b[column]) * direction);
 }
 
@@ -1995,7 +2027,9 @@ function formatValue(value) {
       skipped: "已跳过",
       risk_limited_review: "风险受限复核",
       priority_review: "优先复核",
+      priority_review_with_statistical_limit: "优先复核但统计受限",
       secondary_review: "二级复核",
+      secondary_review_with_statistical_limit: "二级复核但统计受限",
       not_recommended: "暂不推荐",
       insufficient_evidence: "证据不足",
       manual_review_only: "仅人工复核",
@@ -2125,7 +2159,10 @@ function columnLabel(column) {
     conditional_fdr_q_value: "条件FDR Q值",
     evidence_score: "证据得分",
     evidence_level: "证据等级",
+    data_priority: "数据优先级",
     evidence_reason: "证据说明",
+    statistical_limit_level: "统计限制等级",
+    statistical_limit_reason: "统计限制原因",
     risk_constraint_level: "风险约束等级",
     integrated_review_decision: "综合复核建议",
     integrated_review_reason: "综合复核原因",
@@ -2176,7 +2213,7 @@ function reset() {
   lastConditionalRows = [];
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
-  sortState = { column: "score", direction: "desc" };
+  tableSortStates = { table: { column: "final_score", direction: "desc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
@@ -2239,6 +2276,7 @@ function reset() {
   el("conditionalLagMode").value = "ranked_window";
   el("conditionalLagWindow").value = "5";
   el("conditionalFallbackMaxlag").value = "24";
+  el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
 </script>

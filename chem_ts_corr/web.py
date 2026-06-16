@@ -610,6 +610,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
         conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
         conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
+        conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
@@ -1261,6 +1262,7 @@ INDEX_HTML = r"""<!doctype html>
           </label>
           <label>条件Granger滞后窗口<input id="conditionalLagWindow" type="number" min="0" value="5"></label>
           <label>条件Granger fallback 最大滞后<input id="conditionalFallbackMaxlag" type="number" min="1" value="24"></label>
+          <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
         </div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行三层复核</button>
@@ -1299,7 +1301,7 @@ let lastEnhancedRollingRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
-let sortState = { column: "score", direction: "desc" };
+let tableSortStates = { table: { column: "final_score", direction: "desc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 
@@ -1510,7 +1512,7 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   renderOverview(data.overview || {});
-  renderTable(applySort(lastRows));
+  renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -1630,6 +1632,7 @@ async function runCausalReview() {
     form.append("conditional_lag_mode", el("conditionalLagMode").value);
     form.append("conditional_lag_window", el("conditionalLagWindow").value);
     form.append("conditional_fallback_maxlag", el("conditionalFallbackMaxlag").value);
+    form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
@@ -1758,20 +1761,17 @@ function renderTable(rows) {
     el("table").textContent = "没有可展示的候选变量。";
     return;
   }
+  const targetId = "table";
   const columns = coreCandidateColumns();
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => {
-    const mark = sortState.column === c ? (sortState.direction === "asc" ? "↑" : "↓") : "";
-    return `<th class="sortable" data-column="${escapeHtml(c)}">${escapeHtml(columnLabel(c))}<span class="sort-mark">${mark}</span></th>`;
-  }).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
-  for (const header of table.querySelectorAll("th.sortable")) {
-    header.addEventListener("click", () => sortByColumn(header.dataset.column));
-  }
+  attachSortableHeaders(table, targetId, () => renderTable(rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1803,13 +1803,16 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
     return;
   }
   const columns = (preferredColumns || Object.keys(rows[0])).filter((column) => column in rows[0]);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1890,13 +1893,16 @@ function renderCausalReviewTable(targetId, rows) {
     return;
   }
   const columns = causalReviewColumns().filter((column) => column in rows[0]);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
+  for (const row of displayRows) {
     body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1935,18 +1941,43 @@ function renderDownloads(downloads) {
   }
 }
 
-function sortByColumn(column) {
-  if (sortState.column === column) {
-    sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
-  } else {
-    sortState = { column, direction: "asc" };
+function ensureTableSortState(targetId, defaultColumn = null) {
+  if (!tableSortStates[targetId]) {
+    tableSortStates[targetId] = { column: defaultColumn, direction: "asc" };
   }
-  renderTable(applySort(lastRows));
 }
 
-function applySort(rows) {
-  const direction = sortState.direction === "asc" ? 1 : -1;
-  const column = sortState.column;
+function sortableHeaderHtml(targetId, column) {
+  const state = tableSortStates[targetId] || {};
+  const mark = state.column === column ? (state.direction === "asc" ? "↑" : "↓") : "";
+  return `<th class="sortable" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
+}
+
+function attachSortableHeaders(table, targetId, rerender) {
+  for (const header of table.querySelectorAll("th.sortable")) {
+    header.addEventListener("click", () => {
+      updateTableSortState(targetId, header.dataset.column);
+      rerender();
+    });
+  }
+}
+
+function updateTableSortState(targetId, column) {
+  ensureTableSortState(targetId, column);
+  const state = tableSortStates[targetId];
+  if (state.column === column) {
+    state.direction = state.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.column = column;
+    state.direction = "asc";
+  }
+}
+
+function sortedRowsForTable(targetId, rows) {
+  const state = tableSortStates[targetId];
+  if (!state || !state.column) return rows.slice();
+  const direction = state.direction === "asc" ? 1 : -1;
+  const column = state.column;
   return rows.slice().sort((a, b) => compareValues(a[column], b[column]) * direction);
 }
 
@@ -2176,7 +2207,7 @@ function reset() {
   lastConditionalRows = [];
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
-  sortState = { column: "score", direction: "desc" };
+  tableSortStates = { table: { column: "final_score", direction: "desc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
@@ -2239,6 +2270,7 @@ function reset() {
   el("conditionalLagMode").value = "ranked_window";
   el("conditionalLagWindow").value = "5";
   el("conditionalFallbackMaxlag").value = "24";
+  el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
 </script>

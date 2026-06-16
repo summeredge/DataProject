@@ -1272,10 +1272,11 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>三层复核报告</h2>
+        <div class="help">该表为旧版保守复核规则，主要用于提示严格条件 Granger 和风险规则下的保守判断；最终人工复核排序建议优先参考下方“综合证据复核”。</div>
         <div class="download-buttons" id="causalReportDownload"></div>
         <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>综合证据复核</h2>
-        <div class="help">综合证据复核会整合已生成的增强筛选、Granger 和随机森林模型解释结果；如果这些结果尚未运行，则对应证据为空。该表仍不是因果结论。</div>
+        <div class="help">综合证据复核会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 综合证据复核。</div>
       </div>
@@ -1911,12 +1912,75 @@ function renderCausalReviewTable(targetId, rows) {
   container.replaceChildren(wrap);
 }
 
+function cellHtml(column, value, formatter = null) {
+  const rendered = formatter ? formatter(column, value) : escapeHtml(formatCellValue(column, value));
+  const title = cellTitle(column, value);
+  return title ? `<td title="${escapeHtml(title)}">${rendered}</td>` : `<td>${rendered}</td>`;
+}
+
+function cellTitle(column, value) {
+  if (column === "integrated_review_decision" && String(value ?? "") === "priority_review_with_statistical_limit") {
+    return "数据证据强，但统计检验受到高共线性、闭环、共同负荷或滞后边界限制；应优先人工复核，但不是因果结论。";
+  }
+  return "";
+}
+
 function formatReviewCell(column, value) {
   if (column === "final_review_decision") {
     const raw = String(value || "");
-    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatValue(raw))}</span>`;
+    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatCellValue(column, raw))}</span>`;
   }
-  return escapeHtml(formatValue(value));
+  return escapeHtml(formatCellValue(column, value));
+}
+
+function formatCellValue(column, value) {
+  const text = String(value ?? "");
+  const maps = {
+    integrated_review_decision: {
+      priority_review: "优先复核",
+      priority_review_with_statistical_limit: "优先复核但统计受限",
+      secondary_review: "二级复核",
+      secondary_review_with_statistical_limit: "二级复核但统计受限",
+      risk_limited_review: "风险受限复核",
+      manual_review_only: "仅人工复核",
+      insufficient_evidence: "证据不足",
+      not_recommended: "暂不推荐",
+    },
+    final_review_decision: {
+      priority_review: "优先复核",
+      secondary_review: "二级复核",
+      risk_limited_review: "风险受限复核",
+      manual_review_only: "仅人工复核",
+      insufficient_evidence: "证据不足",
+      not_recommended: "暂不推荐",
+    },
+    evidence_level: {
+      strong_predictive_evidence: "强预测证据",
+      moderate_predictive_evidence: "中等预测证据",
+      weak_or_incomplete_evidence: "弱证据或证据不完整",
+      risk_limited_evidence: "风险受限证据",
+      insufficient_evidence: "证据不足",
+      not_supported: "未支持",
+    },
+    data_priority: {
+      high: "高",
+      medium: "中",
+      low: "低",
+    },
+    statistical_limit_level: {
+      none: "无",
+      weak: "弱",
+      medium: "中",
+      strong: "强",
+    },
+    risk_constraint_level: {
+      none: "无",
+      weak: "弱",
+      medium: "中",
+      strong: "强",
+    },
+  };
+  return maps[column]?.[text] || formatValue(value);
 }
 
 function renderReviewDownloads(downloads) {

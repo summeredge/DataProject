@@ -1272,7 +1272,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>三层复核报告</h2>
-        <div class="help">该表为旧版保守复核规则，主要用于提示严格条件 Granger 和风险规则下的保守判断；最终人工复核排序建议优先参考下方‘综合证据复核’。</div>
+        <div class="help">该表为旧版保守复核规则，主要用于提示严格条件 Granger 和风险规则下的保守判断；最终人工复核排序建议优先参考下方“综合证据复核”。</div>
         <div class="download-buttons" id="causalReportDownload"></div>
         <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>综合证据复核</h2>
@@ -1770,7 +1770,7 @@ function renderTable(rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c])).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderTable(rows));
@@ -1811,7 +1811,7 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c])).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
@@ -1901,7 +1901,7 @@ function renderCausalReviewTable(targetId, rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => cellHtml(c, row[c], formatReviewCell)).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));

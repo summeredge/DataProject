@@ -168,6 +168,11 @@ def _lag_boundary_hint(row: pd.Series, cond: dict[str, Any], tested_lags: Any) -
     haystack = " ".join(_text(row.get(col)) for col in ["risk_flags", "statistical_limit_reason", "evidence_reason", "integrated_review_reason"])
     if any(token in haystack for token in ["lag_boundary", "lag_boundary_risk", "滞后边界"]):
         return "命中滞后边界，建议扩大 max_lag 或结合工艺停留时间确认。"
+    lags = _parse_lags(tested_lags)
+    limits = [_number(cond.get(col)) for col in ["baseline_maxlag", "fallback_maxlag"]]
+    limits = [int(x) for x in limits if x is not None]
+    if lags and limits and max(lags) >= max(limits):
+        return "测试滞后接近上限，建议检查 max_lag 是否足够。"
     return ""
 
 

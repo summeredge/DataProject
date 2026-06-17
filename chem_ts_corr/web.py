@@ -49,6 +49,7 @@ DOWNLOAD_FILES = {
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
+    "final_review_summary.csv",
     "causal_review_evidence.csv",
     "enhanced_validation_summary.csv",
 }
@@ -615,12 +616,15 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
     evidence = result["causal_review_evidence"]
+    final_summary = result["final_review_summary"]
     conditional.to_csv(output_dir / "conditional_granger_scores.csv", index=False, encoding="utf-8-sig")
     report.to_csv(output_dir / "causal_review_report.csv", index=False, encoding="utf-8-sig")
+    final_summary.to_csv(output_dir / "final_review_summary.csv", index=False, encoding="utf-8-sig")
     evidence.to_csv(output_dir / "causal_review_evidence.csv", index=False, encoding="utf-8-sig")
     return {
         "conditionalGrangerScores": _records(conditional.head(500)),
         "causalReviewReport": _records(report.head(500)),
+        "finalReviewSummary": _records(final_summary.head(500)),
         "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
@@ -1271,10 +1275,11 @@ INDEX_HTML = r"""<!doctype html>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>三层复核报告</h2>
-        <div class="help">该表为旧版保守复核规则，主要用于提示严格条件 Granger 和风险规则下的保守判断；最终人工复核排序建议优先参考下方“综合证据复核”。</div>
-        <div class="download-buttons" id="causalReportDownload"></div>
-        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
+        <h2>最终推荐摘要</h2>
+        <div class="help">该表基于综合证据复核生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。</div>
+        <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示综合证据复核和最终推荐摘要。</div>
+        <div class="download-buttons" id="finalReviewSummaryDownload"></div>
+        <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
         <h2>综合证据复核</h2>
         <div class="help">综合证据复核会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
@@ -1303,6 +1308,7 @@ let lastEnhancedRollingRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
+let lastFinalReviewSummaryRows = [];
 let tableSortStates = { table: { column: "final_score", direction: "desc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
@@ -1513,6 +1519,7 @@ function renderAnalysisResult(data) {
   lastConditionalRows = [];
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
+  lastFinalReviewSummaryRows = [];
   renderOverview(data.overview || {});
   renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
@@ -1525,7 +1532,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
   renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-  renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+  renderGenericTable("finalReviewSummaryTable", lastFinalReviewSummaryRows, finalReviewSummaryColumns());
   renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
@@ -1639,8 +1646,9 @@ async function runCausalReview() {
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
     lastCausalEvidenceRows = data.causalReviewEvidence || [];
+    lastFinalReviewSummaryRows = data.finalReviewSummary || [];
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-    renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+    renderGenericTable("finalReviewSummaryTable", lastFinalReviewSummaryRows, finalReviewSummaryColumns());
     renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
@@ -1834,6 +1842,7 @@ function missingText(targetId) {
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
+  if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 综合证据复核。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
@@ -1882,6 +1891,10 @@ function conditionalGrangerColumns() {
 
 function causalReviewColumns() {
   return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
+}
+
+function finalReviewSummaryColumns() {
+  return ["final_rank", "variable", "final_recommendation", "data_priority", "evidence_level", "evidence_score", "statistical_limit_level", "risk_constraint_level", "key_reason", "suggested_next_action", "screening_grade", "screening_score", "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint", "evidence_conflict_type", "evidence_conflict_reason", "interpretation"];
 }
 
 function causalReviewEvidenceColumns() {
@@ -1987,7 +2000,7 @@ function formatCellValue(column, value) {
 
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
-  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
+  renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
 }
 
@@ -2107,6 +2120,12 @@ function formatValue(value) {
       not_recommended: "暂不推荐",
       insufficient_evidence: "证据不足",
       manual_review_only: "仅人工复核",
+      "final review summary only": "仅作最终复核摘要",
+      strong_screening_but_statistical_limited: "强筛查信号但统计受限",
+      strong_screening_but_conditional_weak: "强筛查信号但条件验证弱",
+      conditional_supported_but_screening_weak: "条件验证支持但主筛查较弱",
+      model_supported_but_granger_weak: "模型支持但Granger较弱",
+      boundary_lag_uncertain: "滞后边界不确定",
       candidate_leads_target: "变量领先目标",
       target_leads_candidate: "目标领先变量",
       target_leads_variable: "目标领先变量",
@@ -2140,6 +2159,7 @@ function formatValue(value) {
     if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
+    if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";
     return value
       .split(/[;,，；]/)
       .map((item) => {
@@ -2228,6 +2248,17 @@ function columnLabel(column) {
     final_review_decision: "最终复核建议",
     final_review_reason: "最终复核原因",
     conditional_granger_status: "条件Granger状态",
+    final_rank: "最终排序",
+    final_recommendation: "最终建议",
+    key_reason: "主要原因",
+    suggested_next_action: "建议下一步",
+    screening_grade: "主筛查等级",
+    screening_score: "主筛查得分",
+    screening_lag: "主筛查滞后",
+    conditional_status: "条件Granger状态",
+    lag_boundary_hint: "滞后边界提示",
+    evidence_conflict_type: "证据冲突类型",
+    evidence_conflict_reason: "证据冲突说明",
     conditional_best_lag: "条件最佳滞后",
     conditional_min_p_value: "条件最小P值",
     conditional_fdr_q_value: "条件FDR Q值",
@@ -2351,9 +2382,10 @@ function reset() {
   el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
   resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
   resetOptionalTable("causalReviewTable", "未运行 三层复核。");
+  resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
   resetOptionalTable("causalReviewEvidenceTable", "未运行 综合证据复核。");
   clearOptionalElement("conditionalDownload");
-  clearOptionalElement("causalReportDownload");
+  clearOptionalElement("finalReviewSummaryDownload");
   clearOptionalElement("causalEvidenceDownload");
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";

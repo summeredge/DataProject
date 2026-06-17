@@ -32,9 +32,10 @@ def test_causal_review_runner_returns_expected_tables():
         min_rows=80,
     )
 
-    assert set(out) == {"conditional_granger_scores", "causal_review_report", "causal_review_evidence"}
+    assert set(out) == {"conditional_granger_scores", "causal_review_report", "causal_review_evidence", "final_review_summary"}
     assert not out["conditional_granger_scores"].empty
     assert not out["causal_review_report"].empty
+    assert not out["final_review_summary"].empty
 
 
 def test_causal_review_runner_handles_empty_candidates():
@@ -53,6 +54,7 @@ def test_causal_review_runner_handles_empty_candidates():
     assert list(out["conditional_granger_scores"].columns) == OUT_COLS
     assert list(out["causal_review_report"].columns) == REPORT_COLUMNS
     assert list(out["causal_review_evidence"].columns) == EVIDENCE_COLUMNS
+    assert list(out["final_review_summary"].columns)
 
 
 def test_causal_review_runner_respects_top_n():

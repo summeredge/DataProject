@@ -1,0 +1,87 @@
+import pandas as pd
+
+from chem_ts_corr.final_review_summary import INTERPRETATION, build_final_review_summary
+
+
+def _evidence(rows):
+    base = {
+        "candidate_grade": "C",
+        "final_score": 0.1,
+        "lag": 1,
+        "data_priority": "medium",
+        "evidence_score": 1.0,
+        "evidence_level": "moderate_predictive_evidence",
+        "statistical_limit_level": "weak",
+        "risk_constraint_level": "none",
+        "risk_flags": "",
+        "integrated_review_reason": "reason",
+        "evidence_reason": "evidence",
+        "statistical_limit_reason": "",
+        "conditional_granger_status": "ok",
+        "conditional_fdr_q_value": 0.2,
+        "model_importance_rank": 99,
+    }
+    return pd.DataFrame([{**base, **row} for row in rows])
+
+
+def test_priority_review_ranks_before_secondary_review():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x2", "integrated_review_decision": "secondary_review"},
+        {"variable": "x1", "integrated_review_decision": "priority_review"},
+    ]))
+    assert out["variable"].tolist() == ["x1", "x2"]
+
+
+def test_priority_review_with_statistical_limit_ranks_before_secondary_review():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x2", "integrated_review_decision": "secondary_review"},
+        {"variable": "x1", "integrated_review_decision": "priority_review_with_statistical_limit"},
+    ]))
+    assert out["variable"].tolist() == ["x1", "x2"]
+
+
+def test_high_data_priority_ranks_before_medium_within_same_decision():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x2", "integrated_review_decision": "secondary_review", "data_priority": "medium"},
+        {"variable": "x1", "integrated_review_decision": "secondary_review", "data_priority": "high"},
+    ]))
+    assert out["variable"].tolist() == ["x1", "x2"]
+
+
+def test_higher_evidence_score_ranks_first_within_same_class():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x1", "integrated_review_decision": "secondary_review", "evidence_score": 1},
+        {"variable": "x2", "integrated_review_decision": "secondary_review", "evidence_score": 3},
+    ]))
+    assert out["variable"].tolist() == ["x2", "x1"]
+
+
+def test_high_priority_and_medium_statistical_limit_generates_conflict():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x1", "integrated_review_decision": "priority_review", "data_priority": "high", "statistical_limit_level": "medium"},
+    ]))
+    assert "strong_screening_but_statistical_limited" in out.loc[0, "evidence_conflict_type"]
+
+
+def test_lag_boundary_generates_hint():
+    out = build_final_review_summary(_evidence([
+        {"variable": "x1", "integrated_review_decision": "secondary_review", "risk_flags": "lag_boundary"},
+    ]))
+    assert "滞后边界" in out.loc[0, "lag_boundary_hint"]
+
+
+def test_does_not_modify_input_dataframe():
+    evidence = _evidence([{"variable": "x1", "integrated_review_decision": "priority_review"}])
+    before = evidence.copy(deep=True)
+    build_final_review_summary(evidence)
+    pd.testing.assert_frame_equal(evidence, before)
+
+
+def test_missing_optional_tables_do_not_raise():
+    out = build_final_review_summary(_evidence([{"variable": "x1", "integrated_review_decision": "priority_review"}]))
+    assert out.loc[0, "variable"] == "x1"
+
+
+def test_interpretation_is_fixed():
+    out = build_final_review_summary(_evidence([{"variable": "x1", "integrated_review_decision": "priority_review"}]))
+    assert set(out["interpretation"]) == {INTERPRETATION}

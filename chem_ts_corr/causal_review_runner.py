@@ -6,6 +6,7 @@ import pandas as pd
 
 from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
 from chem_ts_corr.causal_review_service import REPORT_COLUMNS, build_causal_review_report
+from chem_ts_corr.final_review_summary import SUMMARY_COLUMNS, build_final_review_summary
 from chem_ts_corr.conditional_granger import (
     OUT_COLS,
     build_candidate_lag_windows,
@@ -46,6 +47,7 @@ def run_causal_review_stage(
             "conditional_granger_scores": pd.DataFrame(columns=OUT_COLS),
             "causal_review_report": pd.DataFrame(columns=REPORT_COLUMNS),
             "causal_review_evidence": pd.DataFrame(columns=EVIDENCE_COLUMNS),
+            "final_review_summary": pd.DataFrame(columns=SUMMARY_COLUMNS),
         }
 
     optional_tables = _load_optional_evidence_tables(
@@ -90,10 +92,16 @@ def run_causal_review_stage(
         granger_tests=optional_tables["granger_tests"],
         model_variable_importance=optional_tables["model_variable_importance"],
     )
+    final_review_summary = build_final_review_summary(
+        causal_review_evidence=causal_review_evidence,
+        conditional_granger_scores=conditional_granger_scores,
+        ranked_features=ranked_features,
+    )
     return {
         "conditional_granger_scores": conditional_granger_scores,
         "causal_review_report": causal_review_report,
         "causal_review_evidence": causal_review_evidence,
+        "final_review_summary": final_review_summary,
     }
 
 

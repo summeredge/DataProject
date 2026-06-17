@@ -70,6 +70,17 @@ def test_lag_boundary_generates_hint():
     assert "滞后边界" in out.loc[0, "lag_boundary_hint"]
 
 
+def test_large_tested_lags_without_lag_boundary_does_not_generate_hint():
+    conditional = pd.DataFrame([
+        {"variable": "x1", "tested_lags": "80,81,82", "baseline_maxlag": 24, "fallback_maxlag": 24}
+    ])
+    evidence = _evidence([
+        {"variable": "x1", "integrated_review_decision": "priority_review", "risk_flags": ""}
+    ])
+    out = build_final_review_summary(evidence, conditional_granger_scores=conditional)
+    assert out.loc[0, "lag_boundary_hint"] == ""
+
+
 def test_does_not_modify_input_dataframe():
     evidence = _evidence([{"variable": "x1", "integrated_review_decision": "priority_review"}])
     before = evidence.copy(deep=True)

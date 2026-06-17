@@ -156,3 +156,102 @@ def test_inputs_are_not_mutated():
     pd.testing.assert_frame_equal(ranked, ranked_before)
     pd.testing.assert_frame_equal(conditional, conditional_before)
     pd.testing.assert_frame_equal(risks, risks_before)
+
+
+def test_strong_data_high_collinearity_preserves_priority_with_statistical_limit():
+    conditional = pd.DataFrame([
+        {
+            "variable": "x1",
+            "status": "high_collinearity_risk",
+            "best_lag": 1,
+            "min_p_value": 0.001,
+            "fdr_q_value": 0.001,
+            "predictive_contribution": 0.04,
+        }
+    ])
+
+    out = build_causal_review_evidence(_ranked(candidate_grade="A"), conditional)
+    row = out.iloc[0]
+
+    assert row["data_priority"] == "high"
+    assert row["statistical_limit_level"] in {"medium", "strong"}
+    assert row["integrated_review_decision"] == "priority_review_with_statistical_limit"
+    assert "statistical_test_limited" in row["integrated_review_reason"]
+    assert "high_collinearity" in row["integrated_review_reason"]
+
+
+def test_strong_data_common_capacity_driver_is_not_rejected():
+    risks = pd.DataFrame([
+        {"variable": "x1", "risk_flags": "common_capacity_driver", "risk_level": "medium"}
+    ])
+    model_importance = pd.DataFrame([
+        {"variable": "x1", "importance_rank": 4, "max_importance": 0.2, "best_model_lag": 2}
+    ])
+
+    out = build_causal_review_evidence(
+        _ranked(candidate_grade="A", risk_flags=""),
+        pd.DataFrame(),
+        risk_flags=risks,
+        model_variable_importance=model_importance,
+    )
+    row = out.iloc[0]
+
+    assert row["data_priority"] == "high"
+    assert row["statistical_limit_reason"] == "common_capacity_driver"
+    assert row["integrated_review_decision"] in {
+        "priority_review_with_statistical_limit",
+        "secondary_review_with_statistical_limit",
+    }
+    assert row["integrated_review_decision"] != "not_recommended"
+
+
+def test_hard_downgrade_risk_takes_precedence_over_strong_data():
+    risks = pd.DataFrame([
+        {"variable": "x1", "risk_flags": "poor_data_quality", "risk_level": "strong"}
+    ])
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
+    ])
+
+    out = build_causal_review_evidence(_ranked(candidate_grade="A", risk_flags=""), conditional, risk_flags=risks)
+    row = out.iloc[0]
+
+    assert row["data_priority"] == "high"
+    assert row["integrated_review_decision"] == "manual_review_only"
+    assert row["risk_constraint_level"] == "strong"
+    assert "hard_downgrade_risk" in row["integrated_review_reason"]
+
+
+def test_low_risk_strong_evidence_keeps_priority_review():
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
+    ])
+
+    out = build_causal_review_evidence(_ranked(candidate_grade="A", risk_flags="", risk_level="none"), conditional)
+    row = out.iloc[0]
+
+    assert float(row["evidence_score"]) >= 4
+    assert row["statistical_limit_level"] == "none"
+    assert row["integrated_review_decision"] == "priority_review"
+
+
+def test_moderate_evidence_with_statistical_limit_records_limit_reason():
+    risks = pd.DataFrame([
+        {"variable": "x1", "risk_flags": "lag_boundary;residual_collinearity", "risk_level": "weak"}
+    ])
+    enhanced = pd.DataFrame([
+        {"variable": "x1", "model_lift": 0.06, "rolling_stability": 0.75, "rolling_sign_consistency": 0.72}
+    ])
+
+    out = build_causal_review_evidence(
+        _ranked(candidate_grade="C", risk_flags=""),
+        pd.DataFrame(),
+        risk_flags=risks,
+        enhanced_validation_summary=enhanced,
+    )
+    row = out.iloc[0]
+
+    assert row["evidence_level"] == "moderate_predictive_evidence"
+    assert row["integrated_review_decision"] in {"secondary_review", "secondary_review_with_statistical_limit"}
+    assert row["statistical_limit_reason"]
+    assert "lag_boundary" in row["statistical_limit_reason"]

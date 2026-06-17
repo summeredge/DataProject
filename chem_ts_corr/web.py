@@ -1799,6 +1799,7 @@ function renderOverview(overview) {
 
 function renderGenericTable(targetId, rows, preferredColumns = null) {
   const container = el(targetId);
+  if (!container) return;
   if (!rows.length) {
     container.className = "empty";
     container.textContent = missingText(targetId);
@@ -1889,6 +1890,7 @@ function causalReviewEvidenceColumns() {
 
 function renderCausalReviewTable(targetId, rows) {
   const container = el(targetId);
+  if (!container) return;
   if (!rows.length) {
     container.className = "empty";
     container.textContent = missingText(targetId);
@@ -1991,6 +1993,7 @@ function renderReviewDownloads(downloads) {
 
 function renderDownloadTarget(targetId, downloads, fileName) {
   const container = el(targetId);
+  if (!container) return;
   const item = (downloads || []).find((entry) => entry.name === fileName);
   container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
 }
@@ -2269,6 +2272,19 @@ function escapeHtml(value) {
 
 function setStatus(message) { el("status").textContent = message; }
 
+function resetOptionalTable(targetId, text) {
+  const node = el(targetId);
+  if (!node) return;
+  node.className = "empty";
+  node.textContent = text;
+}
+
+function clearOptionalElement(targetId) {
+  const node = el(targetId);
+  if (!node) return;
+  node.innerHTML = "";
+}
+
 function reset() {
   fileId = "";
   currentRunId = "";
@@ -2333,15 +2349,12 @@ function reset() {
   el("enhancedLiftTable").textContent = "点击“运行增强筛选”后显示模型提升评分。";
   el("enhancedRollingTable").className = "empty";
   el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
-  el("conditionalGrangerTable").className = "empty";
-  el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
-  el("causalReviewTable").className = "empty";
-  el("causalReviewTable").textContent = "未运行 三层复核。";
-  el("causalReviewEvidenceTable").className = "empty";
-  el("causalReviewEvidenceTable").textContent = "未运行 综合证据复核。";
-  el("conditionalDownload").innerHTML = "";
-  el("causalReportDownload").innerHTML = "";
-  el("causalEvidenceDownload").innerHTML = "";
+  resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
+  resetOptionalTable("causalReviewTable", "未运行 三层复核。");
+  resetOptionalTable("causalReviewEvidenceTable", "未运行 综合证据复核。");
+  clearOptionalElement("conditionalDownload");
+  clearOptionalElement("causalReportDownload");
+  clearOptionalElement("causalEvidenceDownload");
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";
   el("conditionalLagMode").value = "ranked_window";

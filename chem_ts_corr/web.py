@@ -1082,6 +1082,28 @@ INDEX_HTML = r"""<!doctype html>
     .decision-not_recommended { background:#e5e7eb; color:#374151; }
     .decision-insufficient_evidence { background:#dbeafe; color:#1e40af; }
     .decision-manual_review_only { background:#7f1d1d; color:#fff; }
+    .review-card {
+      border:1px solid #d0d7de;
+      border-radius:8px;
+      padding:12px;
+      background:#fff;
+      margin-top:10px;
+    }
+    .review-card h3 { margin-top:0; }
+    .metric-grid {
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+      gap:8px;
+    }
+    .metric-item {
+      background:#f6f8fa;
+      padding:8px;
+      border-radius:6px;
+    }
+    .metric-item strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .small-button { padding:5px 8px; font-size:12px; }
+    .clickable-row { cursor:pointer; }
+    .clickable-row:hover { background:#f6f8fa; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } }
@@ -1276,10 +1298,13 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>最终推荐摘要</h2>
-        <div class="help">该表基于综合证据复核生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。</div>
+        <div class="help">该表基于综合证据复核生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
         <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示综合证据复核和最终推荐摘要。</div>
         <div class="download-buttons" id="finalReviewSummaryDownload"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
+        <h3>单变量复核卡片</h3>
+        <div class="help">点击“最终推荐摘要”中的变量行后显示该变量的复核解释。该解释仅用于人工复核，不是因果结论。</div>
+        <div id="singleVariableReviewCard" class="empty">点击最终推荐摘要中的变量后显示复核卡片。</div>
         <h2>综合证据复核</h2>
         <div class="help">综合证据复核会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
@@ -1309,7 +1334,7 @@ let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
-let tableSortStates = { table: { column: "final_score", direction: "desc" } };
+let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 
@@ -1520,6 +1545,7 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  renderSingleVariableReviewCard(null);
   renderOverview(data.overview || {});
   renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
@@ -1532,7 +1558,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
   renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-  renderGenericTable("finalReviewSummaryTable", lastFinalReviewSummaryRows, finalReviewSummaryColumns());
+  renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
   renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
@@ -1630,6 +1656,7 @@ async function runCausalReview() {
   const startedAt = performance.now();
   setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...（计时中）");
   el("runCausalReview").disabled = true;
+  renderSingleVariableReviewCard(null);
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
@@ -1647,8 +1674,9 @@ async function runCausalReview() {
     lastCausalReportRows = data.causalReviewReport || [];
     lastCausalEvidenceRows = data.causalReviewEvidence || [];
     lastFinalReviewSummaryRows = data.finalReviewSummary || [];
+    tableSortStates["finalReviewSummaryTable"] = { column: "final_rank", direction: "asc" };
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-    renderGenericTable("finalReviewSummaryTable", lastFinalReviewSummaryRows, finalReviewSummaryColumns());
+    renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
     renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
@@ -1831,6 +1859,138 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
   container.replaceChildren(wrap);
 }
 
+
+function renderFinalReviewSummaryTable(rows) {
+  const container = el("finalReviewSummaryTable");
+  if (!container) return;
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = missingText("finalReviewSummaryTable");
+    return;
+  }
+  const columns = finalReviewSummaryColumns().filter((column) => column === "trend_action" || column in rows[0]);
+  ensureTableSortState("finalReviewSummaryTable", "final_rank");
+  const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml("finalReviewSummaryTable", c)).join("")}</tr></thead>`;
+  const body = document.createElement("tbody");
+  for (const row of displayRows) {
+    const tr = document.createElement("tr");
+    for (const column of columns) {
+      const td = document.createElement("td");
+      if (column === "trend_action") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "small-button";
+        button.textContent = "查看趋势";
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTrendForCandidate(row.variable, row.screening_lag);
+        });
+        td.appendChild(button);
+      } else {
+        td.textContent = displayCellValue(column, row[column]);
+      }
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  attachSortableHeaders(table, "finalReviewSummaryTable", () => renderFinalReviewSummaryTable(rows));
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+  attachFinalSummaryRowClick(rows);
+}
+
+function attachFinalSummaryRowClick(rows) {
+  const container = el("finalReviewSummaryTable");
+  const table = container.querySelector("table");
+  if (!table) return;
+  const bodyRows = table.querySelectorAll("tbody tr");
+  const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
+  bodyRows.forEach((tr, index) => {
+    tr.classList.add("clickable-row");
+    tr.addEventListener("click", () => {
+      renderSingleVariableReviewCard(displayRows[index]);
+    });
+  });
+}
+
+function renderSingleVariableReviewCard(row) {
+  const container = el("singleVariableReviewCard");
+  if (!container) return;
+  if (!row) {
+    container.className = "empty";
+    container.textContent = "点击最终推荐摘要中的变量后显示复核卡片。";
+    return;
+  }
+  const metricColumns = [
+    "final_rank",
+    "final_recommendation",
+    "data_priority",
+    "evidence_level",
+    "evidence_score",
+    "statistical_limit_level",
+    "risk_constraint_level",
+    "screening_grade",
+    "screening_score",
+    "screening_lag",
+    "conditional_status",
+    "conditional_best_lag",
+    "tested_lags",
+    "lag_boundary_hint",
+    "evidence_conflict_type",
+    "evidence_conflict_reason",
+  ];
+  const metrics = metricColumns.map((column) => `
+    <div class="metric-item">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
+    </div>
+  `).join("");
+  container.className = "";
+  container.innerHTML = `
+    <div class="review-card">
+      <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
+      <div class="metric-grid">${metrics}</div>
+      <h4>主要原因</h4>
+      <p>${escapeHtml(displayCellValue("key_reason", row.key_reason))}</p>
+      <h4>建议下一步</h4>
+      <p>${escapeHtml(displayCellValue("suggested_next_action", row.suggested_next_action))}</p>
+      <h4>解释边界</h4>
+      <p>${escapeHtml(displayCellValue("interpretation", row.interpretation))}</p>
+      <p>该结果为预测验证和人工复核建议，不是因果结论。</p>
+    </div>
+  `;
+}
+
+function displayCellValue(column, value) {
+  const formatted = formatCellValue(column, value);
+  return formatted === "" || formatted === null || formatted === undefined ? "-" : String(formatted);
+}
+
+function openTrendForCandidate(variable, lag) {
+  const target = el("targetColumn").value;
+  activateTab("trendTab");
+  setSelectValueIfExists("trendVar1", target);
+  setSelectValueIfExists("trendVar2", variable);
+  setSelectValueIfExists("trendVar3", "");
+  setSelectValueIfExists("trendVar4", "");
+  const lagText = lag ? `主筛查滞后：${lag}，建议人工查看候选变量变化后目标是否在相应滞后附近响应。` : "";
+  setStatus(`已选择趋势变量：目标 ${target || "-"}，候选 ${variable || "-"}。${lagText} 可点击“显示趋势”查看。`);
+}
+
+function setSelectValueIfExists(selectId, value) {
+  const node = el(selectId);
+  if (!node) return;
+  const targetValue = String(value || "");
+  const option = Array.from(node.options).find((item) => item.value === targetValue);
+  if (option) node.value = targetValue;
+}
+
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
   if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
@@ -1894,7 +2054,7 @@ function causalReviewColumns() {
 }
 
 function finalReviewSummaryColumns() {
-  return ["final_rank", "variable", "final_recommendation", "data_priority", "evidence_level", "evidence_score", "statistical_limit_level", "risk_constraint_level", "key_reason", "suggested_next_action", "screening_grade", "screening_score", "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint", "evidence_conflict_type", "evidence_conflict_reason", "interpretation"];
+  return ["final_rank", "variable", "trend_action", "final_recommendation", "data_priority", "evidence_level", "evidence_score", "statistical_limit_level", "risk_constraint_level", "key_reason", "suggested_next_action", "screening_grade", "screening_score", "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint", "evidence_conflict_type", "evidence_conflict_reason", "interpretation"];
 }
 
 function causalReviewEvidenceColumns() {
@@ -2024,7 +2184,8 @@ function renderDownloads(downloads) {
 
 function ensureTableSortState(targetId, defaultColumn = null) {
   if (!tableSortStates[targetId]) {
-    tableSortStates[targetId] = { column: defaultColumn, direction: "asc" };
+    const column = targetId === "finalReviewSummaryTable" ? "final_rank" : defaultColumn;
+    tableSortStates[targetId] = { column, direction: "asc" };
   }
 }
 
@@ -2178,6 +2339,7 @@ function formatValue(value) {
 function columnLabel(column) {
   const labels = {
     variable: "变量",
+    trend_action: "趋势验证",
     final_score: "综合得分",
     lag: "滞后",
     direction: "方向",
@@ -2331,7 +2493,8 @@ function reset() {
   lastConditionalRows = [];
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
-  tableSortStates = { table: { column: "final_score", direction: "desc" } };
+  lastFinalReviewSummaryRows = [];
+  tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
@@ -2383,6 +2546,7 @@ function reset() {
   resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
   resetOptionalTable("causalReviewTable", "未运行 三层复核。");
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
+  resetOptionalTable("singleVariableReviewCard", "点击最终推荐摘要中的变量后显示复核卡片。");
   resetOptionalTable("causalReviewEvidenceTable", "未运行 综合证据复核。");
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");

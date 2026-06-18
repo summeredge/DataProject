@@ -2190,6 +2190,9 @@ function ensureTableSortState(targetId, defaultColumn = null) {
 }
 
 function sortableHeaderHtml(targetId, column) {
+  if (targetId === "finalReviewSummaryTable" && column === "trend_action") {
+    return `<th>${escapeHtml(columnLabel(column))}</th>`;
+  }
   const state = tableSortStates[targetId] || {};
   const mark = state.column === column ? (state.direction === "asc" ? "↑" : "↓") : "";
   return `<th class="sortable" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;

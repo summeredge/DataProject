@@ -41,6 +41,7 @@ def run_causal_review_stage(
     """
     selected_candidates = _select_candidates(causal_review_candidates, top_n=top_n)
     variables = _candidate_variables(selected_candidates)
+    ranked_features_for_review = _ranked_features_for_candidates(ranked_features, variables)
 
     if not variables:
         return {
@@ -58,7 +59,7 @@ def run_causal_review_stage(
     )
 
     candidate_lags = _conditional_candidate_lags(
-        ranked_features=ranked_features,
+        ranked_features=ranked_features_for_review,
         variables=variables,
         maxlag=maxlag,
         mode=conditional_lag_mode,
@@ -79,13 +80,13 @@ def run_causal_review_stage(
         fallback_maxlag=conditional_fallback_maxlag,
     )
     causal_review_report = build_causal_review_report(
-        ranked_features=ranked_features,
+        ranked_features=ranked_features_for_review,
         causal_review_candidates=selected_candidates,
         conditional_granger_scores=conditional_granger_scores,
         risk_flags=risk_flags,
     )
     causal_review_evidence = build_causal_review_evidence(
-        ranked_features=ranked_features,
+        ranked_features=ranked_features_for_review,
         conditional_granger_scores=conditional_granger_scores,
         risk_flags=risk_flags,
         enhanced_validation_summary=optional_tables["enhanced_validation_summary"],
@@ -95,7 +96,7 @@ def run_causal_review_stage(
     final_review_summary = build_final_review_summary(
         causal_review_evidence=causal_review_evidence,
         conditional_granger_scores=conditional_granger_scores,
-        ranked_features=ranked_features,
+        ranked_features=ranked_features_for_review,
     )
     return {
         "conditional_granger_scores": conditional_granger_scores,
@@ -129,6 +130,20 @@ def _conditional_candidate_lags(
         window=effective_window,
         fallback_maxlag=fallback_maxlag,
     )
+
+
+def _ranked_features_for_candidates(ranked_features: pd.DataFrame, variables: list[str]) -> pd.DataFrame:
+    ranked = ranked_features.copy(deep=True)
+    if ranked.empty or "variable" not in ranked.columns or not variables:
+        return ranked.iloc[0:0].copy(deep=True)
+
+    order = {variable: index for index, variable in enumerate(variables)}
+    filtered = ranked[ranked["variable"].astype(str).isin(order)].copy(deep=True)
+    if filtered.empty:
+        return filtered
+    filtered["_candidate_order"] = filtered["variable"].astype(str).map(order)
+    filtered = filtered.sort_values("_candidate_order", kind="mergesort").drop(columns=["_candidate_order"])
+    return filtered
 
 
 def _select_candidates(causal_review_candidates: pd.DataFrame, top_n: int | None) -> pd.DataFrame:

@@ -264,3 +264,31 @@ def test_causal_review_runner_passes_conditional_baseline_maxlag(monkeypatch):
     assert captured["lag_mode"] == "ranked_window"
     assert captured["lag_window"] == 2
     assert captured["fallback_maxlag"] == 6
+
+
+def test_causal_review_runner_limits_evidence_and_summary_to_top_n():
+    frame = _frame_with_lagged_signal()
+    candidates = pd.DataFrame([{"variable": "x1"}, {"variable": "x2"}, {"variable": "x"}])
+    ranked = pd.DataFrame(
+        [
+            {"variable": "x1", "candidate_grade": "A", "final_score": 0.9},
+            {"variable": "x2", "candidate_grade": "B", "final_score": 0.8},
+            {"variable": "x", "candidate_grade": "C", "final_score": 0.7},
+        ]
+    )
+
+    out = run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=3,
+        min_rows=80,
+        top_n=2,
+    )
+
+    expected = ["x1", "x2"]
+    assert out["conditional_granger_scores"]["variable"].tolist() == expected
+    assert out["causal_review_report"]["variable"].tolist() == expected
+    assert out["causal_review_evidence"]["variable"].tolist() == expected
+    assert set(out["final_review_summary"]["variable"]) == set(expected)

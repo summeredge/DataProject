@@ -292,3 +292,28 @@ def test_causal_review_runner_limits_evidence_and_summary_to_top_n():
     assert out["causal_review_report"]["variable"].tolist() == expected
     assert out["causal_review_evidence"]["variable"].tolist() == expected
     assert set(out["final_review_summary"]["variable"]) == set(expected)
+
+
+def test_causal_review_runner_keeps_unranked_selected_candidate_across_review_tables():
+    frame = _frame_with_lagged_signal()
+    frame["x_model_only"] = np.roll(frame["x"].to_numpy(), 1)
+    candidates = pd.DataFrame([{"variable": "x1"}, {"variable": "x_model_only"}])
+    ranked = pd.DataFrame([{"variable": "x1", "candidate_grade": "A", "final_score": 0.9, "lag": 1}])
+
+    out = run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=ranked,
+        causal_review_candidates=candidates,
+        maxlag=3,
+        min_rows=80,
+    )
+
+    expected = ["x1", "x_model_only"]
+    assert out["conditional_granger_scores"]["variable"].tolist() == expected
+    assert out["causal_review_report"]["variable"].tolist() == expected
+    assert out["causal_review_evidence"]["variable"].tolist() == expected
+    assert out["final_review_summary"]["variable"].tolist() == expected
+    unranked = out["causal_review_evidence"].set_index("variable").loc["x_model_only"]
+    assert pd.isna(unranked["candidate_grade"])
+    assert pd.isna(unranked["final_score"])

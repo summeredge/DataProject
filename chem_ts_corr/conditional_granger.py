@@ -55,6 +55,7 @@ def run_conditional_granger_tests(
         scipy_available = False
 
     for variable in variables:
+        effective_controls = [c for c in controls if c != variable]
         base_row = {
             "variable": variable,
             "status": "",
@@ -67,7 +68,7 @@ def run_conditional_granger_tests(
             "base_condition_number": np.nan,
             "full_condition_number": np.nan,
             "condition_number": np.nan,
-            "control_columns": ",".join(controls),
+            "control_columns": ",".join(effective_controls),
             "n_rows": 0,
             "tested_lags": "",
             "lag_mode": lag_mode or "",
@@ -89,7 +90,7 @@ def run_conditional_granger_tests(
         y_name = target
         y_series = pd.to_numeric(frame[target], errors="coerce")
         x_series = pd.to_numeric(frame[variable], errors="coerce")
-        control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in controls}
+        control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in effective_controls}
         lag_values = _candidate_lags_for_variable(variable, maxlag, candidate_lags)
         base_row["tested_lags"] = ",".join(str(lag) for lag in lag_values)
         if not lag_values:
@@ -274,8 +275,7 @@ def _valid_lag_center(value: object) -> int | None:
     lag = _parse_lag(value)
     if lag is None:
         return None
-    center = abs(lag)
-    return center if center >= 1 else None
+    return lag if lag >= 1 else None
 
 
 def _valid_positive_lag(value: object) -> int | None:

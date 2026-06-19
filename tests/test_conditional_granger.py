@@ -311,3 +311,61 @@ def test_conditional_granger_skips_empty_candidate_lags_and_records_tested_lags(
     assert row["status"] == "skipped: no candidate lags"
     assert row["tested_lags"] == ""
     assert int(row["baseline_maxlag"]) == 3
+
+
+def test_build_candidate_lag_windows_uses_fallback_for_negative_lag_without_abs_center():
+    ranked = pd.DataFrame([{"variable": "x", "lag": -12}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=5)
+
+    assert out["x"] == [1, 2, 3, 4, 5]
+    assert 12 not in out["x"]
+
+
+def test_build_candidate_lag_windows_uses_fallback_for_zero_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 0}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=4)
+
+    assert out["x"] == [1, 2, 3, 4]
+
+
+def test_build_candidate_lag_windows_keeps_positive_lag_center():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 8}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=4)
+
+    assert out["x"] == [6, 7, 8, 9, 10]
+
+
+def test_conditional_granger_excludes_current_candidate_from_controls():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(456)
+    x1 = rng.normal(size=n)
+    load = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.45 * target[t - 1] + 0.35 * x1[t - 1] + 0.2 * load[t - 1] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x1": x1, "load": load}, index=idx)
+
+    overlap = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x1"],
+        control_columns=["x1"],
+        maxlag=3,
+        min_rows=80,
+    ).iloc[0]
+    with_load = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x1"],
+        control_columns=["load"],
+        maxlag=3,
+        min_rows=80,
+    ).iloc[0]
+
+    assert overlap["control_columns"] == ""
+    assert str(overlap["status"]).startswith("ok")
+    assert with_load["control_columns"] == "load"

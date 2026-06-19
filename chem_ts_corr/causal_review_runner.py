@@ -41,7 +41,7 @@ def run_causal_review_stage(
     """
     selected_candidates = _select_candidates(causal_review_candidates, top_n=top_n)
     variables = _candidate_variables(selected_candidates)
-    ranked_features_for_review = _ranked_features_for_candidates(ranked_features, variables)
+    ranked_features_for_review = _review_features_for_candidates(ranked_features, selected_candidates, variables)
 
     if not variables:
         return {
@@ -132,18 +132,35 @@ def _conditional_candidate_lags(
     )
 
 
-def _ranked_features_for_candidates(ranked_features: pd.DataFrame, variables: list[str]) -> pd.DataFrame:
+def _review_features_for_candidates(
+    ranked_features: pd.DataFrame,
+    selected_candidates: pd.DataFrame,
+    variables: list[str],
+) -> pd.DataFrame:
     ranked = ranked_features.copy(deep=True)
-    if ranked.empty or "variable" not in ranked.columns or not variables:
-        return ranked.iloc[0:0].copy(deep=True)
+    candidate_columns = ["variable"]
+    ranked_columns = list(ranked.columns) if not ranked.empty else []
+    columns = [*candidate_columns, *[col for col in ranked_columns if col != "variable"]]
+    if not variables:
+        return pd.DataFrame(columns=columns)
 
-    order = {variable: index for index, variable in enumerate(variables)}
-    filtered = ranked[ranked["variable"].astype(str).isin(order)].copy(deep=True)
-    if filtered.empty:
-        return filtered
-    filtered["_candidate_order"] = filtered["variable"].astype(str).map(order)
-    filtered = filtered.sort_values("_candidate_order", kind="mergesort").drop(columns=["_candidate_order"])
-    return filtered
+    review = pd.DataFrame({"variable": variables})
+    if ranked.empty or "variable" not in ranked.columns:
+        for col in columns:
+            if col not in review.columns:
+                review[col] = pd.NA
+        return review[columns].copy(deep=True)
+
+    ranked = ranked.copy(deep=True)
+    ranked["_variable_key"] = ranked["variable"].astype(str)
+    ranked = ranked.drop_duplicates(subset=["_variable_key"], keep="first")
+    review["_variable_key"] = review["variable"].astype(str)
+    merged = review.merge(ranked.drop(columns=["variable"]), on="_variable_key", how="left", sort=False)
+    merged = merged.drop(columns=["_variable_key"])
+    for col in columns:
+        if col not in merged.columns:
+            merged[col] = pd.NA
+    return merged[columns].copy(deep=True)
 
 
 def _select_candidates(causal_review_candidates: pd.DataFrame, top_n: int | None) -> pd.DataFrame:

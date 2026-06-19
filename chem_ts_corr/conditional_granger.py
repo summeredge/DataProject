@@ -43,7 +43,7 @@ def run_conditional_granger_tests(
     if target not in frame.columns:
         raise ValueError(f"target column not found: {target}")
 
-    controls = [c for c in (control_columns or []) if c in frame.columns and c != target]
+    controls = _normalized_controls(control_columns, frame.columns, target)
     baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
 
@@ -55,7 +55,7 @@ def run_conditional_granger_tests(
         scipy_available = False
 
     for variable in variables:
-        effective_controls = [c for c in controls if c != variable]
+        effective_controls = _effective_controls(controls, variable)
         base_row = {
             "variable": variable,
             "status": "",
@@ -68,7 +68,7 @@ def run_conditional_granger_tests(
             "base_condition_number": np.nan,
             "full_condition_number": np.nan,
             "condition_number": np.nan,
-            "control_columns": ",".join(effective_controls),
+            "control_columns": ",".join(str(control) for control in effective_controls),
             "n_rows": 0,
             "tested_lags": "",
             "lag_mode": lag_mode or "",
@@ -94,7 +94,10 @@ def run_conditional_granger_tests(
         lag_values = _candidate_lags_for_variable(variable, maxlag, candidate_lags)
         base_row["tested_lags"] = ",".join(str(lag) for lag in lag_values)
         if not lag_values:
-            base_row["status"] = "skipped: no candidate lags"
+            if (lag_mode or "") in {"ranked_window", "best_only"} and candidate_lags is not None and str(variable) in candidate_lags:
+                base_row["status"] = "skipped: non-positive screening lag"
+            else:
+                base_row["status"] = "skipped: no candidate lags"
             rows.append(base_row)
             continue
 
@@ -244,16 +247,40 @@ def build_candidate_lag_windows(
     safe_fallback_maxlag = max(1, int(fallback_maxlag))
     for variable in variables:
         name = str(variable)
-        center = _valid_lag_center(ranked_lags.get(name))
+        raw_lag = ranked_lags.get(name)
+        parsed_lag = _parse_lag(raw_lag)
+        center = _valid_lag_center(raw_lag)
         if center is None:
-            end = min(safe_maxlag, safe_fallback_maxlag)
-            lags = range(1, end + 1) if end >= 1 else range(0)
+            if name in ranked_lags and parsed_lag is not None and parsed_lag <= 0:
+                lags = range(0)
+            else:
+                end = min(safe_maxlag, safe_fallback_maxlag)
+                lags = range(1, end + 1) if end >= 1 else range(0)
         else:
             start = max(1, center - safe_window)
             end = min(safe_maxlag, center + safe_window)
             lags = range(start, end + 1) if end >= start else range(0)
         out[name] = sorted(set(int(lag) for lag in lags if 1 <= int(lag) <= safe_maxlag))
     return out
+
+
+def _normalized_controls(control_columns: list[str] | None, frame_columns: pd.Index, target: str) -> list[object]:
+    existing_by_text = {str(column): column for column in frame_columns}
+    target_text = str(target)
+    controls: list[object] = []
+    seen: set[str] = set()
+    for column in control_columns or []:
+        text = str(column)
+        if text == target_text or text in seen or text not in existing_by_text:
+            continue
+        controls.append(existing_by_text[text])
+        seen.add(text)
+    return controls
+
+
+def _effective_controls(controls: list[object], variable: str) -> list[object]:
+    variable_text = str(variable)
+    return [control for control in controls if str(control) != variable_text]
 
 
 def _candidate_lags_for_variable(

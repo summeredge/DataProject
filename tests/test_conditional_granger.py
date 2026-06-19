@@ -313,21 +313,20 @@ def test_conditional_granger_skips_empty_candidate_lags_and_records_tested_lags(
     assert int(row["baseline_maxlag"]) == 3
 
 
-def test_build_candidate_lag_windows_uses_fallback_for_negative_lag_without_abs_center():
+def test_build_candidate_lag_windows_skips_negative_lag_without_abs_center():
     ranked = pd.DataFrame([{"variable": "x", "lag": -12}])
 
     out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=5)
 
-    assert out["x"] == [1, 2, 3, 4, 5]
-    assert 12 not in out["x"]
+    assert out["x"] == []
 
 
-def test_build_candidate_lag_windows_uses_fallback_for_zero_lag():
+def test_build_candidate_lag_windows_skips_zero_lag():
     ranked = pd.DataFrame([{"variable": "x", "lag": 0}])
 
     out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=4)
 
-    assert out["x"] == [1, 2, 3, 4]
+    assert out["x"] == []
 
 
 def test_build_candidate_lag_windows_keeps_positive_lag_center():
@@ -369,3 +368,65 @@ def test_conditional_granger_excludes_current_candidate_from_controls():
     assert overlap["control_columns"] == ""
     assert str(overlap["status"]).startswith("ok")
     assert with_load["control_columns"] == "load"
+
+
+def test_conditional_granger_ranked_window_marks_negative_lag_skipped():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=60,
+        candidate_lags={"x": []},
+        lag_mode="ranked_window",
+    )
+
+    row = out.iloc[0]
+    assert row["status"] == "skipped: non-positive screening lag"
+    assert row["tested_lags"] == ""
+
+
+def test_conditional_granger_full_scan_still_scans_all_lags():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=4,
+        min_rows=60,
+        candidate_lags=None,
+        lag_mode="full_scan",
+    )
+
+    assert out.iloc[0]["tested_lags"] == "1,2,3,4"
+
+
+def test_conditional_granger_normalizes_control_columns_per_candidate():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(789)
+    frame = pd.DataFrame(
+        {
+            "target": rng.normal(size=n),
+            "x1": rng.normal(size=n),
+            "load": rng.normal(size=n),
+        },
+        index=idx,
+    )
+
+    duplicate_controls = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["load", "load", "x1"], maxlag=3, min_rows=80
+    ).iloc[0]
+    only_self = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["x1"], maxlag=3, min_rows=80
+    ).iloc[0]
+    missing_control = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["missing", "load"], maxlag=3, min_rows=80
+    ).iloc[0]
+
+    assert duplicate_controls["control_columns"] == "load"
+    assert only_self["control_columns"] == ""
+    assert missing_control["control_columns"] == "load"

@@ -9,6 +9,7 @@ from chem_ts_corr.causal_review_service import REPORT_COLUMNS, build_causal_revi
 from chem_ts_corr.final_review_summary import SUMMARY_COLUMNS, build_final_review_summary
 from chem_ts_corr.conditional_granger import (
     OUT_COLS,
+    build_candidate_lag_window_status,
     build_candidate_lag_windows,
     run_conditional_granger_tests,
 )
@@ -58,7 +59,7 @@ def run_causal_review_stage(
         model_variable_importance=model_variable_importance,
     )
 
-    candidate_lags = _conditional_candidate_lags(
+    candidate_lag_status = _conditional_candidate_lag_status(
         ranked_features=ranked_features_for_review,
         variables=variables,
         maxlag=maxlag,
@@ -66,6 +67,8 @@ def run_causal_review_stage(
         window=conditional_lag_window,
         fallback_maxlag=conditional_fallback_maxlag,
     )
+    candidate_lags = None if candidate_lag_status is None else {k: v["lags"] for k, v in candidate_lag_status.items()}
+    candidate_lag_status_values = None if candidate_lag_status is None else {k: str(v["status"]) for k, v in candidate_lag_status.items()}
     conditional_granger_scores = run_conditional_granger_tests(
         frame=frame,
         target=target,
@@ -74,6 +77,7 @@ def run_causal_review_stage(
         maxlag=maxlag,
         min_rows=min_rows,
         candidate_lags=candidate_lags,
+        candidate_lag_status=candidate_lag_status_values,
         baseline_maxlag=conditional_baseline_maxlag,
         lag_mode=conditional_lag_mode,
         lag_window=conditional_lag_window,
@@ -106,6 +110,31 @@ def run_causal_review_stage(
     }
 
 
+def _conditional_candidate_lag_status(
+    *,
+    ranked_features: pd.DataFrame,
+    variables: list[str],
+    maxlag: int,
+    mode: str,
+    window: int,
+    fallback_maxlag: int,
+) -> dict[str, dict[str, object]] | None:
+    if mode == "full_scan":
+        return None
+    if mode == "ranked_window":
+        effective_window = window
+    elif mode == "best_only":
+        effective_window = 0
+    else:
+        raise ValueError(f"unsupported conditional_lag_mode: {mode}")
+    return build_candidate_lag_window_status(
+        ranked_features=ranked_features,
+        variables=variables,
+        maxlag=maxlag,
+        window=effective_window,
+        fallback_maxlag=fallback_maxlag,
+    )
+
 def _conditional_candidate_lags(
     *,
     ranked_features: pd.DataFrame,
@@ -137,31 +166,49 @@ def _review_features_for_candidates(
     selected_candidates: pd.DataFrame,
     variables: list[str],
 ) -> pd.DataFrame:
+    selected = selected_candidates.copy(deep=True)
+    if "variable" not in selected.columns:
+        selected = pd.DataFrame({"variable": variables})
+    else:
+        selected = selected[selected["variable"].astype(str).isin(set(variables))].copy(deep=True)
+        selected["variable"] = selected["variable"].astype(str)
+
     ranked = ranked_features.copy(deep=True)
-    candidate_columns = ["variable"]
+    selected_columns = list(selected.columns)
     ranked_columns = list(ranked.columns) if not ranked.empty else []
-    columns = [*candidate_columns, *[col for col in ranked_columns if col != "variable"]]
+    columns = [*selected_columns, *[col for col in ranked_columns if col not in selected_columns]]
+    if "variable" not in columns:
+        columns.insert(0, "variable")
     if not variables:
         return pd.DataFrame(columns=columns)
 
-    review = pd.DataFrame({"variable": variables})
     if ranked.empty or "variable" not in ranked.columns:
         for col in columns:
-            if col not in review.columns:
-                review[col] = pd.NA
-        return review[columns].copy(deep=True)
+            if col not in selected.columns:
+                selected[col] = pd.NA
+        return selected[columns].copy(deep=True)
 
     ranked = ranked.copy(deep=True)
     ranked["_variable_key"] = ranked["variable"].astype(str)
     ranked = ranked.drop_duplicates(subset=["_variable_key"], keep="first")
-    review["_variable_key"] = review["variable"].astype(str)
-    merged = review.merge(ranked.drop(columns=["variable"]), on="_variable_key", how="left", sort=False)
+    selected["_variable_key"] = selected["variable"].astype(str)
+    merged = selected.merge(ranked.drop(columns=["variable"]), on="_variable_key", how="left", sort=False, suffixes=("", "__ranked"))
     merged = merged.drop(columns=["_variable_key"])
+
+    for col in ranked_columns:
+        if col == "variable":
+            continue
+        ranked_col = f"{col}__ranked"
+        if col in selected_columns and ranked_col in merged.columns:
+            merged[col] = merged[col].combine_first(merged[ranked_col])
+            merged = merged.drop(columns=[ranked_col])
+        elif ranked_col in merged.columns:
+            merged[col] = merged[ranked_col]
+            merged = merged.drop(columns=[ranked_col])
     for col in columns:
         if col not in merged.columns:
             merged[col] = pd.NA
     return merged[columns].copy(deep=True)
-
 
 def _select_candidates(causal_review_candidates: pd.DataFrame, top_n: int | None) -> pd.DataFrame:
     selected = causal_review_candidates.copy(deep=True)

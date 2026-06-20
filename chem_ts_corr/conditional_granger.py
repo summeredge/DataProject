@@ -35,6 +35,7 @@ def run_conditional_granger_tests(
     maxlag: int = 12,
     min_rows: int = 60,
     candidate_lags: dict[str, list[int]] | None = None,
+    candidate_lag_status: dict[str, str] | None = None,
     baseline_maxlag: int | None = None,
     lag_mode: str | None = None,
     lag_window: int | None = None,
@@ -92,9 +93,16 @@ def run_conditional_granger_tests(
         x_series = pd.to_numeric(frame[variable], errors="coerce")
         control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in effective_controls}
         lag_values = _candidate_lags_for_variable(variable, maxlag, candidate_lags)
+        lag_status = (candidate_lag_status or {}).get(str(variable), "")
         base_row["tested_lags"] = ",".join(str(lag) for lag in lag_values)
         if not lag_values:
-            if (lag_mode or "") in {"ranked_window", "best_only"} and candidate_lags is not None and str(variable) in candidate_lags:
+            if lag_status == "non_positive_screening_lag":
+                base_row["status"] = "skipped: non-positive screening lag"
+            elif lag_status == "ranked_lag_outside_maxlag":
+                base_row["status"] = "skipped: ranked lag outside maxlag"
+            elif lag_status == "invalid_screening_lag":
+                base_row["status"] = "skipped: invalid screening lag"
+            elif (lag_mode or "") in {"ranked_window", "best_only"} and candidate_lags is not None and str(variable) in candidate_lags:
                 base_row["status"] = "skipped: non-positive screening lag"
             else:
                 base_row["status"] = "skipped: no candidate lags"
@@ -102,31 +110,31 @@ def run_conditional_granger_tests(
             continue
 
         base_df = pd.DataFrame(index=frame.index)
-        base_df[y_name] = y_series
+        base_df["__target_current"] = y_series
         # baseline model: target lags + control lags. Build these once per
         # variable because they do not change across candidate x lags.
         y_lag_cols = []
         for l in range(1, baseline_lag_limit + 1):
-            col = f"y_lag_{l}"
+            col = f"__target_lag_{l}"
             base_df[col] = y_series.shift(l)
             y_lag_cols.append(col)
         control_lag_cols = []
         for c, series in control_series.items():
             for l in range(1, baseline_lag_limit + 1):
-                col = f"{c}_lag_{l}"
+                col = f"__control__{len(control_lag_cols)}__lag_{l}"
                 base_df[col] = series.shift(l)
                 control_lag_cols.append(col)
         base_cols = y_lag_cols + control_lag_cols
 
         for lag in lag_values:
             # full model adds exactly the candidate lag being tested.
-            x_lag_col = f"x_lag_{lag}"
+            x_lag_col = f"__candidate_lag_{lag}"
             df = base_df.assign(**{x_lag_col: x_series.shift(lag)}).dropna()
             n = len(df)
             if n < min_rows:
                 continue
 
-            y = df[y_name].to_numpy(dtype=float)
+            y = df["__target_current"].to_numpy(dtype=float)
             full_cols = base_cols + [x_lag_col]
 
             x_base = np.column_stack([np.ones(n), df[base_cols].to_numpy(dtype=float)])
@@ -202,6 +210,8 @@ def run_conditional_granger_tests(
             if best["collinearity_status"] == "high_collinearity_risk"
             else ("ok" if scipy_available else "ok: scipy unavailable, p_value is NaN")
         )
+        if lag_status == "fallback_missing_ranked_lag" and status.startswith("ok"):
+            status = status.replace("ok", "ok: fallback_missing_ranked_lag", 1)
         base_row.update(
             {
                 "status": status,
@@ -231,6 +241,25 @@ def build_candidate_lag_windows(
     window: int = 5,
     fallback_maxlag: int = 24,
 ) -> dict[str, list[int]]:
+    return {
+        variable: values["lags"]
+        for variable, values in build_candidate_lag_window_status(
+            ranked_features=ranked_features,
+            variables=variables,
+            maxlag=maxlag,
+            window=window,
+            fallback_maxlag=fallback_maxlag,
+        ).items()
+    }
+
+
+def build_candidate_lag_window_status(
+    ranked_features: pd.DataFrame,
+    variables: list[str],
+    maxlag: int,
+    window: int = 5,
+    fallback_maxlag: int = 24,
+) -> dict[str, dict[str, object]]:
     ranked_lags: dict[str, object] = {}
     if not ranked_features.empty and {"variable", "lag"}.issubset(ranked_features.columns):
         for _, row in ranked_features.iterrows():
@@ -241,26 +270,40 @@ def build_candidate_lag_windows(
             if name not in ranked_lags:
                 ranked_lags[name] = row.get("lag")
 
-    out: dict[str, list[int]] = {}
+    out: dict[str, dict[str, object]] = {}
     safe_maxlag = int(maxlag)
     safe_window = max(0, int(window))
     safe_fallback_maxlag = max(1, int(fallback_maxlag))
     for variable in variables:
         name = str(variable)
+        has_ranked_lag = name in ranked_lags
         raw_lag = ranked_lags.get(name)
         parsed_lag = _parse_lag(raw_lag)
         center = _valid_lag_center(raw_lag)
+        status = "ranked_lag_window"
         if center is None:
-            if name in ranked_lags and parsed_lag is not None and parsed_lag <= 0:
+            if has_ranked_lag and parsed_lag is not None and parsed_lag <= 0:
                 lags = range(0)
+                status = "non_positive_screening_lag"
+            elif has_ranked_lag and parsed_lag is None and not pd.isna(raw_lag):
+                lags = range(0)
+                status = "invalid_screening_lag"
             else:
                 end = min(safe_maxlag, safe_fallback_maxlag)
                 lags = range(1, end + 1) if end >= 1 else range(0)
+                status = "fallback_missing_ranked_lag"
         else:
             start = max(1, center - safe_window)
             end = min(safe_maxlag, center + safe_window)
-            lags = range(start, end + 1) if end >= start else range(0)
-        out[name] = sorted(set(int(lag) for lag in lags if 1 <= int(lag) <= safe_maxlag))
+            if end < start:
+                lags = range(0)
+                status = "ranked_lag_outside_maxlag"
+            else:
+                lags = range(start, end + 1)
+        out[name] = {
+            "lags": sorted(set(int(lag) for lag in lags if 1 <= int(lag) <= safe_maxlag)),
+            "status": status,
+        }
     return out
 
 

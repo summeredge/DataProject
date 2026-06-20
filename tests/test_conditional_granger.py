@@ -430,3 +430,64 @@ def test_conditional_granger_normalizes_control_columns_per_candidate():
     assert duplicate_controls["control_columns"] == "load"
     assert only_self["control_columns"] == ""
     assert missing_control["control_columns"] == "load"
+
+
+def test_conditional_granger_ranked_window_marks_positive_lag_outside_maxlag():
+    frame = pd.DataFrame({"target": np.arange(140, dtype=float), "x": np.arange(140, dtype=float)})
+    ranked = pd.DataFrame([{"variable": "x", "lag": 120}])
+    candidate_lags = build_candidate_lag_windows(ranked, ["x"], maxlag=24, window=2, fallback_maxlag=6)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=24,
+        min_rows=60,
+        candidate_lags=candidate_lags,
+        candidate_lag_status={"x": "ranked_lag_outside_maxlag"},
+        lag_mode="ranked_window",
+    )
+
+    assert out.iloc[0]["status"] == "skipped: ranked lag outside maxlag"
+
+
+def test_conditional_granger_ranked_window_marks_zero_lag_skipped():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=60,
+        candidate_lags={"x": []},
+        candidate_lag_status={"x": "non_positive_screening_lag"},
+        lag_mode="ranked_window",
+    )
+
+    assert out.iloc[0]["status"] == "skipped: non-positive screening lag"
+
+
+def test_conditional_granger_internal_columns_do_not_collide_with_x_y_controls():
+    n = 160
+    rng = np.random.default_rng(987)
+    frame = pd.DataFrame(
+        {
+            "target": rng.normal(size=n),
+            "candidate": rng.normal(size=n),
+            "x": rng.normal(size=n),
+            "y": rng.normal(size=n),
+        }
+    )
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["candidate"],
+        control_columns=["x", "y"],
+        maxlag=3,
+        min_rows=80,
+    )
+
+    assert out.iloc[0]["tested_lags"] == "1,2,3"
+    assert out.iloc[0]["control_columns"] == "x,y"

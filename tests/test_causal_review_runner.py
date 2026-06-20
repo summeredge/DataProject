@@ -317,3 +317,46 @@ def test_causal_review_runner_keeps_unranked_selected_candidate_across_review_ta
     unranked = out["causal_review_evidence"].set_index("variable").loc["x_model_only"]
     assert pd.isna(unranked["candidate_grade"])
     assert pd.isna(unranked["final_score"])
+
+
+def test_causal_review_runner_marks_unranked_ranked_window_fallback():
+    frame = _frame_with_lagged_signal()
+    candidates = pd.DataFrame([{"variable": "x"}])
+
+    out = run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=pd.DataFrame(columns=["variable", "lag"]),
+        causal_review_candidates=candidates,
+        maxlag=3,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+    )
+
+    assert "fallback" in str(out["conditional_granger_scores"].iloc[0]["status"])
+
+
+def test_causal_review_runner_preserves_selected_candidate_metadata_without_ranked_match():
+    frame = _frame_with_lagged_signal()
+    frame["x_model_only"] = np.roll(frame["x"].to_numpy(), 1)
+    candidates = pd.DataFrame([
+        {"variable": "x_model_only", "candidate_grade": "B", "final_score": 0.66, "lag": 3}
+    ])
+
+    out = run_causal_review_stage(
+        frame=frame,
+        target="target",
+        ranked_features=pd.DataFrame(columns=["variable", "candidate_grade", "final_score", "lag"]),
+        causal_review_candidates=candidates,
+        maxlag=3,
+        min_rows=80,
+    )
+
+    evidence = out["causal_review_evidence"].iloc[0]
+    summary = out["final_review_summary"].iloc[0]
+    assert evidence["candidate_grade"] == "B"
+    assert float(evidence["final_score"]) == 0.66
+    assert int(evidence["lag"]) == 3
+    assert summary["screening_grade"] == "B"
+    assert float(summary["screening_score"]) == 0.66
+    assert int(summary["screening_lag"]) == 3

@@ -135,3 +135,22 @@ def test_causal_review_report_risk_limited_takes_precedence():
     assert row["final_review_decision"] == "risk_limited_review"
     assert "not a causal conclusion" in row["interpretation"]
     assert "不是因果结论" in row["final_review_reason"]
+
+
+def test_causal_review_report_high_collinearity_with_contribution_is_stat_limited():
+    candidates = pd.DataFrame([{"variable": "x1"}])
+    conditional = pd.DataFrame(
+        [
+            {
+                "variable": "x1",
+                "status": "high_collinearity_risk",
+                "fdr_q_value": pd.NA,
+                "predictive_contribution": 0.04,
+            }
+        ]
+    )
+
+    out = build_causal_review_report(pd.DataFrame(), candidates, conditional)
+
+    assert out.iloc[0]["final_review_decision"] == "manual_review_only"
+    assert "高共线性" in out.iloc[0]["final_review_reason"]

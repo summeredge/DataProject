@@ -96,3 +96,17 @@ def test_missing_optional_tables_do_not_raise():
 def test_interpretation_is_fixed():
     out = build_final_review_summary(_evidence([{"variable": "x1", "integrated_review_decision": "priority_review"}]))
     assert set(out["interpretation"]) == {INTERPRETATION}
+
+
+def test_ranked_lag_outside_maxlag_status_generates_hint():
+    out = build_final_review_summary(_evidence([
+        {
+            "variable": "x1",
+            "integrated_review_decision": "insufficient_evidence",
+            "conditional_granger_status": "skipped: ranked lag outside maxlag",
+        }
+    ]))
+
+    assert out.loc[0, "lag_boundary_hint"]
+    assert "扩大 maxlag" in out.loc[0, "lag_boundary_hint"]
+    assert "工艺停留时间" in out.loc[0, "lag_boundary_hint"]

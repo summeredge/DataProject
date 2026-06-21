@@ -10,7 +10,6 @@ from chem_ts_corr.final_review_summary import SUMMARY_COLUMNS, build_final_revie
 from chem_ts_corr.conditional_granger import (
     OUT_COLS,
     build_candidate_lag_window_status,
-    build_candidate_lag_windows,
     run_conditional_granger_tests,
 )
 
@@ -128,31 +127,6 @@ def _conditional_candidate_lag_status(
     else:
         raise ValueError(f"unsupported conditional_lag_mode: {mode}")
     return build_candidate_lag_window_status(
-        ranked_features=ranked_features,
-        variables=variables,
-        maxlag=maxlag,
-        window=effective_window,
-        fallback_maxlag=fallback_maxlag,
-    )
-
-def _conditional_candidate_lags(
-    *,
-    ranked_features: pd.DataFrame,
-    variables: list[str],
-    maxlag: int,
-    mode: str,
-    window: int,
-    fallback_maxlag: int,
-) -> dict[str, list[int]] | None:
-    if mode == "full_scan":
-        return None
-    if mode == "ranked_window":
-        effective_window = window
-    elif mode == "best_only":
-        effective_window = 0
-    else:
-        raise ValueError(f"unsupported conditional_lag_mode: {mode}")
-    return build_candidate_lag_windows(
         ranked_features=ranked_features,
         variables=variables,
         maxlag=maxlag,

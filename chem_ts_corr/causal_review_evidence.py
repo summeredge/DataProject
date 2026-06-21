@@ -244,9 +244,18 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, st
     conditional_status = _text(row.get("conditional_granger_status")).lower()
     conditional_q = _number(row.get("conditional_fdr_q_value"))
     contribution = _number(row.get("predictive_contribution"))
-    conditional_supported = conditional_status.startswith("ok") and conditional_q is not None and conditional_q <= 0.10
+    is_fallback_signal = "fallback_missing_ranked_lag" in conditional_status
+    conditional_supported = (
+        conditional_status.startswith("ok")
+        and not is_fallback_signal
+        and conditional_q is not None
+        and conditional_q <= 0.10
+    )
     if conditional_status.startswith("ok") and conditional_q is not None:
-        if conditional_q <= 0.05:
+        if is_fallback_signal and conditional_q <= 0.10:
+            score += 0.4
+            reasons.append("fallback_predictive_signal")
+        elif conditional_q <= 0.05:
             score += 2.0
             reasons.append("conditional_granger_supported")
         elif conditional_q <= 0.10:
@@ -320,9 +329,20 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, st
         contribution=contribution,
         granger_supported=granger_supported,
         sign_consistency=sign_consistency,
+        conditional_status=conditional_status,
+        conditional_q=conditional_q,
+        model_lift=model_lift,
+        rolling_stability=rolling_stability,
     )
     evidence_level = _evidence_level(score, risk_level, conditional_status)
-    decision = _integrated_decision(evidence_level, risk_level, data_priority, statistical_limit_level, has_hard_downgrade)
+    decision = _integrated_decision(
+        evidence_level,
+        risk_level,
+        data_priority,
+        statistical_limit_level,
+        has_hard_downgrade,
+        row=row,
+    )
     integrated_reasons = list(reasons)
     if has_hard_downgrade:
         integrated_reasons.append("hard_downgrade_risk")
@@ -388,14 +408,24 @@ def _data_priority(
     contribution: float | None,
     granger_supported: bool,
     sign_consistency: float | None,
+    conditional_status: str,
+    conditional_q: float | None,
+    model_lift: float | None,
+    rolling_stability: float | None,
 ) -> str:
     has_positive_contribution = contribution is not None and contribution > 0
-    if (
-        grade in {"A", "B"}
-        or evidence_score >= 3.5
-        or (importance_rank is not None and importance_rank <= 5)
+    has_independent_strong_evidence = (
+        (importance_rank is not None and importance_rank <= 5)
+        or (model_lift is not None and model_lift >= 0.05)
+        or (rolling_stability is not None and rolling_stability >= 0.7)
         or (conditional_supported and has_positive_contribution)
         or (granger_supported and sign_consistency is not None and sign_consistency >= 0.8)
+    )
+    high_collinearity_without_q = conditional_status == "high_collinearity_risk" and conditional_q is None
+    if (
+        (grade in {"A", "B"} and not high_collinearity_without_q)
+        or evidence_score >= 3.5
+        or has_independent_strong_evidence
     ):
         return "high"
     if (
@@ -471,8 +501,14 @@ def _integrated_decision(
     data_priority: str,
     statistical_limit_level: str,
     has_hard_downgrade: bool,
+    *,
+    row: pd.Series,
 ) -> str:
     if has_hard_downgrade:
+        return "manual_review_only"
+    if _is_high_collinearity_without_independent_strong_evidence(row):
+        if evidence_level == "moderate_predictive_evidence":
+            return "secondary_review_with_statistical_limit"
         return "manual_review_only"
     if data_priority == "high" and statistical_limit_level in {"medium", "strong"}:
         return "priority_review_with_statistical_limit"
@@ -491,6 +527,24 @@ def _integrated_decision(
     if risk_level == "strong":
         return "manual_review_only"
     return "manual_review_only"
+
+
+def _is_high_collinearity_without_independent_strong_evidence(row: pd.Series) -> bool:
+    status = _text(row.get("conditional_granger_status")).lower()
+    q = _number(row.get("conditional_fdr_q_value"))
+    if status != "high_collinearity_risk" or q is not None:
+        return False
+    importance_rank = _number(row.get("model_importance_rank"))
+    model_lift = _number(row.get("model_lift"))
+    rolling_stability = _number(row.get("rolling_stability"))
+    sign_consistency = _number(row.get("rolling_sign_consistency"))
+    granger_q = _number(row.get("granger_fdr_q_value"))
+    return not (
+        (importance_rank is not None and importance_rank <= 5)
+        or (model_lift is not None and model_lift >= 0.05)
+        or (rolling_stability is not None and rolling_stability >= 0.7)
+        or (granger_q is not None and granger_q <= 0.10 and sign_consistency is not None and sign_consistency >= 0.8)
+    )
 
 
 def _is_insufficient_status(status: str) -> bool:

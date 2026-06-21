@@ -165,12 +165,22 @@ def _key_reason(decision: str, row: pd.Series) -> str:
 
 
 def _lag_boundary_hint(row: pd.Series, cond: dict[str, Any], tested_lags: Any) -> str:
-    haystack = " ".join(_text(row.get(col)) for col in [
-        "risk_flags",
-        "statistical_limit_reason",
-        "evidence_reason",
-        "integrated_review_reason",
-    ])
+    haystack = " ".join(
+        _text(value).lower()
+        for value in [
+            row.get("risk_flags"),
+            row.get("statistical_limit_reason"),
+            row.get("evidence_reason"),
+            row.get("integrated_review_reason"),
+            row.get("conditional_granger_status"),
+            cond.get("status"),
+            tested_lags,
+            row.get("lag"),
+            cond.get("screening_lag"),
+        ]
+    )
+    if "ranked lag outside maxlag" in haystack:
+        return "主筛查滞后超出当前 maxlag，建议扩大 maxlag 或按工艺停留时间设定复核窗口。"
     if any(token in haystack for token in ["lag_boundary", "lag_boundary_risk", "滞后边界"]):
         return "命中滞后边界，建议扩大 max_lag 或结合工艺停留时间确认。"
     return ""

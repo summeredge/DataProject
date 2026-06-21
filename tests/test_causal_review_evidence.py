@@ -255,3 +255,71 @@ def test_moderate_evidence_with_statistical_limit_records_limit_reason():
     assert row["integrated_review_decision"] in {"secondary_review", "secondary_review_with_statistical_limit"}
     assert row["statistical_limit_reason"]
     assert "lag_boundary" in row["statistical_limit_reason"]
+
+
+def test_fallback_missing_ranked_lag_is_limited_not_supported():
+    conditional = pd.DataFrame([
+        {
+            "variable": "x1",
+            "status": "ok: fallback_missing_ranked_lag",
+            "best_lag": 1,
+            "min_p_value": 0.001,
+            "fdr_q_value": 0.01,
+            "predictive_contribution": 0.08,
+        }
+    ])
+
+    out = build_causal_review_evidence(_ranked(candidate_grade="D"), conditional)
+    row = out.iloc[0]
+
+    assert "conditional_granger_supported" not in row["evidence_reason"]
+    assert "fallback_predictive_signal" in row["evidence_reason"]
+    assert row["data_priority"] != "high"
+    assert row["integrated_review_decision"] != "priority_review"
+
+
+def test_high_collinearity_without_q_does_not_priority_from_grade_only():
+    conditional = pd.DataFrame([
+        {
+            "variable": "x1",
+            "status": "high_collinearity_risk",
+            "best_lag": 1,
+            "min_p_value": pd.NA,
+            "fdr_q_value": pd.NA,
+            "predictive_contribution": 0.04,
+        }
+    ])
+
+    out = build_causal_review_evidence(_ranked(candidate_grade="A"), conditional)
+    row = out.iloc[0]
+
+    assert row["data_priority"] == "medium"
+    assert row["integrated_review_decision"] != "priority_review_with_statistical_limit"
+    assert row["integrated_review_decision"] in {"manual_review_only", "secondary_review_with_statistical_limit"}
+    assert "high_collinearity_limited_signal" in row["integrated_review_reason"]
+
+
+def test_high_collinearity_with_independent_model_support_can_keep_limited_priority():
+    conditional = pd.DataFrame([
+        {
+            "variable": "x1",
+            "status": "high_collinearity_risk",
+            "best_lag": 1,
+            "min_p_value": pd.NA,
+            "fdr_q_value": pd.NA,
+            "predictive_contribution": 0.04,
+        }
+    ])
+    model_importance = pd.DataFrame([
+        {"variable": "x1", "importance_rank": 2, "max_importance": 0.2, "best_model_lag": 1}
+    ])
+
+    out = build_causal_review_evidence(
+        _ranked(candidate_grade="A"),
+        conditional,
+        model_variable_importance=model_importance,
+    )
+    row = out.iloc[0]
+
+    assert row["data_priority"] == "high"
+    assert row["integrated_review_decision"] == "priority_review_with_statistical_limit"

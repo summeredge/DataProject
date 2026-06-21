@@ -1584,6 +1584,21 @@ function elapsedSeconds(startedAt) {
   return ((performance.now() - startedAt) / 1000).toFixed(1);
 }
 
+function formatRunningElapsed(message, startedAt) {
+  return `${message}（已运行 ${elapsedSeconds(startedAt)} 秒）`;
+}
+
+function startStatusTimer(message, startedAt) {
+  setStatus(formatRunningElapsed(message, startedAt));
+  return setInterval(() => {
+    setStatus(formatRunningElapsed(message, startedAt));
+  }, 100);
+}
+
+function stopStatusTimer(timerId) {
+  if (timerId) clearInterval(timerId);
+}
+
 function appendElapsed(message, startedAt) {
   return `${message} 总耗时：${elapsedSeconds(startedAt)} 秒。`;
 }
@@ -1591,7 +1606,7 @@ function appendElapsed(message, startedAt) {
 async function runEnhancedScreening() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   const startedAt = performance.now();
-  setStatus("正在运行增强筛选：补充验证预测增益和时间稳定性...（计时中）");
+  const timerId = startStatusTimer("正在运行增强筛选：补充验证预测增益和时间稳定性...", startedAt);
   el("runEnhancedScreening").disabled = true;
   try {
     const form = new FormData();
@@ -1608,6 +1623,7 @@ async function runEnhancedScreening() {
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runEnhancedScreening").disabled = !currentRunId;
   }
 }
@@ -1615,7 +1631,7 @@ async function runEnhancedScreening() {
 async function runGranger() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   const startedAt = performance.now();
-  setStatus("正在运行 Granger 二级验证...（计时中）");
+  const timerId = startStatusTimer("正在运行 Granger 二级验证...", startedAt);
   el("runGranger").disabled = true;
   try {
     const form = new FormData();
@@ -1628,6 +1644,7 @@ async function runGranger() {
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runGranger").disabled = !currentRunId;
   }
 }
@@ -1635,7 +1652,7 @@ async function runGranger() {
 async function runModel() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   const startedAt = performance.now();
-  setStatus("正在运行随机森林模型解释...（计时中）");
+  const timerId = startStatusTimer("正在运行随机森林模型解释...", startedAt);
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
   try {
@@ -1654,6 +1671,7 @@ async function runModel() {
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runModel").disabled = !currentRunId;
     el("runCausalReview").disabled = !currentRunId;
   }
@@ -1662,7 +1680,7 @@ async function runModel() {
 async function runCausalReview() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   const startedAt = performance.now();
-  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...（计时中）");
+  const timerId = startStatusTimer("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...", startedAt);
   el("runCausalReview").disabled = true;
   renderSingleVariableReviewCard(null);
   try {
@@ -1693,6 +1711,7 @@ async function runCausalReview() {
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
   }
 }

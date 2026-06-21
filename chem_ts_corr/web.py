@@ -24,6 +24,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -52,6 +53,7 @@ DOWNLOAD_FILES = {
     "final_review_summary.csv",
     "causal_review_evidence.csv",
     "enhanced_validation_summary.csv",
+    "llm_prompt.md",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -145,6 +147,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path in {"/run_causal_review", "/api/run_causal_review"}:
                 self._send_json(_run_causal_review_response(self))
+                return
+            if self.path == "/api/llm_prompt":
+                self._send_json(_llm_prompt_response(self))
                 return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
@@ -628,6 +633,23 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    top_n = _int_field(form, "top_n", 20)
+    report_type = _field(form, "report_type", "apc_advice")
+    package = build_llm_analysis_package(output_dir, top_n=top_n)
+    prompt = build_llm_prompt(package, report_type=report_type)
+    (output_dir / "llm_prompt.md").write_text(prompt, encoding="utf-8")
+    return {
+        "prompt": prompt,
+        "package": package,
+        "downloads": _download_links(run_id, output_dir),
+        "message": "AI 综合解读 Prompt 已生成。",
     }
 
 
@@ -1197,6 +1219,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
         <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
+        <button class="tab-button" data-tab="llmReportTab">AI 综合解读</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
       </div>
 
@@ -1317,6 +1340,27 @@ INDEX_HTML = r"""<!doctype html>
         <div id="causalReviewEvidenceTable" class="empty">未运行 综合证据复核。</div>
       </div>
 
+
+      <div id="llmReportTab" class="tab-panel">
+        <h2>AI 综合解读</h2>
+        <div class="help">当前阶段只生成可复制/下载的结构化 Prompt，不调用外部 API，不保存 API Key，也不发起外部网络请求。</div>
+        <div class="row">
+          <label>Top N<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
+          <label>报告类型
+            <select id="llmReportType">
+              <option value="apc_advice">APC/DCS 工程建议</option>
+              <option value="general">通用综合解读</option>
+            </select>
+          </label>
+        </div>
+        <div class="actions">
+          <button id="generateLlmPrompt">生成 Prompt</button>
+          <button id="copyLlmPrompt">复制 Prompt</button>
+          <span id="llmPromptDownload" class="download-buttons"><a href="#">下载 llm_prompt.md</a></span>
+        </div>
+        <textarea id="llmPrompt" rows="20" style="width:100%;" placeholder="生成后将在这里显示 Prompt"></textarea>
+      </div>
+
       <div id="downloadsTab" class="tab-panel">
         <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
@@ -1352,6 +1396,8 @@ el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
+el("generateLlmPrompt").addEventListener("click", generateLlmPrompt);
+el("copyLlmPrompt").addEventListener("click", copyLlmPrompt);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1714,6 +1760,38 @@ async function runCausalReview() {
     stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
   }
+}
+
+
+async function generateLlmPrompt() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在生成 AI 综合解读 Prompt...", startedAt);
+  el("generateLlmPrompt").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("top_n", el("llmTopN").value || "20");
+    form.append("report_type", el("llmReportType").value || "apc_advice");
+    form.append("anonymize", "false");
+    const data = await postForm("/api/llm_prompt", form);
+    el("llmPrompt").value = data.prompt || "";
+    renderDownloadTarget("llmPromptDownload", data.downloads || [], "llm_prompt.md");
+    renderDownloads(data.downloads || []);
+    setStatus(appendElapsed(data.message || "AI 综合解读 Prompt 已生成。", startedAt));
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("generateLlmPrompt").disabled = false;
+  }
+}
+
+async function copyLlmPrompt() {
+  const text = el("llmPrompt").value || "";
+  if (!text) return setStatus("请先生成 Prompt。");
+  await navigator.clipboard.writeText(text);
+  setStatus("Prompt 已复制到剪贴板。");
 }
 
 function activateTab(tabId) {
@@ -2688,6 +2766,8 @@ function reset() {
   el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
+  el("llmPrompt").value = "";
+  el("llmPromptDownload").innerHTML = "";
   el("overview").innerHTML = "";
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";

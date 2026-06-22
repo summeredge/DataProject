@@ -90,7 +90,7 @@ def generate_llm_report(
     anonymize: bool = False,
 ) -> dict[str, Any]:
     path = Path(run_dir)
-    package = build_llm_analysis_package(path, top_n=top_n, anonymize=anonymize)
+    package = build_llm_analysis_package(path, top_n=top_n)
     prompt = build_llm_prompt(package, report_type=report_type)
     result = call_openai_compatible_chat(config, prompt)
     report = str(result.get("report", ""))

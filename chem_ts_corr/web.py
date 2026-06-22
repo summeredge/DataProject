@@ -24,6 +24,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.llm_api import LLMCallConfig, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
 
@@ -54,6 +55,7 @@ DOWNLOAD_FILES = {
     "causal_review_evidence.csv",
     "enhanced_validation_summary.csv",
     "llm_prompt.md",
+    "llm_report.md",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -150,6 +152,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/llm_prompt":
                 self._send_json(_llm_prompt_response(self))
+                return
+            if self.path == "/api/llm_report":
+                self._send_json(_llm_report_response(self))
                 return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
@@ -642,6 +647,7 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     output_dir = _resolve_run_dir(run_id)
     top_n = _int_field(form, "top_n", 20)
     report_type = _field(form, "report_type", "apc_advice")
+    anonymize = _bool_field(form, "anonymize", False)
     package = build_llm_analysis_package(output_dir, top_n=top_n)
     prompt = build_llm_prompt(package, report_type=report_type)
     (output_dir / "llm_prompt.md").write_text(prompt, encoding="utf-8")
@@ -650,6 +656,41 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         "package": package,
         "downloads": _download_links(run_id, output_dir),
         "message": "AI 综合解读 Prompt 已生成。",
+    }
+
+
+def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    api_key = _field(form, "api_key")
+    output_dir = _resolve_run_dir(run_id)
+    config = LLMCallConfig(
+        provider=_field(form, "provider", "deepseek"),
+        base_url=_field(form, "base_url", "https://api.deepseek.com"),
+        model=_field(form, "model", "deepseek-chat"),
+        api_key=api_key,
+        temperature=_float_field(form, "temperature", 0.2),
+        max_tokens=_int_field(form, "max_tokens", 4096),
+    )
+    try:
+        result = generate_llm_report(
+            output_dir,
+            config,
+            top_n=_int_field(form, "top_n", 20),
+            report_type=_field(form, "report_type", "apc_advice"),
+            anonymize=_bool_field(form, "anonymize", False),
+        )
+    except Exception as exc:
+        message = str(exc)
+        if api_key:
+            message = message.replace(api_key, redact_secret(api_key))
+        raise RuntimeError(message) from exc
+    return {
+        "report": result.get("report", ""),
+        "prompt": result.get("prompt", ""),
+        "usage": result.get("usage", {}),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "LLM 报告已生成。",
     }
 
 
@@ -1343,7 +1384,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="llmReportTab" class="tab-panel">
         <h2>AI 综合解读</h2>
-        <div class="help">当前阶段只生成可复制/下载的结构化 Prompt，不调用外部 API，不保存 API Key，也不发起外部网络请求。</div>
+        <div class="help">可先生成结构化 Prompt，也可调用 DeepSeek/OpenAI-compatible Chat Completions 生成报告。API Key 仅随本次请求发送，不保存到磁盘、不写入 Prompt/报告。</div>
         <div class="row">
           <label>Top N<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
@@ -1352,13 +1393,31 @@ INDEX_HTML = r"""<!doctype html>
               <option value="general">通用综合解读</option>
             </select>
           </label>
+          <label><input id="llmAnonymize" type="checkbox"> 匿名化变量名</label>
+        </div>
+        <div class="row">
+          <label>Provider
+            <select id="llmProvider">
+              <option value="deepseek">DeepSeek</option>
+              <option value="openai">OpenAI-compatible</option>
+            </select>
+          </label>
+          <label>Base URL<input id="llmBaseUrl" value="https://api.deepseek.com"></label>
+          <label>Model<input id="llmModel" value="deepseek-chat"></label>
+          <label>API Key<input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..."></label>
+          <label>temperature<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
+          <label>max_tokens<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
         </div>
         <div class="actions">
           <button id="generateLlmPrompt">生成 Prompt</button>
           <button id="copyLlmPrompt">复制 Prompt</button>
           <span id="llmPromptDownload" class="download-buttons"><a href="#">下载 llm_prompt.md</a></span>
+          <button id="generateLlmReport">生成 DeepSeek 报告</button>
+          <button id="copyLlmReport">复制报告</button>
+          <span id="llmReportDownload" class="download-buttons"><a href="#">下载 llm_report.md</a></span>
         </div>
-        <textarea id="llmPrompt" rows="20" style="width:100%;" placeholder="生成后将在这里显示 Prompt"></textarea>
+        <textarea id="llmPrompt" rows="14" style="width:100%;" placeholder="生成后将在这里显示 Prompt"></textarea>
+        <textarea id="llmReport" rows="18" style="width:100%;" placeholder="生成后将在这里显示 LLM 报告"></textarea>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
@@ -1398,6 +1457,8 @@ el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
 el("generateLlmPrompt").addEventListener("click", generateLlmPrompt);
 el("copyLlmPrompt").addEventListener("click", copyLlmPrompt);
+el("generateLlmReport").addEventListener("click", generateLlmReport);
+el("copyLlmReport").addEventListener("click", copyLlmReport);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1773,7 +1834,7 @@ async function generateLlmPrompt() {
     form.append("run_id", currentRunId);
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
-    form.append("anonymize", "false");
+    form.append("anonymize", el("llmAnonymize").checked ? "true" : "false");
     const data = await postForm("/api/llm_prompt", form);
     el("llmPrompt").value = data.prompt || "";
     renderDownloadTarget("llmPromptDownload", data.downloads || [], "llm_prompt.md");
@@ -1792,6 +1853,45 @@ async function copyLlmPrompt() {
   if (!text) return setStatus("请先生成 Prompt。");
   await navigator.clipboard.writeText(text);
   setStatus("Prompt 已复制到剪贴板。");
+}
+
+async function generateLlmReport() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  if (!el("llmApiKey").value) return setStatus("请输入 API Key。API Key 不会保存。");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在调用 LLM 生成 AI 综合解读报告...", startedAt);
+  el("generateLlmReport").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("provider", el("llmProvider").value || "deepseek");
+    form.append("base_url", el("llmBaseUrl").value || "https://api.deepseek.com");
+    form.append("model", el("llmModel").value || "deepseek-chat");
+    form.append("api_key", el("llmApiKey").value);
+    form.append("temperature", el("llmTemperature").value || "0.2");
+    form.append("max_tokens", el("llmMaxTokens").value || "4096");
+    form.append("top_n", el("llmTopN").value || "20");
+    form.append("report_type", el("llmReportType").value || "apc_advice");
+    form.append("anonymize", el("llmAnonymize").checked ? "true" : "false");
+    const data = await postForm("/api/llm_report", form);
+    el("llmReport").value = data.report || "";
+    el("llmPrompt").value = data.prompt || el("llmPrompt").value || "";
+    renderDownloadTarget("llmReportDownload", data.downloads || [], "llm_report.md");
+    renderDownloads(data.downloads || []);
+    setStatus(appendElapsed(data.message || "LLM 报告已生成。", startedAt));
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("generateLlmReport").disabled = false;
+  }
+}
+
+async function copyLlmReport() {
+  const text = el("llmReport").value || "";
+  if (!text) return setStatus("请先生成 LLM 报告。");
+  await navigator.clipboard.writeText(text);
+  setStatus("LLM 报告已复制到剪贴板。");
 }
 
 function activateTab(tabId) {
@@ -2768,6 +2868,9 @@ function reset() {
   el("downloads").innerHTML = "";
   el("llmPrompt").value = "";
   el("llmPromptDownload").innerHTML = "";
+  el("llmReport").value = "";
+  el("llmReportDownload").innerHTML = "";
+  el("llmApiKey").value = "";
   el("overview").innerHTML = "";
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";

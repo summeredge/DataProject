@@ -69,12 +69,19 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
 
     control = []
     ranked_by_var = _index_by_variable(ranked)
-    for name in list(dict.fromkeys([str(r.get("variable")) for r in _rows(ranked, top_n) + _rows(final, top_n) if r.get("variable")])):
+    control_names = list(dict.fromkeys([str(r.get("variable")) for r in _rows(ranked, top_n) + _rows(final, top_n) if r.get("variable")]))
+    all_variable_names = set(control_names)
+    for df in (ranked, final, evidence, risk, conditional):
+        if not df.empty and "variable" in df.columns:
+            all_variable_names.update(str(v) for v in df["variable"].dropna().tolist())
+    for name in control_names:
         fields = {}
         for source in (ranked_by_var.get(name, {}), final_by_var.get(name, {}), evidence_by_var.get(name, {}), risk_by_var.get(name, {})):
             fields.update({k: v for k, v in source.items() if k not in fields or fields[k] in ("", None)})
-        role, comment = _classify_control(name, fields)
-        control.append(_clean({"variable": name, "suggested_control_role": role, "control_comment": comment, "lag": fields.get("lag") or fields.get("best_lag"), "risk_flags": fields.get("risk_flags") or fields.get("conflict_type"), "review_decision": fields.get("integrated_review_decision")}))
+        classified = _classify_control(name, fields, all_variable_names)
+        role = classified.pop("suggested_control_role")
+        comment = classified.pop("control_comment")
+        control.append(_clean({"variable": name, "suggested_control_role": role, **classified, "control_comment": comment, "lag": fields.get("lag") or fields.get("best_lag"), "risk_flags": fields.get("risk_flags") or fields.get("conflict_type"), "review_decision": fields.get("integrated_review_decision")}))
 
     risks = []
     for name in list(dict.fromkeys([str(r.get("variable")) for r in _rows(risk, top_n * 3) + _rows(final, top_n * 3) + _rows(evidence, top_n * 3) if r.get("variable")])):
@@ -115,6 +122,12 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选、监控变量候选、不建议直接用于控制的变量。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
+- 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。
+- .PV 可以作为过程变量或控制回路历史数据代表；即使属于 FIC/TIC/PIC/AIC 等 PID 回路，相关性、滞后、Granger、模型解释等分析仍可使用 .PV。
+- loop_mv_candidate 表示“当前 PV 数据代表的控制回路可进入 MV 候选复核”，不是说 .PV 点本身就是最终写入 MV。
+- 实际操纵点必须由工程人员核对 .SV、.MV、远程设定值或 APC 可写入点；有同回路 SV/MV 时应说明 related_sv/related_mv，没有时也应提示核对 DCS 中是否存在写入点。
+- 控制回路历史数据通常属于闭环数据，必须提示 PID 控制动作、SV/MV 变化、MV 饱和、自动/手动状态对相关性和预测性的影响。
+- 不得机械排除 .PV 并写成“.PV 不能做 MV，所以只能作为监控变量”；也不得写成“.PV 点本身就是最终写入 MV”。
 
 ## 风险解释必须覆盖
 common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
@@ -200,24 +213,89 @@ def _risk_handling(text: str) -> str:
     return "；".join(matches) if matches else "需结合工艺机理、趋势图和现场可操纵性做人工复核。"
 
 
-def _classify_control(name: str, fields: dict[str, Any]) -> tuple[str, str]:
+def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set[str] | None = None) -> dict[str, Any]:
+    all_variable_names = all_variable_names or set()
     text = (name + ";" + ";".join(str(v) for v in fields.values())).lower()
+    loop_tag, suffix = _split_loop_point(name)
+    related_sv = f"{loop_tag}.SV" if loop_tag and f"{loop_tag}.SV" in all_variable_names else None
+    related_mv = f"{loop_tag}.MV" if loop_tag and f"{loop_tag}.MV" in all_variable_names else None
+    role_hint = _control_role_hint(name, loop_tag, suffix)
+
+    base = {
+        "suggested_control_role": "manual_review_only",
+        "loop_tag": loop_tag,
+        "related_sv": related_sv,
+        "related_mv": related_mv,
+        "has_related_sv": bool(related_sv),
+        "has_related_mv": bool(related_mv),
+        "role_hint": role_hint,
+        "control_comment": "需结合工艺机理、趋势图和现场可操纵性做人工复核。",
+    }
+
     if any(x in text for x in ["target_leads_variable", "strong_formula_leakage", "weak_or_incomplete_evidence"]):
-        return "not_recommended_for_control", "存在目标领先、公式泄漏或证据不足风险，不建议直接用于控制。"
+        base.update(
+            suggested_control_role="not_recommended_for_control",
+            control_comment="存在目标领先、公式泄漏或证据不足风险，不建议直接用于控制。",
+        )
+        return base
+
     downgrade = [x for x in ["closed_loop_suspect", "common_capacity_driver", "high_collinearity_risk", "fallback_missing_ranked_lag"] if x in text]
-    base_comment = "需确认是否可操纵；不得仅凭变量名直接认定为 MV。"
-    if any(x in name.lower() for x in [".mv", ".sv", "fic"]):
+    lower = name.lower()
+    is_loop_pv = suffix == "PV" and _looks_like_control_loop(loop_tag or "")
+
+    if suffix == "MV":
         role = "mv_candidate"
-    elif any(x in name.lower() for x in ["load", "feed", "flow", "负荷", "流量", "进料"]):
+        comment = f"{name} 名称指向 MV，可作为实际操纵点候选复核；仍需确认 DCS/APC 写入权限、约束和安全边界。"
+    elif suffix == "SV":
+        role = "mv_candidate"
+        comment = f"{name} 是设定值候选，可作为实际操纵点候选复核；需确认 APC 是否允许调整该设定值及其上下限/联锁约束。"
+    elif is_loop_pv:
+        role = "loop_mv_candidate"
+        write_points = "/".join(p for p in [related_sv, related_mv, "远程设定值", "APC 可写入点"] if p)
+        if not (related_sv or related_mv):
+            write_points = "SV/MV/远程设定值/APC 可写入点"
+        comment = (
+            f"{name} 可作为 {loop_tag} 控制回路的历史数据代表；{loop_tag} 控制回路可作为 MV 候选复核，"
+            f"实际操纵点需核对或确认 {write_points}。由于该变量来自闭环回路，需检查控制模式、SV/MV 变化、"
+            "MV 饱和、自动/手动状态和 lag_boundary 风险；不得把 PV 点本身直接视为最终写入 MV。"
+        )
+    elif any(x in lower for x in ["load", "feed", "flow", "负荷", "流量", "进料"]):
         role = "dv_feedforward_candidate"
-    elif any(x in name.lower() for x in [".pv", "ai", "ti", "pi"]):
+        comment = "名称提示可能为负荷/进料/流量扰动或前馈候选；需验证可测性、领先滞后和现场可用性。"
+    elif suffix == "PV" or any(x in lower for x in ["ai", "ti", "pi"]):
         role = "monitor_candidate"
+        comment = "名称提示偏过程测量/监控变量，可用于分析和监控；是否进入控制候选需结合回路、写入点和工程机理确认。"
     else:
         role = "manual_review_only"
+        comment = "变量角色不明确，需人工确认工艺含义、可操纵性和与目标的工程链路。"
+
     if downgrade:
-        role = "monitor_candidate" if role == "mv_candidate" else "manual_review_only"
-        base_comment += " 因 " + ",".join(downgrade) + " 已保守降级。"
-    return role, base_comment
+        if role in {"mv_candidate", "loop_mv_candidate", "dv_feedforward_candidate"}:
+            role = "manual_review_only" if role != "mv_candidate" else "monitor_candidate"
+        comment += " 因 " + ",".join(downgrade) + " 风险，需保守降级或人工复核。"
+    base.update(suggested_control_role=role, control_comment=comment)
+    return base
+
+
+def _split_loop_point(name: str) -> tuple[str | None, str | None]:
+    match = re.match(r"^(.+)\.([A-Za-z]+)$", str(name).strip())
+    if not match:
+        return None, None
+    return match.group(1), match.group(2).upper()
+
+
+def _looks_like_control_loop(loop_tag: str) -> bool:
+    return bool(re.match(r"^(FIC|TIC|PIC|AIC|LIC|PIC|FRC|TRC|PRC|ARC|LRC|FC|TC|PC|AC|LC)\w*", loop_tag.upper()))
+
+
+def _control_role_hint(name: str, loop_tag: str | None, suffix: str | None) -> str:
+    if suffix == "PV" and _looks_like_control_loop(loop_tag or ""):
+        return "PV 可作为控制回路历史数据代表；回路可进入 MV 候选复核，实际写入点需另行确认。"
+    if suffix == "SV":
+        return "设定值候选；需确认 APC 是否允许调整。"
+    if suffix == "MV":
+        return "MV 写入点候选；需确认权限、约束和安全边界。"
+    return _role_hint(name)["role_hint"]
 
 
 def _role_hint(name: str) -> dict[str, str]:

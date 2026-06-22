@@ -1989,7 +1989,8 @@ function markdownToHtml(markdown) {
       inList = false;
     }
   };
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     if (line.trim().startsWith("```")) {
       if (inCode) {
         html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
@@ -2003,6 +2004,13 @@ function markdownToHtml(markdown) {
     }
     if (inCode) {
       codeLines.push(line);
+      continue;
+    }
+    if (isMarkdownTableStart(lines, i)) {
+      closeList();
+      const parsed = parseMarkdownTable(lines, i);
+      html.push(markdownTableToHtml(parsed.headers, parsed.rows));
+      i = parsed.nextIndex - 1;
       continue;
     }
     const heading = line.match(/^(#{1,3})\s+(.+)$/);
@@ -2031,6 +2039,45 @@ function markdownToHtml(markdown) {
   closeList();
   if (inCode) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
   return html.join("");
+}
+
+function isMarkdownTableStart(lines, index) {
+  return isMarkdownTableRow(lines[index]) && isMarkdownTableSeparator(lines[index + 1]);
+}
+
+function isMarkdownTableRow(line) {
+  return typeof line === "string" && line.includes("|") && splitMarkdownTableRow(line).length > 1;
+}
+
+function isMarkdownTableSeparator(line) {
+  if (!isMarkdownTableRow(line)) return false;
+  return splitMarkdownTableRow(line).every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function parseMarkdownTable(lines, startIndex) {
+  const headers = splitMarkdownTableRow(lines[startIndex]);
+  const rows = [];
+  let nextIndex = startIndex + 2;
+  while (nextIndex < lines.length && isMarkdownTableRow(lines[nextIndex]) && lines[nextIndex].trim()) {
+    const row = splitMarkdownTableRow(lines[nextIndex]);
+    while (row.length < headers.length) row.push("");
+    rows.push(row.slice(0, headers.length));
+    nextIndex += 1;
+  }
+  return { headers, rows, nextIndex };
+}
+
+function markdownTableToHtml(headers, rows) {
+  const head = headers.map((cell) => `<th>${inlineMarkdown(cell)}</th>`).join("");
+  const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${inlineMarkdown(cell)}</td>`).join("")}</tr>`).join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 function inlineMarkdown(text) {
@@ -2724,13 +2771,12 @@ function compareValues(a, b) {
 }
 
 function tableCellClass(column, value) {
-  const classes = [];
+  const name = String(column || "");
   const number = typeof value === "number" ? value : Number(value);
-  if (Number.isFinite(number)) classes.push("numeric");
-  if (/reason|interpretation|risk|action|use|flags|status|hint|comment|control_columns|tested_lags|recommendation|decision/i.test(column)) {
-    classes.push("wrap-cell");
-  }
-  return classes.join(" ");
+  const numericColumn = /(?:^|_)(score|lag|rmse|p_value|q_value|rank|count|n_rows|condition_number|importance|contribution)(?:$|_)/i.test(name);
+  if (Number.isFinite(number) || numericColumn) return "numeric";
+  const wrapColumn = /interpretation|reason|action|risk_flags|control_columns|evidence_reason|statistical_limit_reason|key_reason|suggested_next_action|lag_boundary_hint/i.test(name);
+  return wrapColumn ? "wrap-cell" : "";
 }
 
 function formatValue(value) {

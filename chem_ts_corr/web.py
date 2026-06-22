@@ -24,7 +24,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
-from chem_ts_corr.llm_api import LLMCallConfig, generate_llm_report, redact_secret
+from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
 
@@ -155,6 +155,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/llm_report":
                 self._send_json(_llm_report_response(self))
+                return
+            if self.path == "/api/llm_connection":
+                self._send_json(_llm_connection_response(self))
                 return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
@@ -658,6 +661,28 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     }
 
 
+
+def _llm_connection_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    api_key = _field(form, "api_key")
+    config = LLMCallConfig(
+        provider=_field(form, "provider", "deepseek"),
+        base_url=_field(form, "base_url", "https://api.deepseek.com"),
+        model=_field(form, "model", "deepseek-chat"),
+        api_key=api_key,
+        temperature=_float_field(form, "temperature", 0.2),
+        max_tokens=_int_field(form, "max_tokens", 16),
+        timeout=30.0,
+    )
+    try:
+        call_openai_compatible_chat(config, "请回复 OK")
+    except Exception as exc:
+        message = str(exc)
+        if api_key:
+            message = message.replace(api_key, redact_secret(api_key))
+        return {"ok": False, "message": f"API 连接失败：{message}"}
+    return {"ok": True, "message": "API 连接成功"}
+
 def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
@@ -1126,6 +1151,7 @@ INDEX_HTML = r"""<!doctype html>
     .chart svg { width:100%; height:320px; display:block; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
+    .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:6px; }
@@ -1167,7 +1193,8 @@ INDEX_HTML = r"""<!doctype html>
     .clickable-row:hover { background:#f6f8fa; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } }
+    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -1383,7 +1410,7 @@ INDEX_HTML = r"""<!doctype html>
       <div id="llmReportTab" class="tab-panel">
         <h2>AI 综合解读</h2>
         <div class="help">可先生成结构化 Prompt，也可调用 DeepSeek/OpenAI-compatible Chat Completions 生成报告。API Key 仅随本次请求发送，不保存到磁盘、不写入 Prompt/报告。</div>
-        <div class="row">
+        <div class="llm-config-grid">
           <label>Top N<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
             <select id="llmReportType">
@@ -1391,8 +1418,6 @@ INDEX_HTML = r"""<!doctype html>
               <option value="general">通用综合解读</option>
             </select>
           </label>
-        </div>
-        <div class="row">
           <label>Provider
             <select id="llmProvider">
               <option value="deepseek">DeepSeek</option>
@@ -1405,10 +1430,10 @@ INDEX_HTML = r"""<!doctype html>
           <label>temperature<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
           <label>max_tokens<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
         </div>
+        <div id="llmConnectionStatus" class="help" aria-live="polite">尚未测试 API 连接。</div>
         <div class="actions">
           <button id="generateLlmPrompt">生成 Prompt</button>
-          <button id="copyLlmPrompt">复制 Prompt</button>
-          <span id="llmPromptDownload" class="download-buttons"><a href="#">下载 llm_prompt.md</a></span>
+          <button id="testLlmConnection">测试 API 连接</button>
           <button id="generateLlmReport">生成 DeepSeek 报告</button>
           <button id="copyLlmReport">复制报告</button>
           <span id="llmReportDownload" class="download-buttons"><a href="#">下载 llm_report.md</a></span>
@@ -1453,7 +1478,7 @@ el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
 el("generateLlmPrompt").addEventListener("click", generateLlmPrompt);
-el("copyLlmPrompt").addEventListener("click", copyLlmPrompt);
+el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
 
@@ -1833,7 +1858,6 @@ async function generateLlmPrompt() {
     form.append("report_type", el("llmReportType").value || "apc_advice");
     const data = await postForm("/api/llm_prompt", form);
     el("llmPrompt").value = data.prompt || "";
-    renderDownloadTarget("llmPromptDownload", data.downloads || [], "llm_prompt.md");
     renderDownloads(data.downloads || []);
     setStatus(appendElapsed(data.message || "AI 综合解读 Prompt 已生成。", startedAt));
   } catch (error) {
@@ -1844,11 +1868,34 @@ async function generateLlmPrompt() {
   }
 }
 
-async function copyLlmPrompt() {
-  const text = el("llmPrompt").value || "";
-  if (!text) return setStatus("请先生成 Prompt。");
-  await navigator.clipboard.writeText(text);
-  setStatus("Prompt 已复制到剪贴板。");
+async function testLlmConnection() {
+  if (!el("llmApiKey").value) {
+    el("llmConnectionStatus").textContent = "请输入 API Key。API Key 不会保存。";
+    return;
+  }
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在测试 API 连接...", startedAt);
+  el("testLlmConnection").disabled = true;
+  el("llmConnectionStatus").textContent = "正在测试 API 连接...";
+  try {
+    const form = new FormData();
+    form.append("provider", el("llmProvider").value || "deepseek");
+    form.append("base_url", el("llmBaseUrl").value || "https://api.deepseek.com");
+    form.append("model", el("llmModel").value || "deepseek-chat");
+    form.append("api_key", el("llmApiKey").value);
+    form.append("temperature", el("llmTemperature").value || "0.2");
+    form.append("max_tokens", "16");
+    const data = await postForm("/api/llm_connection", form);
+    el("llmConnectionStatus").textContent = data.message || (data.ok ? "API 连接成功" : "API 连接失败");
+    setStatus(appendElapsed(data.message || "API 连接测试完成。", startedAt));
+  } catch (error) {
+    const message = error.message || String(error);
+    el("llmConnectionStatus").textContent = message;
+    setStatus(appendElapsed(message, startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("testLlmConnection").disabled = false;
+  }
 }
 
 async function generateLlmReport() {
@@ -2862,7 +2909,7 @@ function reset() {
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
   el("llmPrompt").value = "";
-  el("llmPromptDownload").innerHTML = "";
+  el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
   el("llmReport").value = "";
   el("llmReportDownload").innerHTML = "";
   el("llmApiKey").value = "";

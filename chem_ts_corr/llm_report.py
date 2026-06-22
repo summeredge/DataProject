@@ -119,15 +119,19 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 ## 硬约束
 - 不得声称发现确定性因果关系。
 - 不得使用未经限定的“X 导致 Y”、“X 是 Y 的原因”、“确定因果关系”、“可以直接作为控制变量”、“应直接投用控制”。
-- 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选、监控变量候选、不建议直接用于控制的变量。
+- 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
+- APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。
 - .PV 可以作为过程变量或控制回路历史数据代表；即使属于 FIC/TIC/PIC/AIC 等 PID 回路，相关性、滞后、Granger、模型解释等分析仍可使用 .PV。
+- FIC.PV 作为流量控制回路历史数据代表进入 loop_mv_candidate 是合理的；但 AIC/AI/TI/PI/PV 类变量默认更偏分析测量、过程状态、监控或 DV / FF 候选。
+- 只有明确存在同回路 SV/MV、远程设定值或 APC 可写入点时，AIC/AI/TI/PI/PV 类变量才可列为 loop_mv_candidate；不得仅凭 AIC/AI/TI/PI 前缀就把它们列为 MV 候选。
 - loop_mv_candidate 表示“当前 PV 数据代表的控制回路可进入 MV 候选复核”，不是说 .PV 点本身就是最终写入 MV。
 - 实际操纵点必须由工程人员核对 .SV、.MV、远程设定值或 APC 可写入点；有同回路 SV/MV 时应说明 related_sv/related_mv，没有时也应提示核对 DCS 中是否存在写入点。
 - 控制回路历史数据通常属于闭环数据，必须提示 PID 控制动作、SV/MV 变化、MV 饱和、自动/手动状态对相关性和预测性的影响。
 - 不得机械排除 .PV 并写成“.PV 不能做 MV，所以只能作为监控变量”；也不得写成“.PV 点本身就是最终写入 MV”。
+- 如果 meta/overview 显示 model_status=skipped、skip_model_lift=True 或 skip_rolling_corr=True，不得把 model_explanation_support、model_lift_support、rolling_stability_supported 作为主要证据；只能提示“输入证据字段中出现，但需核对该模块是否实际启用”。
 
 ## 风险解释必须覆盖
 common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
@@ -137,7 +141,7 @@ common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_l
 2. 与目标变量高度相关的过程变量
 3. 最需要关注的变量
 4. 相关性与因果复核证据靠前的变量
-5. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选、监控变量候选、不建议直接用于控制的变量
+5. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量
 6. 主要风险与解释限制
 7. 下一步工程验证动作
 
@@ -198,6 +202,8 @@ def _clean_value(value: Any) -> Any:
             return None
     except Exception:
         pass
+    if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+        return value.strip().lower() == "true"
     if isinstance(value, float):
         return round(value, 4)
     return value.item() if hasattr(value, "item") else value
@@ -242,6 +248,8 @@ def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set
     downgrade = [x for x in ["closed_loop_suspect", "common_capacity_driver", "high_collinearity_risk", "fallback_missing_ranked_lag"] if x in text]
     lower = name.lower()
     is_loop_pv = suffix == "PV" and _looks_like_control_loop(loop_tag or "")
+    is_measurement_heavy_loop_pv = suffix == "PV" and _is_measurement_heavy_loop(loop_tag or "")
+    has_explicit_write_point = bool(related_sv or related_mv or any(x in text for x in ["apc", "write", "writable", "remote set", "remote_set", "可写入", "写入点", "远程设定值"]))
 
     if suffix == "MV":
         role = "mv_candidate"
@@ -249,7 +257,7 @@ def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set
     elif suffix == "SV":
         role = "mv_candidate"
         comment = f"{name} 是设定值候选，可作为实际操纵点候选复核；需确认 APC 是否允许调整该设定值及其上下限/联锁约束。"
-    elif is_loop_pv:
+    elif is_loop_pv and (not is_measurement_heavy_loop_pv or has_explicit_write_point):
         role = "loop_mv_candidate"
         write_points = "/".join(p for p in [related_sv, related_mv, "远程设定值", "APC 可写入点"] if p)
         if not (related_sv or related_mv):
@@ -262,9 +270,9 @@ def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set
     elif any(x in lower for x in ["load", "feed", "flow", "负荷", "流量", "进料"]):
         role = "dv_feedforward_candidate"
         comment = "名称提示可能为负荷/进料/流量扰动或前馈候选；需验证可测性、领先滞后和现场可用性。"
-    elif suffix == "PV" or any(x in lower for x in ["ai", "ti", "pi"]):
+    elif suffix == "PV" or any(x in lower for x in ["aic", "ai", "tic", "ti", "pic", "pi"]):
         role = "monitor_candidate"
-        comment = "名称提示偏过程测量/监控变量，可用于分析和监控；是否进入控制候选需结合回路、写入点和工程机理确认。"
+        comment = "名称提示偏分析测量、过程状态、监控变量或 DV / FF 候选，可用于分析和监控；只有明确存在 SV/MV、远程设定值或 APC 可写入点时，才应列为 loop_mv_candidate。"
     else:
         role = "manual_review_only"
         comment = "变量角色不明确，需人工确认工艺含义、可操纵性和与目标的工程链路。"
@@ -285,11 +293,17 @@ def _split_loop_point(name: str) -> tuple[str | None, str | None]:
 
 
 def _looks_like_control_loop(loop_tag: str) -> bool:
-    return bool(re.match(r"^(FIC|TIC|PIC|AIC|LIC|PIC|FRC|TRC|PRC|ARC|LRC|FC|TC|PC|AC|LC)\w*", loop_tag.upper()))
+    return bool(re.match(r"^(FIC|TIC|PIC|AIC|LIC|FRC|TRC|PRC|ARC|LRC|FC|TC|PC|AC|LC)\w*", loop_tag.upper()))
+
+
+def _is_measurement_heavy_loop(loop_tag: str) -> bool:
+    return bool(re.match(r"^(AIC|AI|TIC|TI|PIC|PI)\w*", loop_tag.upper()))
 
 
 def _control_role_hint(name: str, loop_tag: str | None, suffix: str | None) -> str:
     if suffix == "PV" and _looks_like_control_loop(loop_tag or ""):
+        if _is_measurement_heavy_loop(loop_tag or ""):
+            return "PV 偏分析测量/过程状态/监控或 DV / FF 候选；只有明确存在 SV/MV、远程设定值或 APC 可写入点时，回路才进入 MV 候选复核。"
         return "PV 可作为控制回路历史数据代表；回路可进入 MV 候选复核，实际写入点需另行确认。"
     if suffix == "SV":
         return "设定值候选；需确认 APC 是否允许调整。"

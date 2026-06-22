@@ -1096,13 +1096,13 @@ INDEX_HTML = r"""<!doctype html>
     button.secondary { background:#e8edf3; color:var(--text); }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .status { min-height:22px; color:var(--muted); font-size:13px; white-space:pre-wrap; }
-    .note { color:var(--warn); font-size:13px; line-height:1.5; }
+    .note { color:var(--warn); font-size:10px; line-height:1.2; }
     .results { display:grid; gap:16px; min-width:0; align-content:start; position:relative; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     h2 { margin:0; font-size:18px; }
     .download-buttons { display:flex; gap:8px; flex-wrap:wrap; }
     .download-buttons a { display:inline-block; border-radius:6px; padding:8px 10px; background:var(--green); color:#fff; text-decoration:none; font-size:13px; }
-    .help { display:grid; gap:6px; color:var(--muted); font-size:13px; line-height:1.5; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:10px 12px; }
+    .help { display:grid; gap:4px; color:var(--muted); font-size:10px; line-height:1.25; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
     .tabs {
       position:sticky;
       top:0;
@@ -1154,11 +1154,17 @@ INDEX_HTML = r"""<!doctype html>
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:6px; }
-    .table-wrap::after { content:"拖动右下角可调整表格宽度"; display:block; padding:4px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    table { width:max-content; min-width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
-    th { position:sticky; top:0; background:#eef2f6; z-index:1; }
+    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .table-wrap::after { content:"拖动右下角可调整表格宽度，点击表头可排序"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    table { width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; }
+    th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:nowrap; }
+    th { position:sticky; top:0; background:#eef2f6; z-index:2; box-shadow:0 1px 0 var(--line); }
+    tbody tr:nth-child(even) { background:#fbfcfe; }
+    tbody tr:hover { background:#f1f5f9; }
+    th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 0 #e7ebf0; }
+    th:first-child { z-index:3; background:#eef2f6; }
+    td.numeric { text-align:right; font-variant-numeric:tabular-nums; }
+    td.wrap-cell { white-space:normal; min-width:180px; max-width:360px; line-height:1.35; }
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
     th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
@@ -1193,6 +1199,19 @@ INDEX_HTML = r"""<!doctype html>
     .clickable-row:hover { background:#f6f8fa; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
+    .markdown-report { min-height:320px; max-height:720px; overflow:auto; padding:18px 22px; border:1px solid var(--line); border-radius:8px; background:#fff; line-height:1.65; font-size:14px; }
+    .markdown-report h1, .markdown-report h2, .markdown-report h3 { margin:1.1em 0 .45em; line-height:1.25; color:var(--text); }
+    .markdown-report h1 { font-size:24px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .markdown-report h2 { font-size:20px; border-bottom:1px solid #edf0f4; padding-bottom:6px; }
+    .markdown-report h3 { font-size:16px; }
+    .markdown-report p, .markdown-report ul, .markdown-report ol { margin:.55em 0; }
+    .markdown-report blockquote { margin:10px 0; padding:8px 12px; border-left:4px solid var(--accent); background:#f8fafc; color:var(--muted); }
+    .markdown-report code { padding:2px 4px; border-radius:4px; background:#f1f5f9; font-family:Consolas,monospace; }
+    .markdown-report pre { max-height:none; margin:10px 0; }
+    .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:13px; }
+    .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
+    .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
+    .raw-report { width:100%; font-family:Consolas,monospace; font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
     @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } }
   </style>
@@ -1280,7 +1299,7 @@ INDEX_HTML = r"""<!doctype html>
 
     <section class="results">
       <div class="tabs">
-        <button class="tab-button active" data-tab="overviewTab">总览</button>
+        <button class="tab-button active" data-tab="overviewTab">初步分析</button>
         <button class="tab-button" data-tab="candidatesTab">候选变量</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
@@ -1290,7 +1309,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="overviewTab" class="tab-panel active">
-        <h2>总览</h2>
+        <h2>初步分析</h2>
         <div id="overview" class="overview-grid"></div>
         <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
@@ -1439,7 +1458,11 @@ INDEX_HTML = r"""<!doctype html>
           <span id="llmReportDownload" class="download-buttons"><a href="#">下载 llm_report.md</a></span>
         </div>
         <textarea id="llmPrompt" rows="14" style="width:100%;" placeholder="生成后将在这里显示 Prompt"></textarea>
-        <textarea id="llmReport" rows="18" style="width:100%;" placeholder="生成后将在这里显示 LLM 报告"></textarea>
+        <div id="llmReportRendered" class="markdown-report empty">生成后将在这里按 Markdown 格式显示 LLM 报告。</div>
+        <details>
+          <summary>查看 / 编辑 Markdown 原文</summary>
+          <textarea id="llmReport" class="raw-report" rows="12" placeholder="生成后将在这里显示 LLM 报告 Markdown 原文"></textarea>
+        </details>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
@@ -1481,6 +1504,7 @@ el("generateLlmPrompt").addEventListener("click", generateLlmPrompt);
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
+el("llmReport").addEventListener("input", () => renderMarkdownReport(el("llmReport").value || ""));
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1916,7 +1940,7 @@ async function generateLlmReport() {
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
     const data = await postForm("/api/llm_report", form);
-    el("llmReport").value = data.report || "";
+    setLlmReport(data.report || "");
     el("llmPrompt").value = data.prompt || el("llmPrompt").value || "";
     renderDownloadTarget("llmReportDownload", data.downloads || [], "llm_report.md");
     renderDownloads(data.downloads || []);
@@ -1934,6 +1958,85 @@ async function copyLlmReport() {
   if (!text) return setStatus("请先生成 LLM 报告。");
   await navigator.clipboard.writeText(text);
   setStatus("LLM 报告已复制到剪贴板。");
+}
+
+function setLlmReport(markdown) {
+  el("llmReport").value = markdown;
+  renderMarkdownReport(markdown);
+}
+
+function renderMarkdownReport(markdown) {
+  const container = el("llmReportRendered");
+  if (!container) return;
+  if (!markdown.trim()) {
+    container.className = "markdown-report empty";
+    container.textContent = "生成后将在这里按 Markdown 格式显示 LLM 报告。";
+    return;
+  }
+  container.className = "markdown-report";
+  container.innerHTML = markdownToHtml(markdown);
+}
+
+function markdownToHtml(markdown) {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let inList = false;
+  let inCode = false;
+  let codeLines = [];
+  const closeList = () => {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  };
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (bullet) {
+      if (!inList) {
+        html.push("<ul>");
+        inList = true;
+      }
+      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+    closeList();
+    html.push(`<p>${inlineMarkdown(line)}</p>`);
+  }
+  closeList();
+  if (inCode) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  return html.join("");
+}
+
+function inlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
 function activateTab(tabId) {
@@ -2054,7 +2157,7 @@ function renderTable(rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderTable(rows));
@@ -2096,7 +2199,7 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
@@ -2220,6 +2323,7 @@ function renderFinalReviewSummaryTable(rows) {
       } else {
         td.textContent = displayCellValue(column, row[column]);
       }
+      td.className = tableCellClass(column, row[column]);
       tr.appendChild(td);
     }
     body.appendChild(tr);
@@ -2462,7 +2566,7 @@ function renderCausalReviewTable(targetId, rows) {
   table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
+    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));
@@ -2617,6 +2721,16 @@ function compareValues(a, b) {
   const numberB = typeof b === "number" ? b : Number(b);
   if (Number.isFinite(numberA) && Number.isFinite(numberB)) return numberA - numberB;
   return String(a ?? "").localeCompare(String(b ?? ""), "zh-CN", { numeric: true });
+}
+
+function tableCellClass(column, value) {
+  const classes = [];
+  const number = typeof value === "number" ? value : Number(value);
+  if (Number.isFinite(number)) classes.push("numeric");
+  if (/reason|interpretation|risk|action|use|flags|status|hint|comment|control_columns|tested_lags|recommendation|decision/i.test(column)) {
+    classes.push("wrap-cell");
+  }
+  return classes.join(" ");
 }
 
 function formatValue(value) {
@@ -2910,7 +3024,7 @@ function reset() {
   el("downloads").innerHTML = "";
   el("llmPrompt").value = "";
   el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
-  el("llmReport").value = "";
+  setLlmReport("");
   el("llmReportDownload").innerHTML = "";
   el("llmApiKey").value = "";
   el("overview").innerHTML = "";

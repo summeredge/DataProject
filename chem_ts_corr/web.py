@@ -647,7 +647,6 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     output_dir = _resolve_run_dir(run_id)
     top_n = _int_field(form, "top_n", 20)
     report_type = _field(form, "report_type", "apc_advice")
-    anonymize = _bool_field(form, "anonymize", False)
     package = build_llm_analysis_package(output_dir, top_n=top_n)
     prompt = build_llm_prompt(package, report_type=report_type)
     (output_dir / "llm_prompt.md").write_text(prompt, encoding="utf-8")
@@ -678,7 +677,6 @@ def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
             config,
             top_n=_int_field(form, "top_n", 20),
             report_type=_field(form, "report_type", "apc_advice"),
-            anonymize=_bool_field(form, "anonymize", False),
         )
     except Exception as exc:
         message = str(exc)
@@ -1393,7 +1391,6 @@ INDEX_HTML = r"""<!doctype html>
               <option value="general">通用综合解读</option>
             </select>
           </label>
-          <label><input id="llmAnonymize" type="checkbox"> 匿名化变量名</label>
         </div>
         <div class="row">
           <label>Provider
@@ -1834,7 +1831,6 @@ async function generateLlmPrompt() {
     form.append("run_id", currentRunId);
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
-    form.append("anonymize", el("llmAnonymize").checked ? "true" : "false");
     const data = await postForm("/api/llm_prompt", form);
     el("llmPrompt").value = data.prompt || "";
     renderDownloadTarget("llmPromptDownload", data.downloads || [], "llm_prompt.md");
@@ -1872,7 +1868,6 @@ async function generateLlmReport() {
     form.append("max_tokens", el("llmMaxTokens").value || "4096");
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
-    form.append("anonymize", el("llmAnonymize").checked ? "true" : "false");
     const data = await postForm("/api/llm_report", form);
     el("llmReport").value = data.report || "";
     el("llmPrompt").value = data.prompt || el("llmPrompt").value || "";

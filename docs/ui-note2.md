@@ -1,1 +1,0 @@
-UI cleanup before testing.

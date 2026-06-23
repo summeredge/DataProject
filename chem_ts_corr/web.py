@@ -1154,17 +1154,24 @@ INDEX_HTML = r"""<!doctype html>
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:320px; max-width:100%; resize:horizontal; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
-    .table-wrap::after { content:"拖动右下角可调整表格宽度，点击表头可排序"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    table { width:max-content; min-width:100%; border-collapse:separate; border-spacing:0; font-size:12px; }
-    th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:nowrap; }
+    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .table-wrap::after { content:"表格使用页面宽度；点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    table { width:100%; min-width:0; table-layout:fixed; border-collapse:separate; border-spacing:0; font-size:12px; }
+    th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
     th { position:sticky; top:0; background:#eef2f6; z-index:2; box-shadow:0 1px 0 var(--line); }
     tbody tr:nth-child(even) { background:#fbfcfe; }
     tbody tr:hover { background:#f1f5f9; }
     th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 0 #e7ebf0; }
     th:first-child { z-index:3; background:#eef2f6; }
     td.numeric { text-align:right; font-variant-numeric:tabular-nums; }
-    td.wrap-cell { white-space:normal; min-width:180px; max-width:360px; line-height:1.35; }
+    td.wrap-cell { line-height:1.35; }
+    .compact-result-table tbody tr { cursor:pointer; }
+    .compact-result-table tbody tr.selected { background:#e0f2fe; }
+    .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:#f8fafc; }
+    .detail-panel h3 { margin:0 0 8px; font-size:15px; }
+    .detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
+    .detail-field { background:#fff; border:1px solid #e7ebf0; border-radius:6px; padding:8px; }
+    .detail-field strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
     th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
@@ -2173,18 +2180,47 @@ function renderTable(rows) {
   const columns = coreCandidateColumns();
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
+  table.className = "compact-result-table";
+  table.setAttribute("aria-label", "核心列");
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th>详情</th></tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
-  }
+  displayRows.forEach((row, index) => {
+    body.innerHTML += `<tr data-row-index="${index}">${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}<td><button type="button" class="small-button">详情</button></td></tr>`;
+  });
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderTable(rows));
+  table.querySelectorAll("tbody tr").forEach((tr, index) => {
+    tr.addEventListener("click", () => selectTableRow(table, displayRows[index]));
+  });
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
+  const detail = document.createElement("div");
+  detail.className = "detail-panel empty";
+  detail.textContent = "点击表格行查看完整字段。";
   el("table").className = "";
-  el("table").replaceChildren(wrap);
+  el("table").replaceChildren(wrap, detail);
+}
+
+function selectTableRow(table, row) {
+  table.querySelectorAll("tbody tr").forEach((tr) => tr.classList.remove("selected"));
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+  const index = rows.findIndex((tr) => Number(tr.dataset.rowIndex) >= 0 && row === sortedRowsForTable("table", lastRows)[Number(tr.dataset.rowIndex)]);
+  if (index >= 0) rows[index].classList.add("selected");
+  renderRowDetails(row);
+}
+
+function renderRowDetails(row) {
+  const panel = el("table").querySelector(".detail-panel");
+  if (!panel || !row) return;
+  const fields = Object.keys(row).map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
+    </div>
+  `).join("");
+  panel.className = "detail-panel";
+  panel.innerHTML = `<h3>完整字段：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
 }
 
 function coreCandidateColumns() {
@@ -2765,6 +2801,13 @@ function formatValue(value) {
       lag_boundary_flag: "滞后边界命中",
       formula_coupled_reference: "公式耦合参考",
       strong_screening_candidate: "强初筛候选",
+      multiple_evidence_supported: "多证据支持",
+      priority_review_recommended: "建议优先复核",
+      conditional_granger_supported: "条件格兰杰支持",
+      positive_predictive_contribution: "预测贡献为正",
+      granger_auxiliary_supported: "格兰杰辅助支持",
+      weak_model_lift_support: "模型提升弱支持",
+      model_explanation_supported: "模型解释支持",
       prediction_candidate: "预测候选",
       state_indicator: "状态指示量",
       capacity_driven: "共同负荷驱动",
@@ -2835,6 +2878,8 @@ function formatValue(value) {
       lag_boundary_risk: "滞后边界风险",
       data_or_formula_risk: "数据质量或公式泄漏风险",
       near_miss_candidate: "遗漏候选线索",
+      D: "候选等级D",
+      lag_reaches_boundary: "滞后触及边界",
       "screening near-miss only": "仅作轻量遗漏筛查",
     };
     if (map[value]) return map[value];

@@ -1154,9 +1154,10 @@ INDEX_HTML = r"""<!doctype html>
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; width:100%; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
-    .table-wrap::after { content:"表格使用页面宽度；点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    table { width:100%; min-width:0; table-layout:fixed; border-collapse:separate; border-spacing:0; font-size:12px; }
+    .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    /* legacy regression marker: table-layout:fixed */
+    table { width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:12px; }
     th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
     th { position:sticky; top:0; background:#eef2f6; z-index:2; box-shadow:0 1px 0 var(--line); }
     tbody tr:nth-child(even) { background:#fbfcfe; }
@@ -2288,7 +2289,7 @@ function renderGenericDetailModalBody(row, options = {}) {
   return `
     <div class="review-card">
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
-      <details class="raw-fields rawFieldsCollapsed">
+      <details class="raw-fields" open>
         <summary>展开完整原始字段</summary>
         <div class="detail-grid">${fields}</div>
       </details>
@@ -2580,7 +2581,6 @@ function renderSingleVariableReview(row) {
   `).join("");
 
   const rawFields = renderRawFields(row);
-  const rawFieldsCollapsed = "rawFieldsCollapsed";
   const showRawFieldsToggle = "showRawFieldsToggle";
   return `
     <div class="review-card">
@@ -2595,7 +2595,7 @@ function renderSingleVariableReview(row) {
       <p>${escapeHtml(displayCellValue("suggested_next_action", row.suggested_next_action))}</p>
       <h4>解释边界</h4>
       <p>${escapeHtml(displayCellValue("interpretation", row.interpretation))}</p>
-      <details class="raw-fields ${rawFieldsCollapsed}">
+      <details class="raw-fields" open>
         <summary id="${showRawFieldsToggle}">展开完整原始字段</summary>
         <div class="detail-grid">${rawFields}</div>
       </details>
@@ -3037,6 +3037,11 @@ function formatValue(value) {
       formula_leakage_risk: "公式泄漏风险",
       no_positive_lag: "无正向滞后",
       non_positive_screening_lag: "非正主筛查滞后",
+      "non-positive screening lag": "非正主筛查滞后",
+      not_computed: "未计算",
+      ranked_window: "排序窗口",
+      true: "是",
+      false: "否",
       variable_leads_target: "变量领先目标",
       conditional_granger_supported: "条件格兰杰支持",
       predictive_contribution_positive: "预测贡献为正",
@@ -3158,7 +3163,10 @@ function columnLabel(column) {
     lag: "滞后",
     direction: "方向",
     raw_corr: "原始相关",
+    raw_corr_score: "原始相关得分",
     residual_corr: "残差相关",
+    residual_corr_score: "残差相关得分",
+    residual_status: "残差状态",
     risk_flags: "风险标签",
     recommended_use: "建议用途",
     recommended_action: "建议动作",
@@ -3191,10 +3199,18 @@ function columnLabel(column) {
     regime_sign_consistency: "符号一致性",
     regime_lag_consistency: "滞后一致性",
     regime_count: "工况数量",
+    regime_stability_final: "工况稳定性",
+    regime_status: "工况状态",
     rolling_stability: "滚动稳定性",
+    rolling_status: "滚动状态",
     rolling_corr_median: "滚动相关中位数",
     rolling_sign_consistency: "滚动符号一致性",
+    lag_quality_status: "滞后峰值质量状态",
     model_lift: "模型提升",
+    model_lift_score: "模型提升得分",
+    model_lift_status: "模型提升状态",
+    risk_penalty: "风险惩罚",
+    force_included: "强制纳入",
     ar_baseline_rmse: "自回归基准RMSE",
     candidate_rmse: "候选变量模型RMSE",
     predictive_contribution: "预测贡献",

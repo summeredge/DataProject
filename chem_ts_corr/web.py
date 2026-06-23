@@ -1211,7 +1211,6 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:13px; }
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
-    .raw-report { width:100%; font-family:Consolas,monospace; font-size:12px; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
     @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } }
   </style>
@@ -1428,7 +1427,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="llmReportTab" class="tab-panel">
         <h2>AI 综合解读</h2>
-        <div class="help">可先生成结构化 Prompt，也可调用 DeepSeek/OpenAI-compatible Chat Completions 生成报告。API Key 仅随本次请求发送，不保存到磁盘、不写入 Prompt/报告。</div>
+        <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI-compatible Chat Completions 生成报告。API Key 仅随本次请求发送，不保存到磁盘、不写入报告。</div>
         <div class="llm-config-grid">
           <label>Top N<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
@@ -1451,18 +1450,12 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div id="llmConnectionStatus" class="help" aria-live="polite">尚未测试 API 连接。</div>
         <div class="actions">
-          <button id="generateLlmPrompt">生成 Prompt</button>
           <button id="testLlmConnection">测试 API 连接</button>
           <button id="generateLlmReport">生成 DeepSeek 报告</button>
           <button id="copyLlmReport">复制报告</button>
           <span id="llmReportDownload" class="download-buttons"><a href="#">下载 llm_report.md</a></span>
         </div>
-        <textarea id="llmPrompt" rows="14" style="width:100%;" placeholder="生成后将在这里显示 Prompt"></textarea>
         <div id="llmReportRendered" class="markdown-report empty">生成后将在这里按 Markdown 格式显示 LLM 报告。</div>
-        <details>
-          <summary>查看 / 编辑 Markdown 原文</summary>
-          <textarea id="llmReport" class="raw-report" rows="12" placeholder="生成后将在这里显示 LLM 报告 Markdown 原文"></textarea>
-        </details>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
@@ -1488,9 +1481,12 @@ let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
+let llmPromptText = "";
+let llmReportMarkdown = "";
 let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
+const llmPromptEndpoint = "/api/llm_prompt";
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
@@ -1500,11 +1496,9 @@ el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
-el("generateLlmPrompt").addEventListener("click", generateLlmPrompt);
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
-el("llmReport").addEventListener("input", () => renderMarkdownReport(el("llmReport").value || ""));
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1870,28 +1864,6 @@ async function runCausalReview() {
 }
 
 
-async function generateLlmPrompt() {
-  if (!currentRunId) return setStatus("请先完成主筛查。");
-  const startedAt = performance.now();
-  const timerId = startStatusTimer("正在生成 AI 综合解读 Prompt...", startedAt);
-  el("generateLlmPrompt").disabled = true;
-  try {
-    const form = new FormData();
-    form.append("run_id", currentRunId);
-    form.append("top_n", el("llmTopN").value || "20");
-    form.append("report_type", el("llmReportType").value || "apc_advice");
-    const data = await postForm("/api/llm_prompt", form);
-    el("llmPrompt").value = data.prompt || "";
-    renderDownloads(data.downloads || []);
-    setStatus(appendElapsed(data.message || "AI 综合解读 Prompt 已生成。", startedAt));
-  } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
-  } finally {
-    stopStatusTimer(timerId);
-    el("generateLlmPrompt").disabled = false;
-  }
-}
-
 async function testLlmConnection() {
   if (!el("llmApiKey").value) {
     el("llmConnectionStatus").textContent = "请输入 API Key。API Key 不会保存。";
@@ -1940,8 +1912,8 @@ async function generateLlmReport() {
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
     const data = await postForm("/api/llm_report", form);
+    llmPromptText = data.prompt || llmPromptText || "";
     setLlmReport(data.report || "");
-    el("llmPrompt").value = data.prompt || el("llmPrompt").value || "";
     renderDownloadTarget("llmReportDownload", data.downloads || [], "llm_report.md");
     renderDownloads(data.downloads || []);
     setStatus(appendElapsed(data.message || "LLM 报告已生成。", startedAt));
@@ -1954,15 +1926,15 @@ async function generateLlmReport() {
 }
 
 async function copyLlmReport() {
-  const text = el("llmReport").value || "";
+  const text = llmReportMarkdown || "";
   if (!text) return setStatus("请先生成 LLM 报告。");
   await navigator.clipboard.writeText(text);
   setStatus("LLM 报告已复制到剪贴板。");
 }
 
 function setLlmReport(markdown) {
-  el("llmReport").value = markdown;
-  renderMarkdownReport(markdown);
+  llmReportMarkdown = markdown || "";
+  renderMarkdownReport(llmReportMarkdown);
 }
 
 function renderMarkdownReport(markdown) {
@@ -3068,7 +3040,7 @@ function reset() {
   el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
-  el("llmPrompt").value = "";
+  llmPromptText = "";
   el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
   setLlmReport("");
   el("llmReportDownload").innerHTML = "";

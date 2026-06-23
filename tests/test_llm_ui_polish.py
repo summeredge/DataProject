@@ -20,7 +20,7 @@ def test_llm_config_grid_uses_two_rows_four_columns_marker():
     assert "grid-template-columns: repeat(4" in INDEX_HTML or "repeat(4, 1fr)" in INDEX_HTML
 
 
-def test_prompt_generation_still_available_but_no_prompt_download_target():
-    assert "generateLlmPrompt" in INDEX_HTML
-    assert "llmPrompt" in INDEX_HTML
+def test_prompt_generation_ui_is_removed_but_no_prompt_download_target():
+    assert "generateLlmPrompt" not in INDEX_HTML
+    assert 'id="llmPrompt"' not in INDEX_HTML
     assert "renderDownloadTarget(\"llmPromptDownload\"" not in INDEX_HTML

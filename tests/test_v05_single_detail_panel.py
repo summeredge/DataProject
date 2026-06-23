@@ -1,13 +1,13 @@
 from chem_ts_corr.web import INDEX_HTML
 
 
-def test_single_variable_review_is_the_only_default_detail_area():
+def test_single_variable_review_is_rendered_inside_modal_only():
     required = [
-        "singleVariableReviewCard",
+        "detailModal",
         "renderSingleVariableReview",
         "showRawFieldsToggle",
         "rawFieldsCollapsed",
-        "单变量复核卡片",
+        "modal-card",
         "展开完整原始字段",
     ]
     for marker in required:

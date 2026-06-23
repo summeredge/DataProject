@@ -1169,6 +1169,13 @@ INDEX_HTML = r"""<!doctype html>
     .compact-result-table tbody tr.selected { background:#e0f2fe; }
     .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:#f8fafc; }
     .detail-panel h3 { margin:0 0 8px; font-size:15px; }
+    .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.55); z-index:1000; }
+    .modal-backdrop.open { display:flex; }
+    .modal-card { width:min(960px, 96vw); max-height:88vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 24px 60px rgba(15,23,42,.28); border:1px solid var(--line); }
+    .modal-header { position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); background:#fff; z-index:1; }
+    .modal-header h3 { margin:0; font-size:16px; }
+    .modal-body { padding:16px; }
+    .modal-close { background:#e8edf3; color:var(--text); padding:8px 12px; }
     .detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
     .detail-field { background:#fff; border:1px solid #e7ebf0; border-radius:6px; padding:8px; }
     .detail-field strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
@@ -1422,9 +1429,6 @@ INDEX_HTML = r"""<!doctype html>
         <h3>最终推荐质量总览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
-        <h3>单变量复核卡片</h3>
-        <div class="help">点击“最终推荐摘要”中的变量行后显示该变量的复核解释。该解释仅用于人工复核，不是因果结论。</div>
-        <div id="singleVariableReviewCard" class="empty">点击最终推荐摘要中的变量后显示复核卡片。</div>
         <h2>综合证据复核</h2>
         <div class="help">综合证据复核会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
@@ -1472,6 +1476,16 @@ INDEX_HTML = r"""<!doctype html>
     </section>
   </main>
 
+  <div id="detailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="detailModalTitle">变量详情</h3>
+        <button id="detailModalClose" type="button" class="modal-close">关闭</button>
+      </div>
+      <div id="detailModalBody" class="modal-body"></div>
+    </div>
+  </div>
+
 <script>
 let fileId = "";
 let currentRunId = "";
@@ -1503,6 +1517,9 @@ el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
+el("detailModalClose").addEventListener("click", closeDetailModal);
+el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
@@ -1705,7 +1722,7 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
-  renderSingleVariableReviewCard(null);
+  closeDetailModal();
   renderOverview(data.overview || {});
   renderScreeningQualityHints(lastRows);
   renderTable(lastRows);
@@ -1836,7 +1853,7 @@ async function runCausalReview() {
   const startedAt = performance.now();
   const timerId = startStatusTimer("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...", startedAt);
   el("runCausalReview").disabled = true;
-  renderSingleVariableReviewCard(null);
+  closeDetailModal();
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
@@ -2400,7 +2417,6 @@ function renderFinalReviewSummaryTable(rows) {
   wrap.appendChild(table);
   container.className = "";
   container.replaceChildren(wrap);
-  renderSingleVariableReviewCard(displayRows[0]);
   attachFinalSummaryRowClick(rows);
 }
 
@@ -2410,7 +2426,7 @@ function selectFinalReviewRow(row, tr = null) {
     for (const item of container.querySelectorAll("tbody tr")) item.classList.remove("selected");
   }
   if (tr) tr.classList.add("selected");
-  renderSingleVariableReviewCard(row);
+  openDetailModal(row);
 }
 
 function attachFinalSummaryRowClick(rows) {
@@ -2427,14 +2443,8 @@ function attachFinalSummaryRowClick(rows) {
   });
 }
 
-function renderSingleVariableReviewCard(row) {
-  const container = el("singleVariableReviewCard");
-  if (!container) return;
-  if (!row) {
-    container.className = "empty";
-    container.textContent = "点击最终推荐摘要中的变量后显示复核卡片。";
-    return;
-  }
+function renderSingleVariableReview(row) {
+  if (!row) return "";
   const metricColumns = [
     "final_rank",
     "final_recommendation",
@@ -2496,16 +2506,10 @@ function renderSingleVariableReviewCard(row) {
     </div>
   `).join("");
 
-  const rawFields = finalReviewSummaryDetailColumns(row).map((column) => `
-    <div class="detail-field">
-      <strong>${escapeHtml(columnLabel(column))}</strong>
-      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
-    </div>
-  `).join("");
+  const rawFields = renderRawFields(row);
   const rawFieldsCollapsed = "rawFieldsCollapsed";
   const showRawFieldsToggle = "showRawFieldsToggle";
-  container.className = "";
-  container.innerHTML = `
+  return `
     <div class="review-card">
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
       <p>该卡片汇总该变量在主筛查、验证和综合复核中的证据，仅用于人工复核。</p>
@@ -2525,6 +2529,31 @@ function renderSingleVariableReviewCard(row) {
       <p>该结果为预测验证和人工复核建议，不是因果结论。</p>
     </div>
   `;
+}
+
+function renderRawFields(row) {
+  return finalReviewSummaryDetailColumns(row).map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
+    </div>
+  `).join("");
+}
+
+function openDetailModal(row) {
+  const modal = el("detailModal");
+  el("detailModalTitle").textContent = `变量详情：${displayCellValue("variable", row.variable)}`;
+  el("detailModalBody").innerHTML = renderSingleVariableReview(row);
+  modal.hidden = false;
+  modal.classList.add("open");
+  el("detailModalClose").focus();
+}
+
+function closeDetailModal() {
+  const modal = el("detailModal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.hidden = true;
 }
 
 function rowForVariable(rows, variable) {
@@ -3226,7 +3255,7 @@ function reset() {
   resetOptionalTable("causalReviewTable", "未运行 三层复核。");
   clearOptionalElement("finalReviewQualityOverview");
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
-  resetOptionalTable("singleVariableReviewCard", "点击最终推荐摘要中的变量后显示复核卡片。");
+  closeDetailModal();
   resetOptionalTable("causalReviewEvidenceTable", "未运行 综合证据复核。");
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");

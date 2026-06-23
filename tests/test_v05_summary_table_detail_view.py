@@ -1,11 +1,11 @@
 from chem_ts_corr.web import INDEX_HTML
 
 
-def test_final_summary_uses_core_columns_and_single_review_card():
+def test_final_summary_uses_core_columns_and_modal_review():
     required = [
         "FINAL_SUMMARY_CORE_COLUMNS",
-        "singleVariableReviewCard",
-        "renderSingleVariableReviewCard",
+        "detailModal",
+        "renderSingleVariableReview",
         "selectFinalReviewRow",
         "查看详情",
         "完整字段",

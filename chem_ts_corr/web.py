@@ -1422,7 +1422,6 @@ INDEX_HTML = r"""<!doctype html>
         <h3>最终推荐质量总览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
-        <div id="finalReviewDetailPanel" class="detail-panel empty">点击最终推荐摘要中的行或“查看详情”后展示该行完整字段。</div>
         <h3>单变量复核卡片</h3>
         <div class="help">点击“最终推荐摘要”中的变量行后显示该变量的复核解释。该解释仅用于人工复核，不是因果结论。</div>
         <div id="singleVariableReviewCard" class="empty">点击最终推荐摘要中的变量后显示复核卡片。</div>
@@ -2221,7 +2220,7 @@ function renderRowDetails(row) {
     </div>
   `).join("");
   panel.className = "detail-panel";
-  panel.innerHTML = `<h3>完整字段：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
+  panel.innerHTML = `<h3>字段详情：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
 }
 
 function coreCandidateColumns() {
@@ -2401,7 +2400,7 @@ function renderFinalReviewSummaryTable(rows) {
   wrap.appendChild(table);
   container.className = "";
   container.replaceChildren(wrap);
-  renderFinalReviewDetails(displayRows[0]);
+  renderSingleVariableReviewCard(displayRows[0]);
   attachFinalSummaryRowClick(rows);
 }
 
@@ -2411,26 +2410,7 @@ function selectFinalReviewRow(row, tr = null) {
     for (const item of container.querySelectorAll("tbody tr")) item.classList.remove("selected");
   }
   if (tr) tr.classList.add("selected");
-  renderFinalReviewDetails(row);
   renderSingleVariableReviewCard(row);
-}
-
-function renderFinalReviewDetails(row) {
-  const container = el("finalReviewDetailPanel");
-  if (!container) return;
-  if (!row) {
-    container.className = "detail-panel empty";
-    container.textContent = "点击最终推荐摘要中的行或“查看详情”后展示该行完整字段。";
-    return;
-  }
-  const fields = finalReviewSummaryDetailColumns(row).map((column) => `
-    <div class="detail-field">
-      <strong>${escapeHtml(columnLabel(column))}</strong>
-      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
-    </div>
-  `).join("");
-  container.className = "detail-panel";
-  container.innerHTML = `<h3>完整字段：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
 }
 
 function attachFinalSummaryRowClick(rows) {
@@ -2515,6 +2495,15 @@ function renderSingleVariableReviewCard(row) {
       <span>${escapeHtml(value)}</span>
     </div>
   `).join("");
+
+  const rawFields = finalReviewSummaryDetailColumns(row).map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
+    </div>
+  `).join("");
+  const rawFieldsCollapsed = "rawFieldsCollapsed";
+  const showRawFieldsToggle = "showRawFieldsToggle";
   container.className = "";
   container.innerHTML = `
     <div class="review-card">
@@ -2523,12 +2512,16 @@ function renderSingleVariableReviewCard(row) {
       <div class="metric-grid">${metrics}</div>
       <h4>证据来源清单</h4>
       <div class="metric-grid">${evidenceHtml}</div>
-      <h4>主要原因</h4>
+      <h4>关键理由</h4>
       <p>${escapeHtml(displayCellValue("key_reason", row.key_reason))}</p>
       <h4>建议下一步</h4>
       <p>${escapeHtml(displayCellValue("suggested_next_action", row.suggested_next_action))}</p>
       <h4>解释边界</h4>
       <p>${escapeHtml(displayCellValue("interpretation", row.interpretation))}</p>
+      <details class="raw-fields ${rawFieldsCollapsed}">
+        <summary id="${showRawFieldsToggle}">展开完整原始字段</summary>
+        <div class="detail-grid">${rawFields}</div>
+      </details>
       <p>该结果为预测验证和人工复核建议，不是因果结论。</p>
     </div>
   `;

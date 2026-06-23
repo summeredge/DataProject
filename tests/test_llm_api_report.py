@@ -50,4 +50,4 @@ def test_web_exposes_llm_report_ui_and_download():
     assert "llm_report.md" in DOWNLOAD_FILES
     assert "/api/llm_report" in INDEX_HTML
     assert "生成 DeepSeek 报告" in INDEX_HTML or "生成 LLM 报告" in INDEX_HTML
-    assert "llmReport" in INDEX_HTML
+    assert "llmReportRendered" in INDEX_HTML

@@ -2317,30 +2317,42 @@ function renderOverview(overview) {
   ).join("");
 }
 
+
+const GENERIC_TABLE_CORE_COLUMNS = {
+  overviewTop: ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"],
+  nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
+  grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
+  modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
+  importanceTable: ["variable", "importance", "importance_rank", "feature", "lag", "method"],
+  modelDiscoveredTable: ["variable", "max_importance", "importance_rank", "best_model_lag", "recommended_use", "discovery_reason"],
+  enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
+  enhancedLiftTable: ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
+  enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
+  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"]
+};
+
+function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
+  const configured = GENERIC_TABLE_CORE_COLUMNS[targetId] || [];
+  const preferred = preferredColumns || [];
+  const fallback = preferred.length ? preferred.slice(0, 6) : Object.keys(row || {}).slice(0, 6);
+  const columns = (configured.length ? configured : fallback).filter((column) => column in (row || {}));
+  return columns.length ? columns : fallback.filter((column) => column in (row || {}));
+}
+
+function genericTableDetailColumns(row) {
+  return Object.keys(row || {});
+}
+
 function renderGenericTable(targetId, rows, preferredColumns = null) {
-  const container = el(targetId);
-  if (!container) return;
-  if (!rows.length) {
-    container.className = "empty";
-    container.textContent = missingText(targetId);
-    return;
-  }
-  const columns = (preferredColumns || Object.keys(rows[0])).filter((column) => column in rows[0]);
-  ensureTableSortState(targetId, columns[0]);
-  const displayRows = sortedRowsForTable(targetId, rows);
-  const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
-  const body = document.createElement("tbody");
-  for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
-  }
-  table.appendChild(body);
-  attachSortableHeaders(table, targetId, () => renderGenericTable(targetId, rows, preferredColumns));
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-  wrap.appendChild(table);
-  container.className = "";
-  container.replaceChildren(wrap);
+  const firstRow = rows && rows.length ? rows[0] : {};
+  renderCompactDetailTable({
+    targetId,
+    rows,
+    coreColumns: genericTableCoreColumns(targetId, firstRow, preferredColumns),
+    detailColumns: genericTableDetailColumns,
+    emptyText: missingText(targetId),
+    modalTitle: (row) => `变量详情：${displayCellValue("variable", row.variable)}`,
+  });
 }
 
 function includesFlag(row, flag) {
@@ -2816,10 +2828,19 @@ function renderCausalReviewTable(targetId, rows) {
   ensureTableSortState(targetId, columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
+  const header = document.createElement("thead");
+  header.innerHTML = `<tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr>`;
+  table.appendChild(header);
   const body = document.createElement("tbody");
   for (const row of displayRows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
+    const tr = document.createElement("tr");
+    for (const column of columns) {
+      const td = document.createElement("td");
+      td.className = tableCellClass(column, row[column]);
+      td.innerHTML = formatReviewCell(column, row[column]);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
   }
   table.appendChild(body);
   attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));

@@ -1738,7 +1738,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
   renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
   renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
-  renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
+  renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runEnhancedScreening").disabled = !currentRunId;
@@ -1875,7 +1875,7 @@ async function runCausalReview() {
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
     renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
     renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
-    renderGenericTable("causalReviewEvidenceTable", lastCausalEvidenceRows, causalReviewEvidenceColumns());
+    renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
     setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt));
@@ -2187,61 +2187,122 @@ function valueRange(values) {
   return { min: min - margin, max: max + margin };
 }
 
+const candidateTable = "table";
+const candidateCoreColumns = coreCandidateColumns;
+
+function candidateDetailColumns(row) {
+  const core = new Set(candidateCoreColumns());
+  return Object.keys(row || {}).filter((column) => !core.has(column));
+}
+
 function renderTable(rows) {
-  if (!rows.length) {
-    el("table").className = "empty";
-    el("table").textContent = "没有可展示的候选变量。";
-    return;
-  }
-  const targetId = "table";
-  const columns = coreCandidateColumns();
-  const displayRows = sortedRowsForTable(targetId, rows);
-  const table = document.createElement("table");
-  table.className = "compact-result-table";
-  table.setAttribute("aria-label", "核心列");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th>详情</th></tr></thead>`;
-  const body = document.createElement("tbody");
-  displayRows.forEach((row, index) => {
-    body.innerHTML += `<tr data-row-index="${index}">${columns.map((c) => `<td class="${tableCellClass(c, row[c])}">${escapeHtml(formatValue(row[c]))}</td>`).join("")}<td><button type="button" class="small-button">详情</button></td></tr>`;
-  });
-  table.appendChild(body);
-  attachSortableHeaders(table, targetId, () => renderTable(rows));
-  table.querySelectorAll("tbody tr").forEach((tr, index) => {
-    tr.addEventListener("click", () => selectTableRow(table, displayRows[index]));
-  });
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-  wrap.appendChild(table);
-  const detail = document.createElement("div");
-  detail.className = "detail-panel empty";
-  detail.textContent = "点击表格行查看完整字段。";
-  el("table").className = "";
-  el("table").replaceChildren(wrap, detail);
+  renderCandidateTable(rows);
 }
 
-function selectTableRow(table, row) {
-  table.querySelectorAll("tbody tr").forEach((tr) => tr.classList.remove("selected"));
-  const rows = Array.from(table.querySelectorAll("tbody tr"));
-  const index = rows.findIndex((tr) => Number(tr.dataset.rowIndex) >= 0 && row === sortedRowsForTable("table", lastRows)[Number(tr.dataset.rowIndex)]);
-  if (index >= 0) rows[index].classList.add("selected");
-  renderRowDetails(row);
-}
-
-function renderRowDetails(row) {
-  const panel = el("table").querySelector(".detail-panel");
-  if (!panel || !row) return;
-  const fields = Object.keys(row).map((column) => `
-    <div class="detail-field">
-      <strong>${escapeHtml(columnLabel(column))}</strong>
-      <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
-    </div>
-  `).join("");
-  panel.className = "detail-panel";
-  panel.innerHTML = `<h3>字段详情：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
+function renderCandidateTable(rows) {
+  renderCompactDetailTable({
+    targetId: candidateTable,
+    rows,
+    coreColumns: candidateCoreColumns(),
+    detailColumns: candidateDetailColumns,
+    emptyText: "没有可展示的候选变量。",
+    modalTitle: (row) => `变量详情：${displayCellValue("variable", row.variable)}`,
+  });
 }
 
 function coreCandidateColumns() {
   return ["variable", "final_score", "lag", "direction", "raw_corr", "residual_corr", "risk_flags", "recommended_use", "recommended_action"];
+}
+
+function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
+  const container = el(targetId);
+  if (!container) return;
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = emptyText || missingText(targetId);
+    return;
+  }
+  const getValue = valueGetter || ((row, column) => row[column]);
+  const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
+  const table = document.createElement("table");
+  table.className = "compact-result-table";
+  table.setAttribute("aria-label", "核心列");
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th>${escapeHtml(columnLabel("detail_action"))}</th></tr></thead>`;
+  const body = document.createElement("tbody");
+  displayRows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.dataset.rowIndex = String(index);
+    tr.className = "clickable-row";
+    for (const column of columns) {
+      const value = getValue(row, column);
+      const td = document.createElement("td");
+      td.className = tableCellClass(column, value);
+      td.innerHTML = formatter ? formatter(column, value, row) : escapeHtml(displayCellValue(column, value));
+      tr.appendChild(td);
+    }
+    const detailCell = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "small-button";
+    button.textContent = "查看详情";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle);
+    });
+    detailCell.appendChild(button);
+    tr.appendChild(detailCell);
+    tr.addEventListener("click", () => selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle));
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns, emptyText, modalTitle, valueGetter, formatter }));
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+}
+
+function selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle) {
+  table.querySelectorAll("tbody tr").forEach((item) => item.classList.remove("selected"));
+  if (tr) tr.classList.add("selected");
+  openDetailModal(row, { detailColumns, valueGetter, title: modalTitle });
+}
+
+function buildDetailModalBody(row, options = {}) {
+  if (options.detailColumns) return renderGenericDetailModalBody(row, options);
+  return renderSingleVariableReview(row);
+}
+
+function renderGenericDetailModalBody(row, options = {}) {
+  const getValue = options.valueGetter || ((item, column) => item[column]);
+  const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
+  const fields = columns.map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, getValue(row, column)))}</span>
+    </div>
+  `).join("");
+  return `
+    <div class="review-card">
+      <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
+      <details class="raw-fields rawFieldsCollapsed">
+        <summary>展开完整原始字段</summary>
+        <div class="detail-grid">${fields}</div>
+      </details>
+    </div>
+  `;
+}
+
+
+function selectTableRow(table, row) {
+  selectCompactDetailRow(table, null, row, candidateDetailColumns, null, (item) => `变量详情：${displayCellValue("variable", item.variable)}`);
+}
+
+function renderRowDetails(row) {
+  openDetailModal(row, { detailColumns: candidateDetailColumns });
 }
 
 function renderOverview(overview) {
@@ -2540,10 +2601,11 @@ function renderRawFields(row) {
   `).join("");
 }
 
-function openDetailModal(row) {
+function openDetailModal(row, options = {}) {
   const modal = el("detailModal");
-  el("detailModalTitle").textContent = `变量详情：${displayCellValue("variable", row.variable)}`;
-  el("detailModalBody").innerHTML = renderSingleVariableReview(row);
+  const title = typeof options.title === "function" ? options.title(row) : options.title;
+  el("detailModalTitle").textContent = title || `变量详情：${displayCellValue("variable", row.variable)}`;
+  el("detailModalBody").innerHTML = buildDetailModalBody(row, options);
   modal.hidden = false;
   modal.classList.add("open");
   el("detailModalClose").focus();
@@ -2722,6 +2784,24 @@ function finalSummaryValue(row, column) {
 
 function causalReviewEvidenceColumns() {
   return ["variable", "candidate_grade", "final_score", "data_priority", "evidence_score", "evidence_level", "statistical_limit_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "statistical_limit_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+}
+
+
+const causalEvidenceCoreColumns = () => ["variable", "candidate_grade", "final_score", "data_priority", "evidence_level", "evidence_score", "integrated_review_decision"];
+
+function causalEvidenceDetailColumns(row) {
+  const core = new Set(causalEvidenceCoreColumns());
+  return causalReviewEvidenceColumns().filter((column) => column in (row || {}) && !core.has(column));
+}
+
+function renderCausalReviewEvidenceTable(rows) {
+  renderCompactDetailTable({
+    targetId: "causalReviewEvidenceTable",
+    rows,
+    coreColumns: causalEvidenceCoreColumns(),
+    detailColumns: causalEvidenceDetailColumns,
+    modalTitle: (row) => `综合证据复核：${displayCellValue("variable", row.variable)}`,
+  });
 }
 
 function renderCausalReviewTable(targetId, rows) {

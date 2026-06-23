@@ -24,5 +24,5 @@ def test_llm_tab_keeps_report_generation_and_rendering():
     assert "/api/llm_report" in INDEX_HTML
 
 
-def test_backend_prompt_endpoint_can_remain_available():
-    assert "/api/llm_prompt" in INDEX_HTML
+def test_prompt_endpoint_is_not_exposed_from_simplified_ui():
+    assert "/api/llm_prompt" not in INDEX_HTML

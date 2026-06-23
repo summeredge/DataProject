@@ -1438,26 +1438,26 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="llmReportTab" class="tab-panel">
         <h2>AI 综合解读</h2>
-        <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI-compatible Chat Completions 生成报告。API Key 仅随本次请求发送，不保存到磁盘、不写入报告。</div>
+        <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
         <div class="llm-config-grid">
-          <label>Top N<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
+          <label>分析变量数量<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
             <select id="llmReportType">
               <option value="apc_advice">APC/DCS 工程建议</option>
               <option value="general">通用综合解读</option>
             </select>
           </label>
-          <label>Provider
+          <label>模型服务
             <select id="llmProvider">
               <option value="deepseek">DeepSeek</option>
               <option value="openai">OpenAI-compatible</option>
             </select>
           </label>
-          <label>Base URL<input id="llmBaseUrl" value="https://api.deepseek.com"></label>
-          <label>Model<input id="llmModel" value="deepseek-chat"></label>
-          <label>API Key<input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..."></label>
-          <label>temperature<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
-          <label>max_tokens<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
+          <label>接口地址<input id="llmBaseUrl" value="https://api.deepseek.com"></label>
+          <label>模型名称<input id="llmModel" value="deepseek-chat"></label>
+          <label>API 密钥<input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..."></label>
+          <label>温度参数<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
+          <label>最大输出 Token 数<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
         </div>
         <div id="llmConnectionStatus" class="help" aria-live="polite">尚未测试 API 连接。</div>
         <div class="actions">
@@ -3018,7 +3018,26 @@ function formatValue(value) {
   }
   if (typeof value === "string") {
     const map = {
+      candidate_grade_A: "候选等级A",
+      candidate_grade_B: "候选等级B",
+      candidate_grade_C: "候选等级C",
       candidate_grade_D: "候选等级D",
+      candidate_grade_E: "候选等级E",
+      A: "候选等级A",
+      B: "候选等级B",
+      C: "候选等级C",
+      D: "候选等级D",
+      E: "候选等级E",
+      failed: "失败",
+      error: "错误",
+      no_data: "无数据",
+      insufficient_data: "数据不足",
+      not_run: "未运行",
+      high_collinearity_risk: "高共线性风险",
+      formula_leakage_risk: "公式泄漏风险",
+      no_positive_lag: "无正向滞后",
+      non_positive_screening_lag: "非正主筛查滞后",
+      variable_leads_target: "变量领先目标",
       conditional_granger_supported: "条件格兰杰支持",
       predictive_contribution_positive: "预测贡献为正",
       granger_auxiliary_support: "格兰杰辅助支持",
@@ -3108,7 +3127,6 @@ function formatValue(value) {
       lag_boundary_risk: "滞后边界风险",
       data_or_formula_risk: "数据质量或公式泄漏风险",
       near_miss_candidate: "遗漏候选线索",
-      D: "候选等级D",
       lag_reaches_boundary: "滞后触及边界",
       "screening near-miss only": "仅作轻量遗漏筛查",
     };

@@ -1422,6 +1422,7 @@ INDEX_HTML = r"""<!doctype html>
         <h3>最终推荐质量总览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
+        <div id="finalReviewDetailPanel" class="detail-panel empty">点击最终推荐摘要中的行或“查看详情”后展示该行完整字段。</div>
         <h3>单变量复核卡片</h3>
         <div class="help">点击“最终推荐摘要”中的变量行后显示该变量的复核解释。该解释仅用于人工复核，不是因果结论。</div>
         <div id="singleVariableReviewCard" class="empty">点击最终推荐摘要中的变量后显示复核卡片。</div>
@@ -2355,7 +2356,7 @@ function renderFinalReviewSummaryTable(rows) {
     container.textContent = missingText("finalReviewSummaryTable");
     return;
   }
-  const columns = finalReviewSummaryColumns().filter((column) => column === "trend_action" || column in rows[0]);
+  const columns = finalReviewSummaryColumns().filter((column) => ["trend_action", "detail_action"].includes(column) || finalSummaryValue(rows[0], column) !== undefined);
   ensureTableSortState("finalReviewSummaryTable", "final_rank");
   const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
   const table = document.createElement("table");
@@ -2375,10 +2376,20 @@ function renderFinalReviewSummaryTable(rows) {
           openTrendForCandidate(row);
         });
         td.appendChild(button);
+      } else if (column === "detail_action") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "small-button";
+        button.textContent = "查看详情";
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          selectFinalReviewRow(row, tr);
+        });
+        td.appendChild(button);
       } else {
-        td.textContent = displayCellValue(column, row[column]);
+        td.textContent = displayCellValue(column, finalSummaryValue(row, column));
       }
-      td.className = tableCellClass(column, row[column]);
+      td.className = tableCellClass(column, finalSummaryValue(row, column));
       tr.appendChild(td);
     }
     body.appendChild(tr);
@@ -2390,7 +2401,36 @@ function renderFinalReviewSummaryTable(rows) {
   wrap.appendChild(table);
   container.className = "";
   container.replaceChildren(wrap);
+  renderFinalReviewDetails(displayRows[0]);
   attachFinalSummaryRowClick(rows);
+}
+
+function selectFinalReviewRow(row, tr = null) {
+  const container = el("finalReviewSummaryTable");
+  if (container) {
+    for (const item of container.querySelectorAll("tbody tr")) item.classList.remove("selected");
+  }
+  if (tr) tr.classList.add("selected");
+  renderFinalReviewDetails(row);
+  renderSingleVariableReviewCard(row);
+}
+
+function renderFinalReviewDetails(row) {
+  const container = el("finalReviewDetailPanel");
+  if (!container) return;
+  if (!row) {
+    container.className = "detail-panel empty";
+    container.textContent = "点击最终推荐摘要中的行或“查看详情”后展示该行完整字段。";
+    return;
+  }
+  const fields = finalReviewSummaryDetailColumns(row).map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
+    </div>
+  `).join("");
+  container.className = "detail-panel";
+  container.innerHTML = `<h3>完整字段：${escapeHtml(displayCellValue("variable", row.variable))}</h3><div class="detail-grid">${fields}</div>`;
 }
 
 function attachFinalSummaryRowClick(rows) {
@@ -2402,7 +2442,7 @@ function attachFinalSummaryRowClick(rows) {
   bodyRows.forEach((tr, index) => {
     tr.classList.add("clickable-row");
     tr.addEventListener("click", () => {
-      renderSingleVariableReviewCard(displayRows[index]);
+      selectFinalReviewRow(displayRows[index], tr);
     });
   });
 }
@@ -2598,8 +2638,64 @@ function causalReviewColumns() {
   return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
 }
 
+const FINAL_SUMMARY_CORE_COLUMNS = [
+  "final_rank",
+  "variable",
+  "trend_action",
+  "final_decision",
+  "data_priority",
+  "evidence_level",
+  "evidence_score",
+  "statistical_limit_level",
+  "risk_constraint_level",
+  "detail_action",
+];
+
+const FINAL_SUMMARY_DETAIL_COLUMNS = [
+  "main_reason",
+  "suggested_next_action",
+  "evidence_conflict_explanation",
+  "interpretation_boundary",
+];
+
+const FINAL_SUMMARY_COLUMN_ALIASES = {
+  final_decision: ["final_decision", "final_recommendation", "integrated_review_decision"],
+  main_reason: ["main_reason", "key_reason", "integrated_review_reason"],
+  evidence_conflict_explanation: ["evidence_conflict_explanation", "evidence_conflict_reason"],
+  interpretation_boundary: ["interpretation_boundary", "interpretation"],
+};
+
 function finalReviewSummaryColumns() {
-  return ["final_rank", "variable", "trend_action", "final_recommendation", "data_priority", "evidence_level", "evidence_score", "statistical_limit_level", "risk_constraint_level", "key_reason", "suggested_next_action", "screening_grade", "screening_score", "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint", "evidence_conflict_type", "evidence_conflict_reason", "interpretation"];
+  return FINAL_SUMMARY_CORE_COLUMNS;
+}
+
+function finalReviewSummaryDetailColumns(row) {
+  const preferred = [
+    "final_rank", "variable", "final_decision", "data_priority", "evidence_level", "evidence_score",
+    "statistical_limit_level", "risk_constraint_level", "main_reason", "suggested_next_action",
+    "evidence_conflict_explanation", "interpretation_boundary", "screening_grade", "screening_score",
+    "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint",
+    "evidence_conflict_type", "conditional_min_p_value", "conditional_fdr_q_value"
+  ];
+  const seen = new Set();
+  const columns = [];
+  for (const column of preferred) {
+    if (finalSummaryValue(row, column) !== undefined && !seen.has(column)) { columns.push(column); seen.add(column); }
+  }
+  for (const column of Object.keys(row || {})) {
+    if (!seen.has(column)) { columns.push(column); seen.add(column); }
+  }
+  return columns;
+}
+
+function finalSummaryValue(row, column) {
+  if (!row) return undefined;
+  if (column === "trend_action" || column === "detail_action") return "";
+  const aliases = FINAL_SUMMARY_COLUMN_ALIASES[column] || [column];
+  for (const key of aliases) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+  }
+  return undefined;
 }
 
 function causalReviewEvidenceColumns() {
@@ -2787,6 +2883,10 @@ function tableCellClass(column, value) {
   return wrapColumn ? "wrap-cell" : "";
 }
 
+function translateDisplayValue(value) {
+  return formatValue(value);
+}
+
 function formatValue(value) {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return "";
@@ -2795,9 +2895,16 @@ function formatValue(value) {
   }
   if (typeof value === "string") {
     const map = {
+      candidate_grade_D: "候选等级D",
+      conditional_granger_supported: "条件格兰杰支持",
+      predictive_contribution_positive: "预测贡献为正",
+      granger_auxiliary_support: "格兰杰辅助支持",
+      model_lift_weak_support: "模型提升弱支持",
+      model_explanation_support: "模型解释支持",
+      lag_boundary: "滞后触及边界",
+      target_leads_variable: "目标领先变量",
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
-      lag_boundary: "滞后边界命中",
       lag_boundary_flag: "滞后边界命中",
       formula_coupled_reference: "公式耦合参考",
       strong_screening_candidate: "强初筛候选",
@@ -2978,7 +3085,10 @@ function columnLabel(column) {
     conditional_granger_status: "条件Granger状态",
     final_rank: "最终排序",
     final_recommendation: "最终建议",
+    final_decision: "最终建议",
+    detail_action: "查看详情",
     key_reason: "主要原因",
+    main_reason: "主要原因",
     suggested_next_action: "建议下一步",
     screening_grade: "主筛查等级",
     screening_score: "主筛查得分",
@@ -2987,6 +3097,8 @@ function columnLabel(column) {
     lag_boundary_hint: "滞后边界提示",
     evidence_conflict_type: "证据冲突类型",
     evidence_conflict_reason: "证据冲突说明",
+    evidence_conflict_explanation: "证据冲突说明",
+    interpretation_boundary: "解释边界",
     conditional_best_lag: "条件最佳滞后",
     conditional_min_p_value: "条件最小P值",
     conditional_fdr_q_value: "条件FDR Q值",

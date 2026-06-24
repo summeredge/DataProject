@@ -2205,17 +2205,22 @@ const CANONICAL_RISK_GROUPS = [
   {
     key: "target_lead_risk",
     label: "目标领先风险",
-    aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag"],
+    aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag", "non-positive screening lag"],
   },
   {
-    key: "formula_leakage_risk",
+    key: "data_or_formula_risk",
     label: "公式泄漏/计算耦合风险",
-    aliases: ["strong_formula_leakage", "formula_leakage_risk", "formula_coupled_reference", "formula_like"],
+    aliases: ["strong_formula_leakage", "formula_leakage_risk", "formula_coupled_reference", "formula_like", "data_or_formula_risk"],
   },
   {
     key: "data_quality_risk",
     label: "数据质量风险",
     aliases: ["poor_data_quality", "poor_quality_variable"],
+  },
+  {
+    key: "synchronous_or_leakage_risk",
+    label: "同步变化风险",
+    aliases: ["synchronous", "synchronous_or_leakage_risk", "non-positive screening lag", "non_positive_screening_lag", "non-positive lag", "zero_lag", "same_time_movement"],
   },
   {
     key: "regime_instability_risk",
@@ -2246,11 +2251,16 @@ function splitRiskTags(value) {
     .filter(Boolean);
 }
 
+function normalizedRiskToken(value) {
+  return String(value ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+}
+
 function normalizeRiskTags(value) {
   const rawRiskTags = splitRiskTags(value);
+  const normalizedRawRiskTags = rawRiskTags.map(normalizedRiskToken);
   const matched = [];
   for (const group of CANONICAL_RISK_GROUPS) {
-    if (group.aliases.some((alias) => rawRiskTags.some((tag) => tag.toLowerCase() === alias.toLowerCase()))) {
+    if (group.aliases.some((alias) => normalizedRawRiskTags.includes(normalizedRiskToken(alias)))) {
       matched.push(group);
     }
   }
@@ -2366,7 +2376,8 @@ function buildDetailModalBody(row, options = {}) {
 function renderGenericDetailModalBody(row, options = {}) {
   const getValue = options.valueGetter || ((item, column) => item[column]);
   const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
-  const fields = columns.map((column) => `
+  const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags");
+  const fields = rawFieldColumnsWithoutRiskFlags.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, getValue(row, column)))}</span>
@@ -2668,6 +2679,7 @@ function renderSingleVariableReview(row) {
 
   const rawFields = renderRawFields(row);
   const showRawFieldsToggle = "showRawFieldsToggle";
+  const rawFieldsCollapsed = "rawFieldsCollapsed";
   return `
     <div class="review-card">
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
@@ -2681,7 +2693,7 @@ function renderSingleVariableReview(row) {
       <p>${escapeHtml(displayCellValue("suggested_next_action", row.suggested_next_action))}</p>
       <h4>解释边界</h4>
       <p>${escapeHtml(displayCellValue("interpretation", row.interpretation))}</p>
-      <details class="raw-fields" open>
+      <details class="raw-fields ${rawFieldsCollapsed}">
         <summary id="${showRawFieldsToggle}">展开完整原始字段</summary>
         <div class="detail-grid">${rawFields}</div>
       </details>
@@ -2691,7 +2703,8 @@ function renderSingleVariableReview(row) {
 }
 
 function renderRawFields(row) {
-  const rawFields = finalReviewSummaryDetailColumns(row).map((column) => `
+  const rawFieldColumnsWithoutRiskFlags = finalReviewSummaryDetailColumns(row).filter((column) => column !== "risk_flags");
+  const rawFields = rawFieldColumnsWithoutRiskFlags.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>

@@ -3038,6 +3038,8 @@ function formatValue(value) {
       no_positive_lag: "无正向滞后",
       non_positive_screening_lag: "非正主筛查滞后",
       "non-positive screening lag": "非正主筛查滞后",
+      mean_abs_shap: "SHAP平均绝对值",
+      "enhanced screening only": "仅作增强筛查",
       not_computed: "未计算",
       ranked_window: "排序窗口",
       true: "是",
@@ -3136,6 +3138,7 @@ function formatValue(value) {
       "screening near-miss only": "仅作轻量遗漏筛查",
     };
     if (map[value]) return map[value];
+    if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
     if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
@@ -3192,6 +3195,8 @@ function columnLabel(column) {
     p_value: "P值",
     r2: "R²",
     method: "方法",
+    feature: "模型特征",
+    importance: "重要性",
     residual_p_value: "残差P值",
     residual_r2: "残差R²",
     regime: "工况",
@@ -3205,6 +3210,7 @@ function columnLabel(column) {
     rolling_status: "滚动状态",
     rolling_corr_median: "滚动相关中位数",
     rolling_sign_consistency: "滚动符号一致性",
+    valid_window_count: "有效窗口数",
     lag_quality_status: "滞后峰值质量状态",
     model_lift: "模型提升",
     model_lift_score: "模型提升得分",
@@ -3230,7 +3236,7 @@ function columnLabel(column) {
     tested_lags: "实际测试滞后",
     lag_mode: "滞后模式",
     lag_window: "滞后窗口",
-    fallback_maxlag: "Fallback最大滞后",
+    fallback_maxlag: "回退最大滞后",
     baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
     candidate_grade: "候选等级",

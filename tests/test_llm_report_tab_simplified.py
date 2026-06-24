@@ -1,28 +1,30 @@
 from chem_ts_corr.web import INDEX_HTML
 
 
-def test_llm_tab_hides_prompt_controls_from_ui():
-    assert 'id="generateLlmPrompt"' not in INDEX_HTML
-    assert 'id="llmPrompt"' not in INDEX_HTML
-    assert "生成 Prompt" not in INDEX_HTML
-    assert "生成后将在这里显示 Prompt" not in INDEX_HTML
+def test_report_page_hides_prompt_controls_and_raw_editor():
+    """Regression guard for the simplified report page UI."""
+    removed_markup = [
+        'id="generateLlmPrompt"',
+        'id="llmPrompt"',
+        'id="llmReport"',
+        "Raw Markdown",
+        "raw Markdown",
+        "原始 Markdown",
+        "原始报告",
+    ]
+
+    for marker in removed_markup:
+        assert marker not in INDEX_HTML
 
 
-def test_llm_tab_hides_raw_markdown_editor():
-    assert "查看 / 编辑 Markdown 原文" not in INDEX_HTML
-    assert "Markdown 原文" not in INDEX_HTML
-    assert 'id="llmReport"' not in INDEX_HTML
-    assert "raw-report" not in INDEX_HTML
+def test_report_page_keeps_rendered_report_download_area():
+    """The cleanup must keep the rendered report table and report download target."""
+    kept_markup = [
+        'id="causalReviewTable"',
+        'id="causalReportDownload"',
+        "renderCausalReviewTable",
+        "renderReviewDownloads",
+    ]
 
-
-def test_llm_tab_keeps_report_generation_and_rendering():
-    assert 'id="testLlmConnection"' in INDEX_HTML
-    assert 'id="generateLlmReport"' in INDEX_HTML
-    assert 'id="copyLlmReport"' in INDEX_HTML
-    assert 'id="llmReportRendered"' in INDEX_HTML
-    assert 'id="llmReportDownload"' in INDEX_HTML
-    assert "/api/llm_report" in INDEX_HTML
-
-
-def test_backend_prompt_endpoint_can_remain_available():
-    assert "/api/llm_prompt" in INDEX_HTML
+    for marker in kept_markup:
+        assert marker in INDEX_HTML

@@ -1,10 +1,10 @@
 from chem_ts_corr.web import INDEX_HTML
 
 
-def test_modal_raw_fields_are_expanded_by_default():
+def test_modal_raw_fields_are_collapsed_by_default():
     assert "展开完整原始字段" in INDEX_HTML
-    assert "rawFieldsCollapsed" not in INDEX_HTML
-    assert "<details class=\"raw-fields\" open>" in INDEX_HTML or "<details class='raw-fields' open>" in INDEX_HTML
+    assert "rawFieldsCollapsed" in INDEX_HTML
+    assert '<details class="raw-fields ${rawFieldsCollapsed}">' in INDEX_HTML
 
 
 def test_remaining_detail_field_names_are_chinese_ready():

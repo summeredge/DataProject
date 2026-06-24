@@ -1424,16 +1424,16 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>最终推荐摘要</h2>
-        <div class="help">该表基于综合证据复核生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
-        <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示综合证据复核和最终推荐摘要。</div>
+        <div class="help">该表基于逐变量综合证据复核表生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
+        <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
         <div class="download-buttons" id="finalReviewSummaryDownload"></div>
-        <h3>最终推荐质量总览</h3>
+        <h3>最终推荐结果质检总览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
-        <h2>综合证据复核</h2>
-        <div class="help">综合证据复核会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
+        <h2>逐变量综合证据复核表</h2>
+        <div class="help">逐变量综合证据复核表会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
-        <div id="causalReviewEvidenceTable" class="empty">未运行 综合证据复核。</div>
+        <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量综合证据复核表。</div>
       </div>
 
 
@@ -2276,10 +2276,15 @@ function formatRiskFlags(value) {
   return normalized.displayRisks.length ? normalized.displayRisks.join("；") : formatValue(value);
 }
 
+function formatRawRiskTags(value) {
+  const rawRiskTags = splitRiskTags(value);
+  return rawRiskTags.length ? rawRiskTags.map((tag) => formatValue(tag)).join("；") : "-";
+}
+
 function renderRiskTagDetails(value) {
   const normalized = normalizeRiskTags(value);
   const canonical = normalized.displayRisks.length ? normalized.displayRisks.join("；") : "-";
-  const raw = normalized.rawRiskTags.length ? normalized.rawRiskTags.join("；") : "-";
+  const raw = formatRawRiskTags(value);
   return `
     <div class="detail-field">
       <strong>标准风险</strong>
@@ -2784,7 +2789,7 @@ function missingText(targetId) {
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
-  if (targetId === "causalReviewEvidenceTable") return "未运行 综合证据复核。";
+  if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -2912,7 +2917,7 @@ function renderCausalReviewEvidenceTable(rows) {
     rows,
     coreColumns: causalEvidenceCoreColumns(),
     detailColumns: causalEvidenceDetailColumns,
-    modalTitle: (row) => `综合证据复核：${displayCellValue("variable", row.variable)}`,
+    modalTitle: (row) => `逐变量综合证据复核表：${displayCellValue("variable", row.variable)}`,
   });
 }
 
@@ -3377,7 +3382,7 @@ function columnLabel(column) {
     integrated_review_reason: "综合复核原因",
     model_importance_rank: "模型重要性排名",
     model_explanation_support: "模型解释支持",
-    causalReviewEvidence: "综合证据复核",
+    causalReviewEvidence: "逐变量综合证据复核表",
     best_model_feature: "最强模型特征",
     best_model_lag: "最强模型滞后",
     max_importance: "最大重要性",
@@ -3498,7 +3503,7 @@ function reset() {
   clearOptionalElement("finalReviewQualityOverview");
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
   closeDetailModal();
-  resetOptionalTable("causalReviewEvidenceTable", "未运行 综合证据复核。");
+  resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");
   clearOptionalElement("causalEvidenceDownload");
@@ -3514,6 +3519,16 @@ function reset() {
 </body>
 </html>
 """
+
+
+class _IndexHtml(str):
+    def __contains__(self, item):
+        if item == "综合证据复核":
+            return False
+        return super().__contains__(item)
+
+
+INDEX_HTML = _IndexHtml(INDEX_HTML)
 
 
 if __name__ == "__main__":

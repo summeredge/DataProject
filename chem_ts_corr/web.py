@@ -2196,6 +2196,92 @@ function candidateDetailColumns(row) {
   return Object.keys(row || {}).filter((column) => !core.has(column));
 }
 
+const CANONICAL_RISK_GROUPS = [
+  {
+    key: "lag_boundary_risk",
+    label: "滞后边界风险",
+    aliases: ["lag_boundary", "lag_boundary_flag", "lag_boundary_risk", "lag_reaches_boundary", "boundary_lag_uncertain", "screening_lag_boundary_risk", "model_lag_boundary_risk"],
+  },
+  {
+    key: "target_lead_risk",
+    label: "目标领先风险",
+    aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag"],
+  },
+  {
+    key: "formula_leakage_risk",
+    label: "公式泄漏/计算耦合风险",
+    aliases: ["strong_formula_leakage", "formula_leakage_risk", "formula_coupled_reference", "formula_like"],
+  },
+  {
+    key: "data_quality_risk",
+    label: "数据质量风险",
+    aliases: ["poor_data_quality", "poor_quality_variable"],
+  },
+  {
+    key: "regime_instability_risk",
+    label: "工况/时变不稳定风险",
+    aliases: ["unstable_across_regimes", "unstable_over_time", "unstable_candidate", "stability_risk"],
+  },
+  {
+    key: "capacity_driver_risk",
+    label: "共同负荷驱动风险",
+    aliases: ["capacity_driven", "common_capacity_driver"],
+  },
+  {
+    key: "closed_loop_risk",
+    label: "闭环反馈风险",
+    aliases: ["closed_loop_suspect"],
+  },
+  {
+    key: "collinearity_risk",
+    label: "共线性风险",
+    aliases: ["residual_collinearity", "high_collinearity_risk"],
+  },
+];
+
+function splitRiskTags(value) {
+  return String(value ?? "")
+    .split(/[;,，；|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeRiskTags(value) {
+  const rawRiskTags = splitRiskTags(value);
+  const matched = [];
+  for (const group of CANONICAL_RISK_GROUPS) {
+    if (group.aliases.some((alias) => rawRiskTags.some((tag) => tag.toLowerCase() === alias.toLowerCase()))) {
+      matched.push(group);
+    }
+  }
+  return {
+    rawRiskTags,
+    displayRisks: matched.map((group) => group.label),
+    canonicalKeys: matched.map((group) => group.key),
+  };
+}
+
+function formatRiskFlags(value) {
+  const normalized = normalizeRiskTags(value);
+  return normalized.displayRisks.length ? normalized.displayRisks.join("；") : formatValue(value);
+}
+
+function renderRiskTagDetails(value) {
+  const normalized = normalizeRiskTags(value);
+  const canonical = normalized.displayRisks.length ? normalized.displayRisks.join("；") : "-";
+  const raw = normalized.rawRiskTags.length ? normalized.rawRiskTags.join("；") : "-";
+  return `
+    <div class="detail-field">
+      <strong>标准风险</strong>
+      <span>${escapeHtml(canonical)}</span>
+    </div>
+    <div class="detail-field">
+      <strong>原始风险标签</strong>
+      <span>${escapeHtml(raw)}</span>
+    </div>
+  `;
+}
+
 function renderTable(rows) {
   renderCandidateTable(rows);
 }
@@ -2291,7 +2377,7 @@ function renderGenericDetailModalBody(row, options = {}) {
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
       <details class="raw-fields" open>
         <summary>展开完整原始字段</summary>
-        <div class="detail-grid">${fields}</div>
+        <div class="detail-grid">${("risk_flags" in (row || {})) ? renderRiskTagDetails(row.risk_flags) : ""}${fields}</div>
       </details>
     </div>
   `;
@@ -2605,12 +2691,13 @@ function renderSingleVariableReview(row) {
 }
 
 function renderRawFields(row) {
-  return finalReviewSummaryDetailColumns(row).map((column) => `
+  const rawFields = finalReviewSummaryDetailColumns(row).map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
     </div>
   `).join("");
+  return (("risk_flags" in (row || {})) ? renderRiskTagDetails(row.risk_flags) : "") + rawFields;
 }
 
 function openDetailModal(row, options = {}) {
@@ -2642,7 +2729,7 @@ function evidenceText(items, emptyText = "-") {
 }
 
 function displayCellValue(column, value) {
-  const formatted = formatCellValue(column, value);
+  const formatted = column === "risk_flags" ? formatRiskFlags(value) : formatCellValue(column, value);
   return formatted === "" || formatted === null || formatted === undefined ? "-" : String(formatted);
 }
 
@@ -2869,6 +2956,7 @@ function formatReviewCell(column, value) {
     const raw = String(value || "");
     return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatCellValue(column, raw))}</span>`;
   }
+  if (column === "risk_flags") return escapeHtml(formatRiskFlags(value));
   return escapeHtml(formatCellValue(column, value));
 }
 

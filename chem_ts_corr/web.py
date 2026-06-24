@@ -1156,6 +1156,9 @@ INDEX_HTML = r"""<!doctype html>
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
     .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    .terms-help-table-wrap { overflow-x:auto; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .terms-help-table-wrap::after { content:"术语说明按正常页面高度完整展示；超出页面宽度时可横向滚动"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    .terms-help-category-cell { font-weight:650; color:var(--text); background:#f8fafc; vertical-align:top; }
     /* legacy regression marker: table-layout:fixed */
     table { width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:12px; }
     th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
@@ -2097,7 +2100,7 @@ function inlineMarkdown(text) {
 
 const termsHelpRows = [
   { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
-  { category: "风险标签说明", name: "目标领先风险", signal: "页面显示为目标领先变量或变量滞后目标。", reading: "目标变化先出现，候选变量更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
+  { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
   { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
   { category: "风险标签说明", name: "数据质量风险", signal: "缺失、常数段、异常尖峰或有效比例不足影响结果。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
   { category: "风险标签说明", name: "闭环反馈风险", signal: "变量可能处于控制回路内，与目标互相调节。", reading: "相关方向可能被 PID、APC 或人工操作反转。", action: "结合控制策略和阀位/设定值，必要时按开闭环时段分段验证。" },
@@ -2107,7 +2110,7 @@ const termsHelpRows = [
   { category: "证据等级与复核建议", name: "优先复核", signal: "综合排序或最终推荐摘要中优先级较高。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
   { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
   { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
-  { category: "滞后与方向解释", name: "目标领先变量", signal: "最佳 lag 为负，目标变化早于候选变量。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
+  { category: "滞后与方向解释", name: "变量滞后目标", signal: "最佳 lag 为负，变量变化晚于目标。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
   { category: "模型验证指标", name: "模型提升", signal: "加入候选变量后，相比基线模型的预测效果改善。", reading: "变量提供了目标自身历史以外的增量信息。", action: "优先关注提升稳定且跨工况一致的变量。" },
   { category: "模型验证指标", name: "预测贡献", signal: "随机森林模型解释或重要性排序靠前。", reading: "模型依赖该变量做预测，但不代表可操作或因果成立。", action: "与相关性、Granger 和工程机理交叉验证。" },
   { category: "模型验证指标", name: "仅作预测验证，不是因果结论", signal: "Granger、条件 Granger 或模型指标显著。", reading: "说明历史信息有助于预测，不自动证明调节该变量会改变目标。", action: "在工程应用前必须经过机理和可操作性复核。" },
@@ -2117,20 +2120,28 @@ const termsHelpRows = [
   { category: "工程使用建议", name: "可能前馈 / 干扰变量", signal: "变量领先目标但不可直接调节，且能代表上游扰动。", reading: "适合用于提前预警、前馈补偿或软测量输入。", action: "验证采样及时性和信号可靠性，设计前馈延时补偿。" }
 ];
 
+function renderTermsHelpGroupedRows(rows) {
+  const keys = ["name", "signal", "reading", "action"];
+  let html = "";
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const isFirstInCategory = index === 0 || row.category !== rows[index - 1].category;
+    const categoryCell = isFirstInCategory
+      ? `<td class="terms-help-category-cell" rowspan="${rows.filter((item) => item.category === row.category).length}">${escapeHtml(row.category)}</td>`
+      : "";
+    html += `<tr>${categoryCell}${keys.map((key) => `<td>${escapeHtml(row[key])}</td>`).join("")}</tr>`;
+  }
+  return html;
+}
+
 function renderTermsHelpTab() {
   const container = el("termsHelpTable");
   if (!container) return;
   const columns = ["分类", "页面显示名称", "具体表征", "工程解读", "建议动作"];
-  const keys = ["category", "name", "signal", "reading", "action"];
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead>`;
-  const body = document.createElement("tbody");
-  for (const row of termsHelpRows) {
-    body.innerHTML += `<tr>${keys.map((key) => `<td>${escapeHtml(row[key])}</td>`).join("")}</tr>`;
-  }
-  table.appendChild(body);
+  table.innerHTML = `<thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead><tbody>${renderTermsHelpGroupedRows(termsHelpRows)}</tbody>`;
   const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
+  wrap.className = "terms-help-table-wrap";
   wrap.appendChild(table);
   container.className = "";
   container.replaceChildren(wrap);
@@ -2259,7 +2270,7 @@ const CANONICAL_RISK_GROUPS = [
   },
   {
     key: "target_lead_risk",
-    label: "目标领先风险",
+    label: "变量滞后目标风险",
     aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag", "non-positive screening lag"],
   },
   {
@@ -2535,7 +2546,7 @@ function renderScreeningQualityHints(rows) {
     hints.push("多个候选变量命中滞后边界，当前 max_lag 可能偏小，建议结合工艺停留时间扩大 max_lag 后复跑。");
   }
   if (rows.filter((row) => numericValue(row.lag) !== null && numericValue(row.lag) < 0).length >= 2) {
-    hints.push("多个候选变量表现为目标领先变量，建议检查时间对齐、响应变量混入或数据时间戳方向。");
+    hints.push("多个候选变量表现为变量滞后目标，建议检查时间对齐、响应变量混入或数据时间戳方向。");
   }
   if (rows.filter((row) => includesFlag(row, "common_capacity_driver") || row.common_capacity_driver_flag === true || String(row.common_capacity_driver_flag) === "1").length >= 2) {
     hints.push("多个变量可能受共同负荷驱动，建议优先复核负荷变量和物料平衡链条。");
@@ -3212,7 +3223,7 @@ function formatValue(value) {
       model_lift_weak_support: "模型提升弱支持",
       model_explanation_support: "模型解释支持",
       lag_boundary: "滞后触及边界",
-      target_leads_variable: "目标领先变量",
+      target_leads_variable: "变量滞后目标",
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
       lag_boundary_flag: "滞后边界命中",
@@ -3237,7 +3248,7 @@ function formatValue(value) {
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
       closed_loop_suspect: "疑似闭环反馈",
-      target_leads_variable: "目标领先变量",
+      target_leads_variable: "变量滞后目标",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量差",
       residual_collinearity: "残差共线性高",
@@ -3269,8 +3280,8 @@ function formatValue(value) {
       model_supported_but_granger_weak: "模型支持但Granger较弱",
       boundary_lag_uncertain: "滞后边界不确定",
       candidate_leads_target: "变量领先目标",
-      target_leads_candidate: "目标领先变量",
-      target_leads_variable: "目标领先变量",
+      target_leads_candidate: "变量滞后目标",
+      target_leads_variable: "变量滞后目标",
       synchronous: "同步变化",
       unknown: "未知",
       positive: "正向",
@@ -3286,7 +3297,7 @@ function formatValue(value) {
       model_lag_boundary_risk: "模型滞后边界风险",
       synchronous_or_leakage_risk: "同步或泄漏风险",
       screening_lag_boundary_risk: "初筛滞后边界风险",
-      target_lead_risk: "目标领先风险",
+      target_lead_risk: "变量滞后目标风险",
       stability_risk: "稳定性风险",
       model_supported_screening_candidate: "模型支持的初筛候选",
       raw_lag_signal: "滞后相关线索",
@@ -3338,7 +3349,7 @@ function columnLabel(column) {
     strong_formula_leakage_flag: "强公式泄漏",
     common_capacity_driver_flag: "疑似共同负荷驱动",
     closed_loop_suspect_flag: "疑似闭环反馈",
-    target_leads_variable_flag: "目标领先变量",
+    target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",
     lag_boundary_flag: "滞后边界命中",

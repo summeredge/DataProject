@@ -37,7 +37,7 @@ def test_common_evidence_and_risk_labels_are_chinese_ready():
         "模型解释支持",
         "候选等级D",
         "滞后触及边界",
-        "目标领先变量",
+        "变量滞后目标",
         "跨工况不稳定",
         "数据质量较差",
     ]

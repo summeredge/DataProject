@@ -40,7 +40,7 @@ def test_direction_and_formula_variants_are_grouped():
         "formula_leakage_risk",
         "formula_coupled_reference",
         "formula_like",
-        "目标领先风险",
+        "变量滞后目标风险",
         "公式泄漏/计算耦合风险",
     ]
     for marker in required:

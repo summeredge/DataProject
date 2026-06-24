@@ -71,7 +71,7 @@ def test_common_risk_decision_direction_markers_are_mapped():
         "无正向滞后",
         "非正主筛查滞后",
         "变量领先目标",
-        "目标领先变量",
+        "变量滞后目标",
         "优先复核但统计受限",
         "二级复核但统计受限",
     ]

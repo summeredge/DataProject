@@ -7,7 +7,7 @@ def test_remaining_risk_aliases_are_grouped():
         "data_or_formula_risk",
         "synchronous_or_leakage_risk",
         "synchronous",
-        "目标领先风险",
+        "变量滞后目标风险",
         "公式泄漏/计算耦合风险",
         "同步变化风险",
     ]

@@ -19,7 +19,7 @@ def test_section_names_are_clearer():
 def test_raw_risk_tag_display_is_chinese_readable():
     required = [
         "formatRawRiskTags",
-        "目标领先变量",
+        "变量滞后目标",
         "滞后触及边界",
         "数据质量差",
     ]

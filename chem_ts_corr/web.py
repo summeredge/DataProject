@@ -1540,7 +1540,6 @@ el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
-renderTermsHelpTab();
 
 
 function fillCapacityOptions(columns) {
@@ -2136,6 +2135,8 @@ function renderTermsHelpTab() {
   container.className = "";
   container.replaceChildren(wrap);
 }
+
+renderTermsHelpTab();
 
 function activateTab(tabId) {
   for (const button of document.querySelectorAll(".tab-button")) {

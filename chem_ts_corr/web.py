@@ -24,6 +24,8 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
+from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +51,11 @@ DOWNLOAD_FILES = {
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
+    "final_review_summary.csv",
+    "causal_review_evidence.csv",
+    "enhanced_validation_summary.csv",
+    "llm_prompt.md",
+    "llm_report.md",
 }
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
@@ -81,6 +88,8 @@ class _Handler(BaseHTTPRequestHandler):
                 encoding = _single(params, "encoding", "utf-8-sig")
                 self._send_json(_columns_response(file_id, encoding))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/trend":
@@ -88,6 +97,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_trend_response(params))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/status":
@@ -95,6 +106,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_task_status_response(_single(params, "task_id")))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/api/result":
@@ -102,6 +115,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_json(_task_result_response(_single(params, "task_id")))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         if parsed.path == "/download":
@@ -109,6 +124,8 @@ class _Handler(BaseHTTPRequestHandler):
                 params = parse_qs(parsed.query)
                 self._send_download(_single(params, "run_id"), _single(params, "file"))
             except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
                 self._send_json({"error": str(exc)}, status=400)
             return
         self._send_json({"error": "Not found"}, status=404)
@@ -127,8 +144,20 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/run_model":
                 self._send_json(_run_model_response(self))
                 return
+            if self.path == "/api/run_enhanced_screening":
+                self._send_json(_run_enhanced_screening_response(self))
+                return
             if self.path in {"/run_causal_review", "/api/run_causal_review"}:
                 self._send_json(_run_causal_review_response(self))
+                return
+            if self.path == "/api/llm_prompt":
+                self._send_json(_llm_prompt_response(self))
+                return
+            if self.path == "/api/llm_report":
+                self._send_json(_llm_report_response(self))
+                return
+            if self.path == "/api/llm_connection":
+                self._send_json(_llm_connection_response(self))
                 return
             self._send_json({"error": "Not found"}, status=404)
         except Exception as exc:
@@ -312,8 +341,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
-        skip_model_lift=_bool_field(form, "skip_model_lift"),
-        skip_rolling_corr=_bool_field(form, "skip_rolling_corr"),
+        skip_model_lift=True,
+        skip_rolling_corr=True,
     )
     task_id = uuid.uuid4().hex
     with TASKS_LOCK:
@@ -364,6 +393,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
+    rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
+    enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
@@ -384,6 +415,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
         "modelLiftScores": _records(lift.head(50)),
+        "rollingCorrScores": _records(rolling.head(50)),
+        "enhancedValidationSummary": _records(enhanced.head(200)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
@@ -426,6 +459,71 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
     if task.get("status") != "done":
         return {"task_id": task_id, "status": task.get("status", "running")}
     return task["result"]
+
+
+def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    from chem_ts_corr.screening import model_lift_scores, rolling_corr_scores
+
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    if ranked.empty:
+        raise ValueError("请先完成主筛查并生成 ranked_features.csv")
+
+    variables = [variable for variable in _secondary_variables_from_ranked(ranked, config) if variable != config.target]
+    if not variables:
+        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
+
+    scaled = _scaled_frame_for_secondary(config)
+    variables = [variable for variable in variables if variable in scaled.columns]
+    if not variables:
+        raise ValueError("候选变量在预处理后的数据中不存在，请检查上传数据和配置")
+
+    best_lags = _best_lags_from_ranked(ranked)
+    lift = model_lift_scores(scaled, config.target, variables, config.max_lag, best_lags=best_lags)
+    rolling = rolling_corr_scores(scaled, config.target, variables, config.max_lag)
+    enhanced = _enhanced_validation_summary(ranked, lift, rolling)
+
+    lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
+    rolling.to_csv(output_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig")
+    enhanced.to_csv(output_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig")
+
+    return {
+        "modelLiftScores": _records(lift.head(200)),
+        "rollingCorrScores": _records(rolling.head(200)),
+        "enhancedValidationSummary": _records(enhanced.head(200)),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "增强筛选完成：结果用于补充验证预测增益和时间稳定性，不代表因果结论。",
+    }
+
+
+def _enhanced_validation_summary(
+    ranked: pd.DataFrame, model_lift: pd.DataFrame, rolling: pd.DataFrame
+) -> pd.DataFrame:
+    if ranked.empty or "variable" not in ranked.columns:
+        return pd.DataFrame()
+    columns = [
+        column
+        for column in ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"]
+        if column in ranked.columns
+    ]
+    summary = ranked[columns].copy(deep=True)
+    if not model_lift.empty:
+        summary = summary.merge(
+            model_lift[[c for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"] if c in model_lift.columns]],
+            on="variable",
+            how="left",
+        )
+    if not rolling.empty:
+        summary = summary.merge(
+            rolling[[c for c in ["variable", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "valid_window_count"] if c in rolling.columns]],
+            on="variable",
+            how="left",
+        )
+    summary["interpretation"] = "enhanced screening only; not a causal conclusion"
+    return summary
 
 
 def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -518,20 +616,104 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         ranked_features=ranked,
         causal_review_candidates=candidates,
         risk_flags=risk,
+        output_dir=output_dir,
         control_columns=_list_field(form, "control_columns") or config.residual_control_columns or config.capacity_columns,
         maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
         min_rows=_int_field(form, "min_rows", 60),
         top_n=_optional_int_field(form, "top_n"),
+        conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
+        conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
+        conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
+        conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
+    evidence = result["causal_review_evidence"]
+    final_summary = result["final_review_summary"]
     conditional.to_csv(output_dir / "conditional_granger_scores.csv", index=False, encoding="utf-8-sig")
     report.to_csv(output_dir / "causal_review_report.csv", index=False, encoding="utf-8-sig")
+    final_summary.to_csv(output_dir / "final_review_summary.csv", index=False, encoding="utf-8-sig")
+    evidence.to_csv(output_dir / "causal_review_evidence.csv", index=False, encoding="utf-8-sig")
     return {
         "conditionalGrangerScores": _records(conditional.head(500)),
         "causalReviewReport": _records(report.head(500)),
+        "finalReviewSummary": _records(final_summary.head(500)),
+        "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    top_n = _int_field(form, "top_n", 20)
+    report_type = _field(form, "report_type", "apc_advice")
+    package = build_llm_analysis_package(output_dir, top_n=top_n)
+    prompt = build_llm_prompt(package, report_type=report_type)
+    (output_dir / "llm_prompt.md").write_text(prompt, encoding="utf-8")
+    return {
+        "prompt": prompt,
+        "package": package,
+        "downloads": _download_links(run_id, output_dir),
+        "message": "AI 综合解读 Prompt 已生成。",
+    }
+
+
+
+def _llm_connection_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    api_key = _field(form, "api_key")
+    config = LLMCallConfig(
+        provider=_field(form, "provider", "deepseek"),
+        base_url=_field(form, "base_url", "https://api.deepseek.com"),
+        model=_field(form, "model", "deepseek-chat"),
+        api_key=api_key,
+        temperature=_float_field(form, "temperature", 0.2),
+        max_tokens=_int_field(form, "max_tokens", 16),
+        timeout=30.0,
+    )
+    try:
+        call_openai_compatible_chat(config, "请回复 OK")
+    except Exception as exc:
+        message = str(exc)
+        if api_key:
+            message = message.replace(api_key, redact_secret(api_key))
+        return {"ok": False, "message": f"API 连接失败：{message}"}
+    return {"ok": True, "message": "API 连接成功"}
+
+def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    api_key = _field(form, "api_key")
+    output_dir = _resolve_run_dir(run_id)
+    config = LLMCallConfig(
+        provider=_field(form, "provider", "deepseek"),
+        base_url=_field(form, "base_url", "https://api.deepseek.com"),
+        model=_field(form, "model", "deepseek-chat"),
+        api_key=api_key,
+        temperature=_float_field(form, "temperature", 0.2),
+        max_tokens=_int_field(form, "max_tokens", 4096),
+    )
+    try:
+        result = generate_llm_report(
+            output_dir,
+            config,
+            top_n=_int_field(form, "top_n", 20),
+            report_type=_field(form, "report_type", "apc_advice"),
+        )
+    except Exception as exc:
+        message = str(exc)
+        if api_key:
+            message = message.replace(api_key, redact_secret(api_key))
+        raise RuntimeError(message) from exc
+    return {
+        "report": result.get("report", ""),
+        "prompt": result.get("prompt", ""),
+        "usage": result.get("usage", {}),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "LLM 报告已生成。",
     }
 
 
@@ -914,13 +1096,13 @@ INDEX_HTML = r"""<!doctype html>
     button.secondary { background:#e8edf3; color:var(--text); }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .status { min-height:22px; color:var(--muted); font-size:13px; white-space:pre-wrap; }
-    .note { color:var(--warn); font-size:13px; line-height:1.5; }
+    .note { color:var(--warn); font-size:10px; line-height:1.2; }
     .results { display:grid; gap:16px; min-width:0; align-content:start; position:relative; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     h2 { margin:0; font-size:18px; }
     .download-buttons { display:flex; gap:8px; flex-wrap:wrap; }
     .download-buttons a { display:inline-block; border-radius:6px; padding:8px 10px; background:var(--green); color:#fff; text-decoration:none; font-size:13px; }
-    .help { display:grid; gap:6px; color:var(--muted); font-size:13px; line-height:1.5; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:10px 12px; }
+    .help { display:grid; gap:4px; color:var(--muted); font-size:10px; line-height:1.25; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
     .tabs {
       position:sticky;
       top:0;
@@ -969,12 +1151,38 @@ INDEX_HTML = r"""<!doctype html>
     .chart svg { width:100%; height:320px; display:block; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
+    .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow:auto; max-height:560px; border:1px solid var(--line); border-radius:6px; }
-    table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
-    th { position:sticky; top:0; background:#eef2f6; z-index:1; }
+    .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    .terms-help-table-wrap { overflow-x:auto; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
+    .terms-help-table-wrap::after { content:"术语说明按正常页面高度完整展示；超出页面宽度时可横向滚动"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
+    .terms-help-category-cell { font-weight:650; color:var(--text); background:#f8fafc; vertical-align:top; }
+    /* legacy regression marker: table-layout:fixed */
+    table { width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:12px; }
+    th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+    th { position:sticky; top:0; background:#eef2f6; z-index:2; box-shadow:0 1px 0 var(--line); }
+    tbody tr:nth-child(even) { background:#fbfcfe; }
+    tbody tr:hover { background:#f1f5f9; }
+    th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 0 #e7ebf0; }
+    th:first-child { z-index:3; background:#eef2f6; }
+    td.numeric { text-align:right; font-variant-numeric:tabular-nums; }
+    td.wrap-cell { line-height:1.35; }
+    .compact-result-table tbody tr { cursor:pointer; }
+    .compact-result-table tbody tr.selected { background:#e0f2fe; }
+    .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:#f8fafc; }
+    .detail-panel h3 { margin:0 0 8px; font-size:15px; }
+    .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.55); z-index:1000; }
+    .modal-backdrop.open { display:flex; }
+    .modal-card { width:min(960px, 96vw); max-height:88vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 24px 60px rgba(15,23,42,.28); border:1px solid var(--line); }
+    .modal-header { position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); background:#fff; z-index:1; }
+    .modal-header h3 { margin:0; font-size:16px; }
+    .modal-body { padding:16px; }
+    .modal-close { background:#e8edf3; color:var(--text); padding:8px 12px; }
+    .detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
+    .detail-field { background:#fff; border:1px solid #e7ebf0; border-radius:6px; padding:8px; }
+    .detail-field strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
     th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
@@ -985,9 +1193,44 @@ INDEX_HTML = r"""<!doctype html>
     .decision-not_recommended { background:#e5e7eb; color:#374151; }
     .decision-insufficient_evidence { background:#dbeafe; color:#1e40af; }
     .decision-manual_review_only { background:#7f1d1d; color:#fff; }
+    .review-card {
+      border:1px solid #d0d7de;
+      border-radius:8px;
+      padding:12px;
+      background:#fff;
+      margin-top:10px;
+    }
+    .review-card h3 { margin-top:0; }
+    .metric-grid {
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+      gap:8px;
+    }
+    .metric-item {
+      background:#f6f8fa;
+      padding:8px;
+      border-radius:6px;
+    }
+    .metric-item strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .small-button { padding:5px 8px; font-size:12px; }
+    .clickable-row { cursor:pointer; }
+    .clickable-row:hover { background:#f6f8fa; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
     pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } }
+    .markdown-report { min-height:320px; max-height:720px; overflow:auto; padding:18px 22px; border:1px solid var(--line); border-radius:8px; background:#fff; line-height:1.65; font-size:14px; }
+    .markdown-report h1, .markdown-report h2, .markdown-report h3 { margin:1.1em 0 .45em; line-height:1.25; color:var(--text); }
+    .markdown-report h1 { font-size:24px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+    .markdown-report h2 { font-size:20px; border-bottom:1px solid #edf0f4; padding-bottom:6px; }
+    .markdown-report h3 { font-size:16px; }
+    .markdown-report p, .markdown-report ul, .markdown-report ol { margin:.55em 0; }
+    .markdown-report blockquote { margin:10px 0; padding:8px 12px; border-left:4px solid var(--accent); background:#f8fafc; color:var(--muted); }
+    .markdown-report code { padding:2px 4px; border-radius:4px; background:#f1f5f9; font-family:Consolas,monospace; }
+    .markdown-report pre { max-height:none; margin:10px 0; }
+    .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:13px; }
+    .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
+    .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
+    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -1024,8 +1267,6 @@ INDEX_HTML = r"""<!doctype html>
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
         <label>重采样规则<input id="resampleRule" placeholder="可留空，例如 5min"></label>
       </div>
-      <label><input id="skipModelLift" type="checkbox"> 跳过模型提升评分（大数据加速）</label>
-      <label><input id="skipRollingCorr" type="checkbox"> 跳过滚动稳定性评分（大数据加速）</label>
       <div class="row">
         <label>预处理模式
           <select id="preprocessMode">
@@ -1075,18 +1316,18 @@ INDEX_HTML = r"""<!doctype html>
 
     <section class="results">
       <div class="tabs">
-        <button class="tab-button active" data-tab="overviewTab">总览</button>
+        <button class="tab-button active" data-tab="overviewTab">初步分析</button>
         <button class="tab-button" data-tab="candidatesTab">候选变量</button>
-        <button class="tab-button" data-tab="risksTab">风险诊断</button>
-        <button class="tab-button" data-tab="lagTab">滞后分析</button>
         <button class="tab-button" data-tab="trendTab">趋势图</button>
         <button class="tab-button" data-tab="validationTab">二次验证</button>
         <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
+        <button class="tab-button" data-tab="llmReportTab">AI 综合解读</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
+        <button class="tab-button" data-tab="termsHelpTab">术语与标签说明</button>
       </div>
 
       <div id="overviewTab" class="tab-panel active">
-        <h2>总览</h2>
+        <h2>初步分析</h2>
         <div id="overview" class="overview-grid"></div>
         <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
@@ -1095,26 +1336,17 @@ INDEX_HTML = r"""<!doctype html>
       <div id="candidatesTab" class="tab-panel">
         <h2>候选变量</h2>
         <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
+        <h3>结果质量提示</h3>
+        <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
         <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <h2>轻量遗漏候选</h2>
         <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
         <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
       </div>
 
-      <div id="risksTab" class="tab-panel">
-        <h2>风险诊断</h2>
-        <div class="help">仅展示有风险标签的变量。无风险或文件不存在时显示未启用/无结果。</div>
-        <div id="riskTable" class="empty">暂无风险诊断结果。</div>
-      </div>
-
-      <div id="lagTab" class="tab-panel">
-        <h2>滞后分析</h2>
-        <div class="help">默认绘制前 5 个变量的滞后得分曲线；完整滞后明细请到下载页获取。</div>
-        <div id="lagChart" class="chart empty">暂无滞后曲线。</div>
-      </div>
-
       <div id="trendTab" class="tab-panel">
         <h2>趋势图</h2>
+        <div id="trendReviewHint" class="help">点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。</div>
         <div class="chart-controls">
           <label>数据 1<select id="trendVar1"></select></label>
           <label>数据 2<select id="trendVar2"></select></label>
@@ -1145,11 +1377,21 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="validationTab" class="tab-panel">
         <h2>二次验证</h2>
-        <div class="help">先完成主筛查，再按需运行 Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
+        <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
+        <div class="help">Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</div>
         <div class="actions">
+          <button id="runEnhancedScreening" disabled>运行增强筛选</button>
           <button id="runGranger" disabled>运行 Granger 验证</button>
           <button id="runModel" disabled>运行随机森林模型解释</button>
         </div>
+        <h2>增强筛选结果</h2>
+        <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
+        <h3>增强筛选摘要</h3>
+        <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
+        <h3>模型提升评分</h3>
+        <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
+        <h3>滚动稳定性评分</h3>
+        <div id="enhancedRollingTable" class="empty">点击“运行增强筛选”后显示滚动稳定性评分。</div>
         <h2>Granger 验证</h2>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
         <h2>随机森林模型解释变量排序</h2>
@@ -1165,47 +1407,137 @@ INDEX_HTML = r"""<!doctype html>
       <div id="causalReviewTab" class="tab-panel">
         <h2>三层复核</h2>
         <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
+        <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</div>
+        <div class="help">高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</div>
+        <div class="row">
+          <label>条件Granger滞后模式
+            <select id="conditionalLagMode">
+              <option value="ranked_window">围绕主筛查最佳滞后</option>
+              <option value="best_only">仅最佳滞后</option>
+              <option value="full_scan">全量扫描</option>
+            </select>
+          </label>
+          <label>条件Granger滞后窗口<input id="conditionalLagWindow" type="number" min="0" value="5"></label>
+          <label>条件Granger fallback 最大滞后<input id="conditionalFallbackMaxlag" type="number" min="1" value="24"></label>
+          <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
+        </div>
         <div class="actions">
           <button id="runCausalReview" disabled>运行三层复核</button>
         </div>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>三层复核报告</h2>
-        <div class="download-buttons" id="causalReportDownload"></div>
-        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
+        <h2>最终推荐摘要</h2>
+        <div class="help">该表基于逐变量综合证据复核表生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
+        <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
+        <div class="download-buttons" id="finalReviewSummaryDownload"></div>
+        <h3>最终推荐结果质检总览</h3>
+        <div id="finalReviewQualityOverview" class="overview-grid"></div>
+        <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
+        <h2>逐变量综合证据复核表</h2>
+        <div class="help">逐变量综合证据复核表会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
+        <div class="download-buttons" id="causalEvidenceDownload"></div>
+        <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量综合证据复核表。</div>
+      </div>
+
+
+      <div id="llmReportTab" class="tab-panel">
+        <h2>AI 综合解读</h2>
+        <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
+        <div class="llm-config-grid">
+          <label>分析变量数量<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
+          <label>报告类型
+            <select id="llmReportType">
+              <option value="apc_advice">APC/DCS 工程建议</option>
+              <option value="general">通用综合解读</option>
+            </select>
+          </label>
+          <label>模型服务
+            <select id="llmProvider">
+              <option value="deepseek">DeepSeek</option>
+              <option value="openai">OpenAI-compatible</option>
+            </select>
+          </label>
+          <label>接口地址<input id="llmBaseUrl" value="https://api.deepseek.com"></label>
+          <label>模型名称<input id="llmModel" value="deepseek-chat"></label>
+          <label>API 密钥<input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..."></label>
+          <label>温度参数<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
+          <label>最大输出 Token 数<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
+        </div>
+        <div id="llmConnectionStatus" class="help" aria-live="polite">尚未测试 API 连接。</div>
+        <div class="actions">
+          <button id="testLlmConnection">测试 API 连接</button>
+          <button id="generateLlmReport">生成 DeepSeek 报告</button>
+          <button id="copyLlmReport">复制报告</button>
+          <span id="llmReportDownload" class="download-buttons"><a href="#">下载 llm_report.md</a></span>
+        </div>
+        <div id="llmReportRendered" class="markdown-report empty">生成后将在这里按 Markdown 格式显示 LLM 报告。</div>
       </div>
 
       <div id="downloadsTab" class="tab-panel">
         <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
       </div>
+
+      <div id="termsHelpTab" class="tab-panel">
+        <h2>术语与标签说明</h2>
+        <div class="help">
+          <div>本页用于解释分析结果中的标签、风险、证据等级和模型指标，帮助工程人员理解页面显示名称对应的复核含义。</div>
+          <div>这些说明仅用于辅助工程复核，不改变分析结果，也不参与计算；后台分析输出和 CSV 下载保持不变。</div>
+        </div>
+        <div id="termsHelpTable" class="empty">术语说明加载中。</div>
+      </div>
+
     </section>
   </main>
+
+  <div id="detailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="detailModalTitle">变量详情</h3>
+        <button id="detailModalClose" type="button" class="modal-close">关闭</button>
+      </div>
+      <div id="detailModalBody" class="modal-body"></div>
+    </div>
+  </div>
 
 <script>
 let fileId = "";
 let currentRunId = "";
 let lastRows = [];
-let lastLagRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
 let lastModelVariableRows = [];
 let lastNearMissRows = [];
 let lastModelDiscoveredRows = [];
+let lastEnhancedSummaryRows = [];
+let lastEnhancedLiftRows = [];
+let lastEnhancedRollingRows = [];
 let lastConditionalRows = [];
 let lastCausalReportRows = [];
-let sortState = { column: "score", direction: "desc" };
+let lastCausalEvidenceRows = [];
+let lastFinalReviewSummaryRows = [];
+let llmPromptText = "";
+let llmReportMarkdown = "";
+let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
+const llmPromptEndpoint = "/api/llm_prompt";
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
 }
 el("drawTrend").addEventListener("click", drawTrend);
+el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
+el("detailModalClose").addEventListener("click", closeDetailModal);
+el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
+el("testLlmConnection").addEventListener("click", testLlmConnection);
+el("generateLlmReport").addEventListener("click", generateLlmReport);
+el("copyLlmReport").addEventListener("click", copyLlmReport);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
@@ -1354,8 +1686,6 @@ async function analyze() {
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
-    form.append("skip_model_lift", el("skipModelLift").checked ? "true" : "false");
-    form.append("skip_rolling_corr", el("skipRollingCorr").checked ? "true" : "false");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
@@ -1394,28 +1724,39 @@ function formatTaskStatus(statusData) {
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   lastRows = data.rankedFeatures || [];
-  lastLagRows = data.lagScores || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
   lastModelVariableRows = [];
   lastNearMissRows = data.nearMissCandidates || [];
   lastModelDiscoveredRows = [];
+  lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
+  const hasEnhancedScreening = lastEnhancedSummaryRows.length > 0;
+  lastEnhancedLiftRows = hasEnhancedScreening ? (data.modelLiftScores || []) : [];
+  lastEnhancedRollingRows = hasEnhancedScreening ? (data.rollingCorrScores || []) : [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
+  lastCausalEvidenceRows = [];
+  lastFinalReviewSummaryRows = [];
+  closeDetailModal();
   renderOverview(data.overview || {});
-  renderTable(applySort(lastRows));
+  renderScreeningQualityHints(lastRows);
+  renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
-  renderGenericTable("riskTable", data.riskFlags || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
-  renderLagChart(lastLagRows, lastRows.slice(0, 5).map((row) => row.variable));
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
   renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
+  renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
+  renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
+  renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
   renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-  renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+  renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
+  renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
+  renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
+  el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
@@ -1425,9 +1766,58 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function elapsedSeconds(startedAt) {
+  return ((performance.now() - startedAt) / 1000).toFixed(1);
+}
+
+function formatRunningElapsed(message, startedAt) {
+  return `${message}（已运行 ${elapsedSeconds(startedAt)} 秒）`;
+}
+
+function startStatusTimer(message, startedAt) {
+  setStatus(formatRunningElapsed(message, startedAt));
+  return setInterval(() => {
+    setStatus(formatRunningElapsed(message, startedAt));
+  }, 100);
+}
+
+function stopStatusTimer(timerId) {
+  if (timerId) clearInterval(timerId);
+}
+
+function appendElapsed(message, startedAt) {
+  return `${message} 总耗时：${elapsedSeconds(startedAt)} 秒。`;
+}
+
+async function runEnhancedScreening() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在运行增强筛选：补充验证预测增益和时间稳定性...", startedAt);
+  el("runEnhancedScreening").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    const data = await postForm("/api/run_enhanced_screening", form);
+    lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
+    lastEnhancedLiftRows = data.modelLiftScores || [];
+    lastEnhancedRollingRows = data.rollingCorrScores || [];
+    renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
+    renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
+    renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
+    renderDownloads(data.downloads || []);
+    setStatus(appendElapsed(data.message || "增强筛选完成。结果不代表因果结论。", startedAt));
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("runEnhancedScreening").disabled = !currentRunId;
+  }
+}
+
 async function runGranger() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行 Granger 二级验证...");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在运行 Granger 二级验证...", startedAt);
   el("runGranger").disabled = true;
   try {
     const form = new FormData();
@@ -1436,17 +1826,19 @@ async function runGranger() {
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
     renderDownloads(data.downloads || []);
-    setStatus("Granger 二级验证完成。");
+    setStatus(appendElapsed("Granger 二级验证完成。", startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runGranger").disabled = !currentRunId;
   }
 }
 
 async function runModel() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行随机森林模型解释...");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在运行随机森林模型解释...", startedAt);
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
   try {
@@ -1461,10 +1853,11 @@ async function runModel() {
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
-    setStatus(`随机森林模型解释完成。${metrics}`);
+    setStatus(appendElapsed(`随机森林模型解释完成。${metrics}`, startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runModel").disabled = !currentRunId;
     el("runCausalReview").disabled = !currentRunId;
   }
@@ -1472,8 +1865,10 @@ async function runModel() {
 
 async function runCausalReview() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
-  setStatus("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...", startedAt);
   el("runCausalReview").disabled = true;
+  closeDetailModal();
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
@@ -1482,20 +1877,293 @@ async function runCausalReview() {
     form.append("control_columns", getCapacitySelection().join(","));
     form.append("maxlag", el("maxLag").value);
     form.append("min_rows", "60");
+    form.append("conditional_lag_mode", el("conditionalLagMode").value);
+    form.append("conditional_lag_window", el("conditionalLagWindow").value);
+    form.append("conditional_fallback_maxlag", el("conditionalFallbackMaxlag").value);
+    form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalReportRows = data.causalReviewReport || [];
+    lastCausalEvidenceRows = data.causalReviewEvidence || [];
+    lastFinalReviewSummaryRows = data.finalReviewSummary || [];
+    tableSortStates["finalReviewSummaryTable"] = { column: "final_rank", direction: "asc" };
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
-    renderCausalReviewTable("causalReviewTable", lastCausalReportRows);
+    renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
+    renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
+    renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
-    setStatus(data.message || "三层复核完成。结果不是因果结论。");
+    setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt));
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt));
   } finally {
+    stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
   }
 }
+
+
+async function testLlmConnection() {
+  if (!el("llmApiKey").value) {
+    el("llmConnectionStatus").textContent = "请输入 API Key。API Key 不会保存。";
+    return;
+  }
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在测试 API 连接...", startedAt);
+  el("testLlmConnection").disabled = true;
+  el("llmConnectionStatus").textContent = "正在测试 API 连接...";
+  try {
+    const form = new FormData();
+    form.append("provider", el("llmProvider").value || "deepseek");
+    form.append("base_url", el("llmBaseUrl").value || "https://api.deepseek.com");
+    form.append("model", el("llmModel").value || "deepseek-chat");
+    form.append("api_key", el("llmApiKey").value);
+    form.append("temperature", el("llmTemperature").value || "0.2");
+    form.append("max_tokens", "16");
+    const data = await postForm("/api/llm_connection", form);
+    el("llmConnectionStatus").textContent = data.message || (data.ok ? "API 连接成功" : "API 连接失败");
+    setStatus(appendElapsed(data.message || "API 连接测试完成。", startedAt));
+  } catch (error) {
+    const message = error.message || String(error);
+    el("llmConnectionStatus").textContent = message;
+    setStatus(appendElapsed(message, startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("testLlmConnection").disabled = false;
+  }
+}
+
+async function generateLlmReport() {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  if (!el("llmApiKey").value) return setStatus("请输入 API Key。API Key 不会保存。");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在调用 LLM 生成 AI 综合解读报告...", startedAt);
+  el("generateLlmReport").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("provider", el("llmProvider").value || "deepseek");
+    form.append("base_url", el("llmBaseUrl").value || "https://api.deepseek.com");
+    form.append("model", el("llmModel").value || "deepseek-chat");
+    form.append("api_key", el("llmApiKey").value);
+    form.append("temperature", el("llmTemperature").value || "0.2");
+    form.append("max_tokens", el("llmMaxTokens").value || "4096");
+    form.append("top_n", el("llmTopN").value || "20");
+    form.append("report_type", el("llmReportType").value || "apc_advice");
+    const data = await postForm("/api/llm_report", form);
+    llmPromptText = data.prompt || llmPromptText || "";
+    setLlmReport(data.report || "");
+    renderDownloadTarget("llmReportDownload", data.downloads || [], "llm_report.md");
+    renderDownloads(data.downloads || []);
+    setStatus(appendElapsed(data.message || "LLM 报告已生成。", startedAt));
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt));
+  } finally {
+    stopStatusTimer(timerId);
+    el("generateLlmReport").disabled = false;
+  }
+}
+
+async function copyLlmReport() {
+  const text = llmReportMarkdown || "";
+  if (!text) return setStatus("请先生成 LLM 报告。");
+  await navigator.clipboard.writeText(text);
+  setStatus("LLM 报告已复制到剪贴板。");
+}
+
+function setLlmReport(markdown) {
+  llmReportMarkdown = markdown || "";
+  renderMarkdownReport(llmReportMarkdown);
+}
+
+function renderMarkdownReport(markdown) {
+  const container = el("llmReportRendered");
+  if (!container) return;
+  if (!markdown.trim()) {
+    container.className = "markdown-report empty";
+    container.textContent = "生成后将在这里按 Markdown 格式显示 LLM 报告。";
+    return;
+  }
+  container.className = "markdown-report";
+  container.innerHTML = markdownToHtml(markdown);
+}
+
+function markdownToHtml(markdown) {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const html = [];
+  let inList = false;
+  let inCode = false;
+  let codeLines = [];
+  const closeList = () => {
+    if (inList) {
+      html.push("</ul>");
+      inList = false;
+    }
+  };
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim().startsWith("```")) {
+      if (inCode) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+    if (isMarkdownTableStart(lines, i)) {
+      closeList();
+      const parsed = parseMarkdownTable(lines, i);
+      html.push(markdownTableToHtml(parsed.headers, parsed.rows));
+      i = parsed.nextIndex - 1;
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (bullet) {
+      if (!inList) {
+        html.push("<ul>");
+        inList = true;
+      }
+      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+    closeList();
+    html.push(`<p>${inlineMarkdown(line)}</p>`);
+  }
+  closeList();
+  if (inCode) html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  return html.join("");
+}
+
+function isMarkdownTableStart(lines, index) {
+  return isMarkdownTableRow(lines[index]) && isMarkdownTableSeparator(lines[index + 1]);
+}
+
+function isMarkdownTableRow(line) {
+  return typeof line === "string" && line.includes("|") && splitMarkdownTableRow(line).length > 1;
+}
+
+function isMarkdownTableSeparator(line) {
+  if (!isMarkdownTableRow(line)) return false;
+  return splitMarkdownTableRow(line).every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function splitMarkdownTableRow(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function parseMarkdownTable(lines, startIndex) {
+  const headers = splitMarkdownTableRow(lines[startIndex]);
+  const rows = [];
+  let nextIndex = startIndex + 2;
+  while (nextIndex < lines.length && isMarkdownTableRow(lines[nextIndex]) && lines[nextIndex].trim()) {
+    const row = splitMarkdownTableRow(lines[nextIndex]);
+    while (row.length < headers.length) row.push("");
+    rows.push(row.slice(0, headers.length));
+    nextIndex += 1;
+  }
+  return { headers, rows, nextIndex };
+}
+
+function markdownTableToHtml(headers, rows) {
+  const head = headers.map((cell) => `<th>${inlineMarkdown(cell)}</th>`).join("");
+  const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${inlineMarkdown(cell)}</td>`).join("")}</tr>`).join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function inlineMarkdown(text) {
+  return escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+
+const termsHelpRows = [
+  { category: "参数设置说明", name: "参数说明", signal: "参数说明用于解释页面设置项的含义和对结果的影响；该帮助表不读取运行结果。", reading: "参数设置会影响候选筛选、滞后搜索、风险标签和复核范围，但本说明本身不改变分析结果，也不参与计算。", action: "先按数据口径确认设置，再解读候选排序、风险标签和复核清单。" },
+  { category: "参数设置说明", name: "时间列", signal: "作为时序索引的时间戳字段。", reading: "决定排序、重采样、滞后对齐和趋势展示的时间基准。", action: "选择连续、可信、时区口径一致的采样时间列。" },
+  { category: "参数设置说明", name: "目标列", signal: "需要解释、预测或优化的目标变量。", reading: "所有候选筛选、滞后搜索、风险标签和复核范围都围绕该目标展开。", action: "确认目标不是中间计算字段或与候选直接公式耦合的派生量。" },
+  { category: "参数设置说明", name: "最大滞后点数", signal: "正负方向最多扫描的采样点数量。", reading: "窗口过小可能触发滞后边界风险，窗口过大可能增加偶然峰值和计算量。", action: "结合停留时间、采样周期和工艺响应时间设定，并用趋势图复核峰值。" },
+  { category: "参数设置说明", name: "输出前 K 个", signal: "主筛查候选排序保留的前 K 个变量。", reading: "影响页面主候选范围和后续增强复核的默认输入，不改变完整下载文件的计算口径。", action: "探索阶段可调大，正式复核时聚焦工程上可解释的候选。" },
+  { category: "参数设置说明", name: "最小有效比例", signal: "变量参与筛查所需的最低有效数据占比。", reading: "比例过低会带来数据质量风险；比例过高可能过滤掉间歇运行但重要的点位。", action: "先处理缺失、坏点和常数段，再按装置运行特点调整阈值。" },
+  { category: "参数设置说明", name: "重采样规则", signal: "将原始数据对齐到统一采样间隔的规则。", reading: "会改变滞后点数对应的实际时间长度，并影响缺失、峰值和相关强度。", action: "使用符合采集周期和工艺响应速度的规则，避免过度平滑。" },
+  { category: "参数设置说明", name: "预处理模式", signal: "原始、去趋势、差分或组合预处理。", reading: "会改变相关性关注的是绝对水平、慢趋势还是短期波动。", action: "根据问题选择模式，并比较不同模式下候选是否稳定。" },
+  { category: "参数设置说明", name: "去趋势窗口点数", signal: "滑动去趋势时使用的窗口长度。", reading: "窗口决定慢趋势被剔除的尺度，过短可能去掉真实响应，过长可能保留漂移。", action: "按班次、停留时间或主要扰动周期设置，并检查趋势图。" },
+  { category: "参数设置说明", name: "负荷代表列", signal: "代表装置负荷或产量的变量。", reading: "用于识别共同负荷驱动和工况稳定性，影响风险标签解释。", action: "优先选择现场认可的负荷、进料或产量指标。" },
+  { category: "参数设置说明", name: "工况分段", signal: "按低/中/高负荷或自定义阈值拆分工况。", reading: "用于判断候选关系是否跨工况稳定，影响复核优先级。", action: "先确认分段边界有工程含义，避免样本过少。" },
+  { category: "参数设置说明", name: "自定义下限 / 自定义上限", signal: "工况分段或过滤时使用的自定义上下限。", reading: "会限定参与对比的运行区间，影响稳定性和风险标签判断。", action: "用装置负荷区间、牌号或操作窗口确定上下限。" },
+  { category: "参数设置说明", name: "残差控制列", signal: "在残差相关或条件验证中需要控制的变量。", reading: "用于减弱共同负荷、已知干扰或强共线变量的影响。", action: "填入负荷、设定值、关键上游扰动等已知控制因素。" },
+  { category: "参数设置说明", name: "强制复核变量", signal: "即使未进入主排序前列也要纳入复核的变量。", reading: "扩展复核范围，适合业务重点变量或专家指定变量。", action: "只加入有明确工艺理由的点位，避免复核清单过长。" },
+  { category: "参数设置说明", name: "三层复核候选数量", signal: "进入最终三层复核的候选变量数量。", reading: "数量越大覆盖越广但计算和人工解释成本越高。", action: "先用默认数量快速定位，再按需要扩大范围。" },
+  { category: "参数设置说明", name: "风险标签包含过滤", signal: "按风险标签文本筛选复核或推荐结果。", reading: "只改变页面查看和复核聚焦范围，不表示未显示变量没有风险。", action: "用于定位共同负荷、闭环、数据质量等特定问题，留空表示不过滤。" },
+  { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
+  { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
+  { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
+  { category: "风险标签说明", name: "数据质量风险", signal: "缺失、常数段、异常尖峰或有效比例不足影响结果。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
+  { category: "风险标签说明", name: "闭环反馈风险", signal: "变量可能处于控制回路内，与目标互相调节。", reading: "相关方向可能被 PID、APC 或人工操作反转。", action: "结合控制策略和阀位/设定值，必要时按开闭环时段分段验证。" },
+  { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
+  { category: "证据等级与复核建议", name: "强预测证据", signal: "相关、模型提升、预测贡献、稳定性等多类证据同时较好。", reading: "该变量对预测目标有较稳定信息量，但仍不是因果结论。", action: "进入优先复核，结合机理、趋势和现场操作记录确认。" },
+  { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、闭环或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程策略。" },
+  { category: "证据等级与复核建议", name: "优先复核", signal: "综合排序或最终推荐摘要中优先级较高。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
+  { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
+  { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
+  { category: "滞后与方向解释", name: "变量滞后目标", signal: "最佳 lag 为负，变量变化晚于目标。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
+  { category: "模型验证指标", name: "模型提升", signal: "加入候选变量后，相比基线模型的预测效果改善。", reading: "变量提供了目标自身历史以外的增量信息。", action: "优先关注提升稳定且跨工况一致的变量。" },
+  { category: "模型验证指标", name: "预测贡献", signal: "随机森林模型解释或重要性排序靠前。", reading: "模型依赖该变量做预测，但不代表可操作或因果成立。", action: "与相关性、Granger 和工程机理交叉验证。" },
+  { category: "模型验证指标", name: "仅作预测验证，不是因果结论", signal: "Granger、条件 Granger 或模型指标显著。", reading: "说明历史信息有助于预测，不自动证明调节该变量会改变目标。", action: "在工程应用前必须经过机理和可操作性复核。" },
+  { category: "稳定性指标", name: "滚动稳定性", signal: "滚动窗口内方向、强度或排名是否一致。", reading: "低稳定性可能表示关系只在局部时段成立。", action: "按时间段、开停工或异常时段拆分复核。" },
+  { category: "稳定性指标", name: "工况稳定性", signal: "低/中/高负荷或自定义工况下结果是否一致。", reading: "关系受负荷、配方或操作模式影响。", action: "分工况建立候选清单，避免跨工况混用。" },
+  { category: "工程使用建议", name: "可能 MV 候选", signal: "变量领先目标、风险可控且具备可调节属性。", reading: "可能适合作为操纵变量或控制策略候选。", action: "确认执行器约束、安全边界和操作权限后再试验。" },
+  { category: "工程使用建议", name: "可能前馈 / 干扰变量", signal: "变量领先目标但不可直接调节，且能代表上游扰动。", reading: "适合用于提前预警、前馈补偿或软测量输入。", action: "验证采样及时性和信号可靠性，设计前馈延时补偿。" }
+];
+
+function renderTermsHelpGroupedRows(rows) {
+  const keys = ["name", "signal", "reading", "action"];
+  let html = "";
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    const isFirstInCategory = index === 0 || row.category !== rows[index - 1].category;
+    const categoryCell = isFirstInCategory
+      ? `<td class="terms-help-category-cell" rowspan="${rows.filter((item) => item.category === row.category).length}">${escapeHtml(row.category)}</td>`
+      : "";
+    html += `<tr>${categoryCell}${keys.map((key) => `<td>${escapeHtml(row[key])}</td>`).join("")}</tr>`;
+  }
+  return html;
+}
+
+function renderTermsHelpTab() {
+  const container = el("termsHelpTable");
+  if (!container) return;
+  const columns = ["分类", "页面显示名称", "具体表征", "工程解读", "建议动作"];
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead><tbody>${renderTermsHelpGroupedRows(termsHelpRows)}</tbody>`;
+  const wrap = document.createElement("div");
+  wrap.className = "terms-help-table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+}
+
+renderTermsHelpTab();
 
 function activateTab(tabId) {
   for (const button of document.querySelectorAll(".tab-button")) {
@@ -1602,35 +2270,224 @@ function valueRange(values) {
   return { min: min - margin, max: max + margin };
 }
 
+const candidateTable = "table";
+const candidateCoreColumns = coreCandidateColumns;
+
+function candidateDetailColumns(row) {
+  const core = new Set(candidateCoreColumns());
+  return Object.keys(row || {}).filter((column) => !core.has(column));
+}
+
+const CANONICAL_RISK_GROUPS = [
+  {
+    key: "lag_boundary_risk",
+    label: "滞后边界风险",
+    aliases: ["lag_boundary", "lag_boundary_flag", "lag_boundary_risk", "lag_reaches_boundary", "boundary_lag_uncertain", "screening_lag_boundary_risk", "model_lag_boundary_risk"],
+  },
+  {
+    key: "target_lead_risk",
+    label: "变量滞后目标风险",
+    aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag", "non-positive screening lag"],
+  },
+  {
+    key: "data_or_formula_risk",
+    label: "公式泄漏/计算耦合风险",
+    aliases: ["strong_formula_leakage", "formula_leakage_risk", "formula_coupled_reference", "formula_like", "data_or_formula_risk"],
+  },
+  {
+    key: "data_quality_risk",
+    label: "数据质量风险",
+    aliases: ["poor_data_quality", "poor_quality_variable"],
+  },
+  {
+    key: "synchronous_or_leakage_risk",
+    label: "同步变化风险",
+    aliases: ["synchronous", "synchronous_or_leakage_risk", "non-positive screening lag", "non_positive_screening_lag", "non-positive lag", "zero_lag", "same_time_movement"],
+  },
+  {
+    key: "regime_instability_risk",
+    label: "工况/时变不稳定风险",
+    aliases: ["unstable_across_regimes", "unstable_over_time", "unstable_candidate", "stability_risk"],
+  },
+  {
+    key: "capacity_driver_risk",
+    label: "共同负荷驱动风险",
+    aliases: ["capacity_driven", "common_capacity_driver"],
+  },
+  {
+    key: "closed_loop_risk",
+    label: "闭环反馈风险",
+    aliases: ["closed_loop_suspect"],
+  },
+  {
+    key: "collinearity_risk",
+    label: "共线性风险",
+    aliases: ["residual_collinearity", "high_collinearity_risk"],
+  },
+];
+
+function splitRiskTags(value) {
+  return String(value ?? "")
+    .split(/[;,，；|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizedRiskToken(value) {
+  return String(value ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function normalizeRiskTags(value) {
+  const rawRiskTags = splitRiskTags(value);
+  const normalizedRawRiskTags = rawRiskTags.map(normalizedRiskToken);
+  const matched = [];
+  for (const group of CANONICAL_RISK_GROUPS) {
+    if (group.aliases.some((alias) => normalizedRawRiskTags.includes(normalizedRiskToken(alias)))) {
+      matched.push(group);
+    }
+  }
+  return {
+    rawRiskTags,
+    displayRisks: matched.map((group) => group.label),
+    canonicalKeys: matched.map((group) => group.key),
+  };
+}
+
+function formatRiskFlags(value) {
+  const normalized = normalizeRiskTags(value);
+  return normalized.displayRisks.length ? normalized.displayRisks.join("；") : formatValue(value);
+}
+
+function formatRawRiskTags(value) {
+  const rawRiskTags = splitRiskTags(value);
+  return rawRiskTags.length ? rawRiskTags.map((tag) => formatValue(tag)).join("；") : "-";
+}
+
+function renderRiskTagDetails(value) {
+  const normalized = normalizeRiskTags(value);
+  const canonical = normalized.displayRisks.length ? normalized.displayRisks.join("；") : "-";
+  const raw = formatRawRiskTags(value);
+  return `
+    <div class="detail-field">
+      <strong>标准风险</strong>
+      <span>${escapeHtml(canonical)}</span>
+    </div>
+    <div class="detail-field">
+      <strong>原始风险标签</strong>
+      <span>${escapeHtml(raw)}</span>
+    </div>
+  `;
+}
+
 function renderTable(rows) {
-  if (!rows.length) {
-    el("table").className = "empty";
-    el("table").textContent = "没有可展示的候选变量。";
-    return;
-  }
-  const columns = coreCandidateColumns();
-  const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => {
-    const mark = sortState.column === c ? (sortState.direction === "asc" ? "↑" : "↓") : "";
-    return `<th class="sortable" data-column="${escapeHtml(c)}">${escapeHtml(columnLabel(c))}<span class="sort-mark">${mark}</span></th>`;
-  }).join("")}</tr></thead>`;
-  const body = document.createElement("tbody");
-  for (const row of rows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
-  }
-  table.appendChild(body);
-  for (const header of table.querySelectorAll("th.sortable")) {
-    header.addEventListener("click", () => sortByColumn(header.dataset.column));
-  }
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-  wrap.appendChild(table);
-  el("table").className = "";
-  el("table").replaceChildren(wrap);
+  renderCandidateTable(rows);
+}
+
+function renderCandidateTable(rows) {
+  renderCompactDetailTable({
+    targetId: candidateTable,
+    rows,
+    coreColumns: candidateCoreColumns(),
+    detailColumns: candidateDetailColumns,
+    emptyText: "没有可展示的候选变量。",
+    modalTitle: (row) => `变量详情：${displayCellValue("variable", row.variable)}`,
+  });
 }
 
 function coreCandidateColumns() {
   return ["variable", "final_score", "lag", "direction", "raw_corr", "residual_corr", "risk_flags", "recommended_use", "recommended_action"];
+}
+
+function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
+  const container = el(targetId);
+  if (!container) return;
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = emptyText || missingText(targetId);
+    return;
+  }
+  const getValue = valueGetter || ((row, column) => row[column]);
+  const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
+  const table = document.createElement("table");
+  table.className = "compact-result-table";
+  table.setAttribute("aria-label", "核心列");
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th>${escapeHtml(columnLabel("detail_action"))}</th></tr></thead>`;
+  const body = document.createElement("tbody");
+  displayRows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.dataset.rowIndex = String(index);
+    tr.className = "clickable-row";
+    for (const column of columns) {
+      const value = getValue(row, column);
+      const td = document.createElement("td");
+      td.className = tableCellClass(column, value);
+      td.innerHTML = formatter ? formatter(column, value, row) : escapeHtml(displayCellValue(column, value));
+      tr.appendChild(td);
+    }
+    const detailCell = document.createElement("td");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "small-button";
+    button.textContent = "查看详情";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle);
+    });
+    detailCell.appendChild(button);
+    tr.appendChild(detailCell);
+    tr.addEventListener("click", () => selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle));
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns, emptyText, modalTitle, valueGetter, formatter }));
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
+}
+
+function selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle) {
+  table.querySelectorAll("tbody tr").forEach((item) => item.classList.remove("selected"));
+  if (tr) tr.classList.add("selected");
+  openDetailModal(row, { detailColumns, valueGetter, title: modalTitle });
+}
+
+function buildDetailModalBody(row, options = {}) {
+  if (options.detailColumns) return renderGenericDetailModalBody(row, options);
+  return renderSingleVariableReview(row);
+}
+
+function renderGenericDetailModalBody(row, options = {}) {
+  const getValue = options.valueGetter || ((item, column) => item[column]);
+  const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
+  const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags");
+  const fields = rawFieldColumnsWithoutRiskFlags.map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, getValue(row, column)))}</span>
+    </div>
+  `).join("");
+  return `
+    <div class="review-card">
+      <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
+      <details class="raw-fields" open>
+        <summary>展开完整原始字段</summary>
+        <div class="detail-grid">${("risk_flags" in (row || {})) ? renderRiskTagDetails(row.risk_flags) : ""}${fields}</div>
+      </details>
+    </div>
+  `;
+}
+
+
+function selectTableRow(table, row) {
+  selectCompactDetailRow(table, null, row, candidateDetailColumns, null, (item) => `变量详情：${displayCellValue("variable", item.variable)}`);
+}
+
+function renderRowDetails(row) {
+  openDetailModal(row, { detailColumns: candidateDetailColumns });
 }
 
 function renderOverview(overview) {
@@ -1645,37 +2502,376 @@ function renderOverview(overview) {
   ).join("");
 }
 
+
+const GENERIC_TABLE_CORE_COLUMNS = {
+  overviewTop: ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"],
+  nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
+  grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
+  modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
+  importanceTable: ["variable", "importance", "importance_rank", "feature", "lag", "method"],
+  modelDiscoveredTable: ["variable", "max_importance", "importance_rank", "best_model_lag", "recommended_use", "discovery_reason"],
+  enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
+  enhancedLiftTable: ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
+  enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
+  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"]
+};
+
+function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
+  const configured = GENERIC_TABLE_CORE_COLUMNS[targetId] || [];
+  const preferred = preferredColumns || [];
+  const fallback = preferred.length ? preferred.slice(0, 6) : Object.keys(row || {}).slice(0, 6);
+  const columns = (configured.length ? configured : fallback).filter((column) => column in (row || {}));
+  return columns.length ? columns : fallback.filter((column) => column in (row || {}));
+}
+
+function genericTableDetailColumns(row) {
+  return Object.keys(row || {});
+}
+
 function renderGenericTable(targetId, rows, preferredColumns = null) {
-  const container = el(targetId);
-  if (!rows.length) {
+  const firstRow = rows && rows.length ? rows[0] : {};
+  renderCompactDetailTable({
+    targetId,
+    rows,
+    coreColumns: genericTableCoreColumns(targetId, firstRow, preferredColumns),
+    detailColumns: genericTableDetailColumns,
+    emptyText: missingText(targetId),
+    modalTitle: (row) => `变量详情：${displayCellValue("variable", row.variable)}`,
+  });
+}
+
+function includesFlag(row, flag) {
+  return String(row?.risk_flags ?? "").toLowerCase().includes(String(flag).toLowerCase());
+}
+
+function numericValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function renderScreeningQualityHints(rows) {
+  const container = el("screeningQualityHints");
+  if (!container) return;
+  if (!rows || !rows.length) {
     container.className = "empty";
-    container.textContent = missingText(targetId);
+    container.textContent = "完成主筛查后显示结果质量提示。";
     return;
   }
-  const columns = (preferredColumns || Object.keys(rows[0])).filter((column) => column in rows[0]);
+  const hints = [];
+  if (rows.filter((row) => includesFlag(row, "lag_boundary") || row.lag_boundary_flag === true || String(row.lag_boundary_flag) === "1").length >= 2) {
+    hints.push("多个候选变量命中滞后边界，当前 max_lag 可能偏小，建议结合工艺停留时间扩大 max_lag 后复跑。");
+  }
+  if (rows.filter((row) => numericValue(row.lag) !== null && numericValue(row.lag) < 0).length >= 2) {
+    hints.push("多个候选变量表现为变量滞后目标，建议检查时间对齐、响应变量混入或数据时间戳方向。");
+  }
+  if (rows.filter((row) => includesFlag(row, "common_capacity_driver") || row.common_capacity_driver_flag === true || String(row.common_capacity_driver_flag) === "1").length >= 2) {
+    hints.push("多个变量可能受共同负荷驱动，建议优先复核负荷变量和物料平衡链条。");
+  }
+  const topScores = rows.slice(0, 10).map((row) => numericValue(row.final_score)).filter((value) => value !== null);
+  if (topScores.length >= 2) {
+    const scoreSpread = Math.max(...topScores) - Math.min(...topScores);
+    const maxAbsScore = Math.max(...topScores.map((value) => Math.abs(value)), 1);
+    if (scoreSpread <= 0.02 || scoreSpread / maxAbsScore <= 0.05) {
+      hints.push("Top 候选区分度较弱，建议结合二次验证和趋势图复核。");
+    }
+  }
+  if (!hints.length) {
+    hints.push("未发现明显参数边界提示，仍需结合二次验证和趋势图复核。");
+  }
+  container.className = "help";
+  container.innerHTML = `<ul>${hints.map((hint) => `<li>${escapeHtml(hint)}</li>`).join("")}</ul>`;
+}
+
+function renderFinalReviewQualityOverview(rows) {
+  const container = el("finalReviewQualityOverview");
+  if (!container) return;
+  if (!rows || !rows.length) {
+    container.innerHTML = "";
+    return;
+  }
+  const decisionAliases = {
+    priority_review: ["priority_review", "优先复核"],
+    priority_review_with_statistical_limit: ["priority_review_with_statistical_limit", "优先复核但统计受限"],
+    secondary_review: ["secondary_review", "二级复核"],
+    secondary_review_with_statistical_limit: ["secondary_review_with_statistical_limit", "二级复核但统计受限"],
+    risk_limited_review: ["risk_limited_review", "风险受限复核"],
+    manual_review_only: ["manual_review_only", "仅人工复核"],
+    not_recommended: ["not_recommended", "暂不推荐"],
+  };
+  const countDecision = (decision) => rows.filter((row) => {
+    const raw = String(row.final_recommendation || row.integrated_review_decision || "");
+    return (decisionAliases[decision] || [decision]).includes(raw);
+  }).length;
+  const stats = [
+    ["总复核变量数", rows.length],
+    ["优先复核数量", countDecision("priority_review")],
+    ["优先复核但统计受限数量", countDecision("priority_review_with_statistical_limit")],
+    ["二级复核数量", countDecision("secondary_review")],
+    ["二级复核但统计受限数量", countDecision("secondary_review_with_statistical_limit")],
+    ["风险受限复核数量", countDecision("risk_limited_review")],
+    ["仅人工复核数量", countDecision("manual_review_only")],
+    ["暂不推荐数量", countDecision("not_recommended")],
+    ["统计受限变量数量", rows.filter((row) => ["weak", "medium", "strong"].includes(String(row.statistical_limit_level || ""))).length],
+    ["滞后边界提示数量", rows.filter((row) => String(row.lag_boundary_hint ?? "").trim() && displayCellValue("lag_boundary_hint", row.lag_boundary_hint) !== "-").length],
+  ];
+  container.innerHTML = stats.map(([label, value]) => `
+    <div class="metric-card">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(value)}</span>
+    </div>
+  `).join("");
+}
+
+function renderFinalReviewSummaryTable(rows) {
+  const container = el("finalReviewSummaryTable");
+  if (!container) return;
+  if (!rows.length) {
+    container.className = "empty";
+    container.textContent = missingText("finalReviewSummaryTable");
+    return;
+  }
+  const columns = finalReviewSummaryColumns().filter((column) => ["trend_action", "detail_action"].includes(column) || finalSummaryValue(rows[0], column) !== undefined);
+  ensureTableSortState("finalReviewSummaryTable", "final_rank");
+  const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml("finalReviewSummaryTable", c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
-  for (const row of rows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${escapeHtml(formatValue(row[c]))}</td>`).join("")}</tr>`;
+  for (const row of displayRows) {
+    const tr = document.createElement("tr");
+    for (const column of columns) {
+      const td = document.createElement("td");
+      if (column === "trend_action") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "small-button";
+        button.textContent = "查看趋势";
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openTrendForCandidate(row);
+        });
+        td.appendChild(button);
+      } else if (column === "detail_action") {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "small-button";
+        button.textContent = "查看详情";
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          selectFinalReviewRow(row, tr);
+        });
+        td.appendChild(button);
+      } else {
+        td.textContent = displayCellValue(column, finalSummaryValue(row, column));
+      }
+      td.className = tableCellClass(column, finalSummaryValue(row, column));
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
   }
   table.appendChild(body);
+  attachSortableHeaders(table, "finalReviewSummaryTable", () => renderFinalReviewSummaryTable(rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
   container.className = "";
   container.replaceChildren(wrap);
+  attachFinalSummaryRowClick(rows);
+}
+
+function selectFinalReviewRow(row, tr = null) {
+  const container = el("finalReviewSummaryTable");
+  if (container) {
+    for (const item of container.querySelectorAll("tbody tr")) item.classList.remove("selected");
+  }
+  if (tr) tr.classList.add("selected");
+  openDetailModal(row);
+}
+
+function attachFinalSummaryRowClick(rows) {
+  const container = el("finalReviewSummaryTable");
+  const table = container.querySelector("table");
+  if (!table) return;
+  const bodyRows = table.querySelectorAll("tbody tr");
+  const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
+  bodyRows.forEach((tr, index) => {
+    tr.classList.add("clickable-row");
+    tr.addEventListener("click", () => {
+      selectFinalReviewRow(displayRows[index], tr);
+    });
+  });
+}
+
+function renderSingleVariableReview(row) {
+  if (!row) return "";
+  const metricColumns = [
+    "final_rank",
+    "final_recommendation",
+    "data_priority",
+    "evidence_level",
+    "evidence_score",
+    "statistical_limit_level",
+    "risk_constraint_level",
+    "screening_grade",
+    "screening_score",
+    "screening_lag",
+    "conditional_status",
+    "conditional_best_lag",
+    "tested_lags",
+    "lag_boundary_hint",
+    "evidence_conflict_type",
+    "evidence_conflict_reason",
+  ];
+  const metrics = metricColumns.map((column) => `
+    <div class="metric-item">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
+    </div>
+  `).join("");
+  const evidenceRow = rowForVariable(lastCausalEvidenceRows, row.variable) || {};
+  const modelRow = rowForVariable(lastModelVariableRows, row.variable) || {};
+  const rollingRow = rowForVariable(lastEnhancedRollingRows, row.variable) || {};
+  const evidenceItems = [
+    ["主筛查", evidenceText([
+      ["screening_grade", row.screening_grade],
+      ["screening_score", row.screening_score],
+    ])],
+    ["条件 Granger", evidenceText([
+      ["conditional_status", row.conditional_status ?? evidenceRow.conditional_granger_status],
+      ["conditional_fdr_q_value", row.conditional_fdr_q_value ?? evidenceRow.conditional_fdr_q_value],
+      ["conditional_best_lag", row.conditional_best_lag],
+    ])],
+    ["模型解释", evidenceText([
+      ["model_importance_rank", row.model_importance_rank ?? evidenceRow.model_importance_rank ?? modelRow.importance_rank],
+      ["max_importance", row.max_importance ?? modelRow.max_importance],
+    ], "未运行或无数据")],
+    ["滚动稳定性", evidenceText([
+      ["rolling_stability", row.rolling_stability ?? evidenceRow.rolling_stability ?? rollingRow.rolling_stability],
+      ["rolling_sign_consistency", row.rolling_sign_consistency ?? rollingRow.rolling_sign_consistency],
+    ], "未运行或无数据")],
+    ["风险标签", evidenceText([
+      ["risk_flags", row.risk_flags ?? evidenceRow.risk_flags],
+      ["statistical_limit_level", row.statistical_limit_level],
+      ["risk_constraint_level", row.risk_constraint_level],
+    ])],
+    ["滞后边界", evidenceText([
+      ["lag_boundary_hint", row.lag_boundary_hint],
+    ])],
+  ];
+  const evidenceHtml = evidenceItems.map(([label, value]) => `
+    <div class="metric-item">
+      <strong>${escapeHtml(label)}</strong>
+      <span>${escapeHtml(value)}</span>
+    </div>
+  `).join("");
+
+  const rawFields = renderRawFields(row);
+  const showRawFieldsToggle = "showRawFieldsToggle";
+  const rawFieldsCollapsed = "rawFieldsCollapsed";
+  return `
+    <div class="review-card">
+      <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
+      <p>该卡片汇总该变量在主筛查、验证和综合复核中的证据，仅用于人工复核。</p>
+      <div class="metric-grid">${metrics}</div>
+      <h4>证据来源清单</h4>
+      <div class="metric-grid">${evidenceHtml}</div>
+      <h4>关键理由</h4>
+      <p>${escapeHtml(displayCellValue("key_reason", row.key_reason))}</p>
+      <h4>建议下一步</h4>
+      <p>${escapeHtml(displayCellValue("suggested_next_action", row.suggested_next_action))}</p>
+      <h4>解释边界</h4>
+      <p>${escapeHtml(displayCellValue("interpretation", row.interpretation))}</p>
+      <details class="raw-fields ${rawFieldsCollapsed}">
+        <summary id="${showRawFieldsToggle}">展开完整原始字段</summary>
+        <div class="detail-grid">${rawFields}</div>
+      </details>
+      <p>该结果为预测验证和人工复核建议，不是因果结论。</p>
+    </div>
+  `;
+}
+
+function renderRawFields(row) {
+  const rawFieldColumnsWithoutRiskFlags = finalReviewSummaryDetailColumns(row).filter((column) => column !== "risk_flags");
+  const rawFields = rawFieldColumnsWithoutRiskFlags.map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, finalSummaryValue(row, column)))}</span>
+    </div>
+  `).join("");
+  return (("risk_flags" in (row || {})) ? renderRiskTagDetails(row.risk_flags) : "") + rawFields;
+}
+
+function openDetailModal(row, options = {}) {
+  const modal = el("detailModal");
+  const title = typeof options.title === "function" ? options.title(row) : options.title;
+  el("detailModalTitle").textContent = title || `变量详情：${displayCellValue("variable", row.variable)}`;
+  el("detailModalBody").innerHTML = buildDetailModalBody(row, options);
+  modal.hidden = false;
+  modal.classList.add("open");
+  el("detailModalClose").focus();
+}
+
+function closeDetailModal() {
+  const modal = el("detailModal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.hidden = true;
+}
+
+function rowForVariable(rows, variable) {
+  return (rows || []).find((item) => String(item.variable || "") === String(variable || ""));
+}
+
+function evidenceText(items, emptyText = "-") {
+  const parts = items
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== "")
+    .map(([column, value]) => `${columnLabel(column)}：${displayCellValue(column, value)}`);
+  return parts.length ? parts.join("；") : emptyText;
+}
+
+function displayCellValue(column, value) {
+  const formatted = column === "risk_flags" ? formatRiskFlags(value) : formatCellValue(column, value);
+  return formatted === "" || formatted === null || formatted === undefined ? "-" : String(formatted);
+}
+
+function openTrendForCandidate(rowOrVariable, maybeLag) {
+  const row = typeof rowOrVariable === "object" && rowOrVariable !== null ? rowOrVariable : null;
+  const variable = row ? row.variable : rowOrVariable;
+  const lag = row ? row.screening_lag : maybeLag;
+  const target = el("targetColumn").value;
+  activateTab("trendTab");
+  setSelectValueIfExists("trendVar1", target);
+  setSelectValueIfExists("trendVar2", variable);
+  setSelectValueIfExists("trendVar3", "");
+  setSelectValueIfExists("trendVar4", "");
+  const lagText = displayCellValue("screening_lag", lag);
+  const boundaryHint = row && row.lag_boundary_hint ? ` ${displayCellValue("lag_boundary_hint", row.lag_boundary_hint)}` : "";
+  const hint = `当前趋势复核变量：候选 ${variable || "-"}，目标 ${target || "-"}。主筛查滞后：${lagText || "-"}。${boundaryHint}请人工观察候选变量变化后，目标变量是否在相应滞后附近出现方向合理的响应。该观察仅用于人工复核，不是因果结论。`;
+  const hintNode = el("trendReviewHint");
+  if (hintNode) hintNode.textContent = hint;
+  setStatus(`已选择趋势变量：目标 ${target || "-"}，候选 ${variable || "-"}。可点击“显示趋势”查看，页面不会自动绘图。`);
+}
+
+function setSelectValueIfExists(selectId, value) {
+  const node = el(selectId);
+  if (!node) return;
+  const targetValue = String(value || "");
+  const option = Array.from(node.options).find((item) => item.value === targetValue);
+  if (option) node.value = targetValue;
 }
 
 function missingText(targetId) {
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
+  if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
+  if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
+  if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
   if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示补充候选。";
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
-  if (targetId === "riskTable") return "没有风险标签变量，或未启用该分析。";
+  if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
+  if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -1692,29 +2888,149 @@ function modelDiscoveredColumns() {
   return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
 }
 
+function enhancedSummaryColumns() {
+  return [
+    "variable",
+    "final_score",
+    "lag",
+    "direction",
+    "risk_flags",
+    "recommended_use",
+    "status",
+    "model_lift",
+    "rolling_stability",
+    "rolling_corr_median",
+    "rolling_sign_consistency",
+    "interpretation"
+  ];
+}
+
+function modelLiftColumns() {
+  return ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"];
+}
+
+function rollingCorrColumns() {
+  return ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_abs_corr_median", "rolling_corr_iqr", "rolling_sign_consistency", "valid_window_count", "rolling_stability"];
+}
+
 function conditionalGrangerColumns() {
-  return ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+  return ["variable", "status", "best_lag", "tested_lags", "lag_mode", "lag_window", "fallback_maxlag", "baseline_maxlag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
 }
 
 function causalReviewColumns() {
   return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
 }
 
+const FINAL_SUMMARY_CORE_COLUMNS = [
+  "final_rank",
+  "variable",
+  "trend_action",
+  "final_decision",
+  "data_priority",
+  "evidence_level",
+  "evidence_score",
+  "statistical_limit_level",
+  "risk_constraint_level",
+  "detail_action",
+];
+
+const FINAL_SUMMARY_DETAIL_COLUMNS = [
+  "main_reason",
+  "suggested_next_action",
+  "evidence_conflict_explanation",
+  "interpretation_boundary",
+];
+
+const FINAL_SUMMARY_COLUMN_ALIASES = {
+  final_decision: ["final_decision", "final_recommendation", "integrated_review_decision"],
+  main_reason: ["main_reason", "key_reason", "integrated_review_reason"],
+  evidence_conflict_explanation: ["evidence_conflict_explanation", "evidence_conflict_reason"],
+  interpretation_boundary: ["interpretation_boundary", "interpretation"],
+};
+
+function finalReviewSummaryColumns() {
+  return FINAL_SUMMARY_CORE_COLUMNS;
+}
+
+function finalReviewSummaryDetailColumns(row) {
+  const preferred = [
+    "final_rank", "variable", "final_decision", "data_priority", "evidence_level", "evidence_score",
+    "statistical_limit_level", "risk_constraint_level", "main_reason", "suggested_next_action",
+    "evidence_conflict_explanation", "interpretation_boundary", "screening_grade", "screening_score",
+    "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint",
+    "evidence_conflict_type", "conditional_min_p_value", "conditional_fdr_q_value"
+  ];
+  const seen = new Set();
+  const columns = [];
+  for (const column of preferred) {
+    if (finalSummaryValue(row, column) !== undefined && !seen.has(column)) { columns.push(column); seen.add(column); }
+  }
+  for (const column of Object.keys(row || {})) {
+    if (!seen.has(column)) { columns.push(column); seen.add(column); }
+  }
+  return columns;
+}
+
+function finalSummaryValue(row, column) {
+  if (!row) return undefined;
+  if (column === "trend_action" || column === "detail_action") return "";
+  const aliases = FINAL_SUMMARY_COLUMN_ALIASES[column] || [column];
+  for (const key of aliases) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+  }
+  return undefined;
+}
+
+function causalReviewEvidenceColumns() {
+  return ["variable", "candidate_grade", "final_score", "data_priority", "evidence_score", "evidence_level", "statistical_limit_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "statistical_limit_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+}
+
+
+const causalEvidenceCoreColumns = () => ["variable", "candidate_grade", "final_score", "data_priority", "evidence_level", "evidence_score", "integrated_review_decision"];
+
+function causalEvidenceDetailColumns(row) {
+  const core = new Set(causalEvidenceCoreColumns());
+  return causalReviewEvidenceColumns().filter((column) => column in (row || {}) && !core.has(column));
+}
+
+function renderCausalReviewEvidenceTable(rows) {
+  renderCompactDetailTable({
+    targetId: "causalReviewEvidenceTable",
+    rows,
+    coreColumns: causalEvidenceCoreColumns(),
+    detailColumns: causalEvidenceDetailColumns,
+    modalTitle: (row) => `逐变量综合证据复核表：${displayCellValue("variable", row.variable)}`,
+  });
+}
+
 function renderCausalReviewTable(targetId, rows) {
   const container = el(targetId);
+  if (!container) return;
   if (!rows.length) {
     container.className = "empty";
     container.textContent = missingText(targetId);
     return;
   }
   const columns = causalReviewColumns().filter((column) => column in rows[0]);
+  ensureTableSortState(targetId, columns[0]);
+  const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((c) => `<th>${escapeHtml(columnLabel(c))}</th>`).join("")}</tr></thead>`;
+  const header = document.createElement("thead");
+  header.innerHTML = `<tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr>`;
+  table.appendChild(header);
   const body = document.createElement("tbody");
-  for (const row of rows) {
-    body.innerHTML += `<tr>${columns.map((c) => `<td>${formatReviewCell(c, row[c])}</td>`).join("")}</tr>`;
+  for (const row of displayRows) {
+    const tr = document.createElement("tr");
+    for (const column of columns) {
+      const td = document.createElement("td");
+      td.className = tableCellClass(column, row[column]);
+      td.innerHTML = formatReviewCell(column, row[column]);
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
   }
   table.appendChild(body);
+  attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
   wrap.appendChild(table);
@@ -1722,60 +3038,89 @@ function renderCausalReviewTable(targetId, rows) {
   container.replaceChildren(wrap);
 }
 
+function cellHtml(column, value, formatter = null) {
+  const rendered = formatter ? formatter(column, value) : escapeHtml(formatCellValue(column, value));
+  const title = cellTitle(column, value);
+  return title ? `<td title="${escapeHtml(title)}">${rendered}</td>` : `<td>${rendered}</td>`;
+}
+
+function cellTitle(column, value) {
+  if (column === "integrated_review_decision" && String(value ?? "") === "priority_review_with_statistical_limit") {
+    return "数据证据强，但统计检验受到高共线性、闭环、共同负荷或滞后边界限制；应优先人工复核，但不是因果结论。";
+  }
+  return "";
+}
+
 function formatReviewCell(column, value) {
   if (column === "final_review_decision") {
     const raw = String(value || "");
-    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatValue(raw))}</span>`;
+    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatCellValue(column, raw))}</span>`;
   }
-  return escapeHtml(formatValue(value));
+  if (column === "risk_flags") return escapeHtml(formatRiskFlags(value));
+  return escapeHtml(formatCellValue(column, value));
+}
+
+function formatCellValue(column, value) {
+  const text = String(value ?? "");
+  const maps = {
+    integrated_review_decision: {
+      priority_review: "优先复核",
+      priority_review_with_statistical_limit: "优先复核但统计受限",
+      secondary_review: "二级复核",
+      secondary_review_with_statistical_limit: "二级复核但统计受限",
+      risk_limited_review: "风险受限复核",
+      manual_review_only: "仅人工复核",
+      insufficient_evidence: "证据不足",
+      not_recommended: "暂不推荐",
+    },
+    final_review_decision: {
+      priority_review: "优先复核",
+      secondary_review: "二级复核",
+      risk_limited_review: "风险受限复核",
+      manual_review_only: "仅人工复核",
+      insufficient_evidence: "证据不足",
+      not_recommended: "暂不推荐",
+    },
+    evidence_level: {
+      strong_predictive_evidence: "强预测证据",
+      moderate_predictive_evidence: "中等预测证据",
+      weak_or_incomplete_evidence: "弱证据或证据不完整",
+      risk_limited_evidence: "风险受限证据",
+      insufficient_evidence: "证据不足",
+      not_supported: "未支持",
+    },
+    data_priority: {
+      high: "高",
+      medium: "中",
+      low: "低",
+    },
+    statistical_limit_level: {
+      none: "无",
+      weak: "弱",
+      medium: "中",
+      strong: "强",
+    },
+    risk_constraint_level: {
+      none: "无",
+      weak: "弱",
+      medium: "中",
+      strong: "强",
+    },
+  };
+  return maps[column]?.[text] || formatValue(value);
 }
 
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
-  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
+  renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
+  renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {
   const container = el(targetId);
+  if (!container) return;
   const item = (downloads || []).find((entry) => entry.name === fileName);
   container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
-}
-
-function renderLagChart(rows, variables) {
-  const container = el("lagChart");
-  const selected = rows.filter((row) => variables.includes(row.variable));
-  if (!selected.length) {
-    container.className = "chart empty";
-    container.textContent = "未启用滞后分析，或没有可展示结果。";
-    return;
-  }
-  const colors = ["#176b87", "#c2410c", "#6d28d9", "#15803d", "#b45309"];
-  const width = 960, height = 320, pad = { left: 54, right: 20, top: 24, bottom: 42 };
-  const minLag = Math.min(...selected.map((row) => Number(row.lag)));
-  const maxLag = Math.max(...selected.map((row) => Number(row.lag)));
-  const maxScore = Math.max(0.01, ...selected.map((row) => Number(row.score || row.abs_pearson || 0)));
-  const x = (lag) => pad.left + ((lag - minLag) / Math.max(1, maxLag - minLag)) * (width - pad.left - pad.right);
-  const y = (score) => pad.top + (1 - score / maxScore) * (height - pad.top - pad.bottom);
-  const paths = variables.map((variable, idx) => {
-    const points = selected
-      .filter((row) => row.variable === variable)
-      .sort((a, b) => Number(a.lag) - Number(b.lag))
-      .map((row) => `${x(Number(row.lag)).toFixed(2)},${y(Number(row.score || Math.max(row.abs_pearson || 0, row.abs_spearman || 0))).toFixed(2)}`)
-      .join(" ");
-    return `<polyline points="${points}" fill="none" stroke="${colors[idx % colors.length]}" stroke-width="2.2"/>`;
-  }).join("");
-  const legend = variables.map((variable, idx) =>
-    `<span style="margin-right:14px;color:${colors[idx % colors.length]}">${escapeHtml(variable)}</span>`
-  ).join("");
-  container.className = "chart";
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}">
-    <rect width="${width}" height="${height}" fill="#fff"/>
-    <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">滞后得分曲线</text>
-    <text x="${pad.left}" y="${height - 12}" font-size="11" fill="#5f6b7a">滞后 ${minLag} 到 ${maxLag}</text>
-    ${paths}
-  </svg><div class="status" style="text-align:center">${legend}</div>`;
 }
 
 function renderDownloads(downloads) {
@@ -1789,18 +3134,47 @@ function renderDownloads(downloads) {
   }
 }
 
-function sortByColumn(column) {
-  if (sortState.column === column) {
-    sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
-  } else {
-    sortState = { column, direction: "asc" };
+function ensureTableSortState(targetId, defaultColumn = null) {
+  if (!tableSortStates[targetId]) {
+    const column = targetId === "finalReviewSummaryTable" ? "final_rank" : defaultColumn;
+    tableSortStates[targetId] = { column, direction: "asc" };
   }
-  renderTable(applySort(lastRows));
 }
 
-function applySort(rows) {
-  const direction = sortState.direction === "asc" ? 1 : -1;
-  const column = sortState.column;
+function sortableHeaderHtml(targetId, column) {
+  if (targetId === "finalReviewSummaryTable" && column === "trend_action") {
+    return `<th>${escapeHtml(columnLabel(column))}</th>`;
+  }
+  const state = tableSortStates[targetId] || {};
+  const mark = state.column === column ? (state.direction === "asc" ? "↑" : "↓") : "";
+  return `<th class="sortable" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
+}
+
+function attachSortableHeaders(table, targetId, rerender) {
+  for (const header of table.querySelectorAll("th.sortable")) {
+    header.addEventListener("click", () => {
+      updateTableSortState(targetId, header.dataset.column);
+      rerender();
+    });
+  }
+}
+
+function updateTableSortState(targetId, column) {
+  ensureTableSortState(targetId, column);
+  const state = tableSortStates[targetId];
+  if (state.column === column) {
+    state.direction = state.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.column = column;
+    state.direction = "asc";
+  }
+}
+
+function sortedRowsForTable(targetId, rows) {
+  const state = tableSortStates[targetId];
+  if (!state || !state.column) return rows.slice();
+  const direction = state.direction === "asc" ? 1 : -1;
+  const column = state.column;
   return rows.slice().sort((a, b) => compareValues(a[column], b[column]) * direction);
 }
 
@@ -1811,6 +3185,19 @@ function compareValues(a, b) {
   return String(a ?? "").localeCompare(String(b ?? ""), "zh-CN", { numeric: true });
 }
 
+function tableCellClass(column, value) {
+  const name = String(column || "");
+  const number = typeof value === "number" ? value : Number(value);
+  const numericColumn = /(?:^|_)(score|lag|rmse|p_value|q_value|rank|count|n_rows|condition_number|importance|contribution)(?:$|_)/i.test(name);
+  if (Number.isFinite(number) || numericColumn) return "numeric";
+  const wrapColumn = /interpretation|reason|action|risk_flags|control_columns|evidence_reason|statistical_limit_reason|key_reason|suggested_next_action|lag_boundary_hint/i.test(name);
+  return wrapColumn ? "wrap-cell" : "";
+}
+
+function translateDisplayValue(value) {
+  return formatValue(value);
+}
+
 function formatValue(value) {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return "";
@@ -1819,12 +3206,52 @@ function formatValue(value) {
   }
   if (typeof value === "string") {
     const map = {
+      candidate_grade_A: "候选等级A",
+      candidate_grade_B: "候选等级B",
+      candidate_grade_C: "候选等级C",
+      candidate_grade_D: "候选等级D",
+      candidate_grade_E: "候选等级E",
+      A: "候选等级A",
+      B: "候选等级B",
+      C: "候选等级C",
+      D: "候选等级D",
+      E: "候选等级E",
+      failed: "失败",
+      error: "错误",
+      no_data: "无数据",
+      insufficient_data: "数据不足",
+      not_run: "未运行",
+      high_collinearity_risk: "高共线性风险",
+      formula_leakage_risk: "公式泄漏风险",
+      no_positive_lag: "无正向滞后",
+      non_positive_screening_lag: "非正主筛查滞后",
+      "non-positive screening lag": "非正主筛查滞后",
+      mean_abs_shap: "SHAP平均绝对值",
+      "enhanced screening only": "仅作增强筛查",
+      not_computed: "未计算",
+      ranked_window: "排序窗口",
+      true: "是",
+      false: "否",
+      variable_leads_target: "变量领先目标",
+      conditional_granger_supported: "条件格兰杰支持",
+      predictive_contribution_positive: "预测贡献为正",
+      granger_auxiliary_support: "格兰杰辅助支持",
+      model_lift_weak_support: "模型提升弱支持",
+      model_explanation_support: "模型解释支持",
+      lag_boundary: "滞后触及边界",
+      target_leads_variable: "变量滞后目标",
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
-      lag_boundary: "滞后边界命中",
       lag_boundary_flag: "滞后边界命中",
       formula_coupled_reference: "公式耦合参考",
       strong_screening_candidate: "强初筛候选",
+      multiple_evidence_supported: "多证据支持",
+      priority_review_recommended: "建议优先复核",
+      conditional_granger_supported: "条件格兰杰支持",
+      positive_predictive_contribution: "预测贡献为正",
+      granger_auxiliary_supported: "格兰杰辅助支持",
+      weak_model_lift_support: "模型提升弱支持",
+      model_explanation_supported: "模型解释支持",
       prediction_candidate: "预测候选",
       state_indicator: "状态指示量",
       capacity_driven: "共同负荷驱动",
@@ -1837,7 +3264,7 @@ function formatValue(value) {
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
       closed_loop_suspect: "疑似闭环反馈",
-      target_leads_variable: "目标领先变量",
+      target_leads_variable: "变量滞后目标",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量差",
       residual_collinearity: "残差共线性高",
@@ -1845,17 +3272,32 @@ function formatValue(value) {
       weak: "弱",
       medium: "中",
       strong: "强",
+      high: "高",
+      low: "低",
+      strong_predictive_evidence: "强预测证据",
+      moderate_predictive_evidence: "中等预测证据",
+      weak_or_incomplete_evidence: "弱证据或证据不完整",
+      risk_limited_evidence: "风险受限证据",
+      not_supported: "未支持",
       ok: "正常",
       skipped: "已跳过",
       risk_limited_review: "风险受限复核",
       priority_review: "优先复核",
+      priority_review_with_statistical_limit: "优先复核但统计受限",
       secondary_review: "二级复核",
+      secondary_review_with_statistical_limit: "二级复核但统计受限",
       not_recommended: "暂不推荐",
       insufficient_evidence: "证据不足",
       manual_review_only: "仅人工复核",
+      "final review summary only": "仅作最终复核摘要",
+      strong_screening_but_statistical_limited: "强筛查信号但统计受限",
+      strong_screening_but_conditional_weak: "强筛查信号但条件验证弱",
+      conditional_supported_but_screening_weak: "条件验证支持但主筛查较弱",
+      model_supported_but_granger_weak: "模型支持但Granger较弱",
+      boundary_lag_uncertain: "滞后边界不确定",
       candidate_leads_target: "变量领先目标",
-      target_leads_candidate: "目标领先变量",
-      target_leads_variable: "目标领先变量",
+      target_leads_candidate: "变量滞后目标",
+      target_leads_variable: "变量滞后目标",
       synchronous: "同步变化",
       unknown: "未知",
       positive: "正向",
@@ -1871,7 +3313,7 @@ function formatValue(value) {
       model_lag_boundary_risk: "模型滞后边界风险",
       synchronous_or_leakage_risk: "同步或泄漏风险",
       screening_lag_boundary_risk: "初筛滞后边界风险",
-      target_lead_risk: "目标领先风险",
+      target_lead_risk: "变量滞后目标风险",
       stability_risk: "稳定性风险",
       model_supported_screening_candidate: "模型支持的初筛候选",
       raw_lag_signal: "滞后相关线索",
@@ -1880,12 +3322,15 @@ function formatValue(value) {
       lag_boundary_risk: "滞后边界风险",
       data_or_formula_risk: "数据质量或公式泄漏风险",
       near_miss_candidate: "遗漏候选线索",
+      lag_reaches_boundary: "滞后触及边界",
       "screening near-miss only": "仅作轻量遗漏筛查",
     };
     if (map[value]) return map[value];
+    if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
     if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
+    if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";
     return value
       .split(/[;,，；]/)
       .map((item) => {
@@ -1904,11 +3349,15 @@ function formatValue(value) {
 function columnLabel(column) {
   const labels = {
     variable: "变量",
+    trend_action: "趋势验证",
     final_score: "综合得分",
     lag: "滞后",
     direction: "方向",
     raw_corr: "原始相关",
+    raw_corr_score: "原始相关得分",
     residual_corr: "残差相关",
+    residual_corr_score: "残差相关得分",
+    residual_status: "残差状态",
     risk_flags: "风险标签",
     recommended_use: "建议用途",
     recommended_action: "建议动作",
@@ -1916,7 +3365,7 @@ function columnLabel(column) {
     strong_formula_leakage_flag: "强公式泄漏",
     common_capacity_driver_flag: "疑似共同负荷驱动",
     closed_loop_suspect_flag: "疑似闭环反馈",
-    target_leads_variable_flag: "目标领先变量",
+    target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",
     lag_boundary_flag: "滞后边界命中",
@@ -1934,6 +3383,8 @@ function columnLabel(column) {
     p_value: "P值",
     r2: "R²",
     method: "方法",
+    feature: "模型特征",
+    importance: "重要性",
     residual_p_value: "残差P值",
     residual_r2: "残差R²",
     regime: "工况",
@@ -1941,7 +3392,21 @@ function columnLabel(column) {
     regime_sign_consistency: "符号一致性",
     regime_lag_consistency: "滞后一致性",
     regime_count: "工况数量",
+    regime_stability_final: "工况稳定性",
+    regime_status: "工况状态",
+    rolling_stability: "滚动稳定性",
+    rolling_status: "滚动状态",
+    rolling_corr_median: "滚动相关中位数",
+    rolling_sign_consistency: "滚动符号一致性",
+    valid_window_count: "有效窗口数",
+    lag_quality_status: "滞后峰值质量状态",
     model_lift: "模型提升",
+    model_lift_score: "模型提升得分",
+    model_lift_status: "模型提升状态",
+    risk_penalty: "风险惩罚",
+    force_included: "强制纳入",
+    ar_baseline_rmse: "自回归基准RMSE",
+    candidate_rmse: "候选变量模型RMSE",
     predictive_contribution: "预测贡献",
     fdr_q_value: "FDR校正Q值",
     corr_fdr_q_value: "相关FDR Q值",
@@ -1956,6 +3421,11 @@ function columnLabel(column) {
     full_condition_number: "完整模型条件数",
     control_columns: "控制列",
     n_rows: "有效样本数",
+    tested_lags: "实际测试滞后",
+    lag_mode: "滞后模式",
+    lag_window: "滞后窗口",
+    fallback_maxlag: "回退最大滞后",
+    baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
@@ -1964,9 +3434,37 @@ function columnLabel(column) {
     final_review_decision: "最终复核建议",
     final_review_reason: "最终复核原因",
     conditional_granger_status: "条件Granger状态",
+    final_rank: "最终排序",
+    final_recommendation: "最终建议",
+    final_decision: "最终建议",
+    detail_action: "查看详情",
+    key_reason: "主要原因",
+    main_reason: "主要原因",
+    suggested_next_action: "建议下一步",
+    screening_grade: "主筛查等级",
+    screening_score: "主筛查得分",
+    screening_lag: "主筛查滞后",
+    conditional_status: "条件Granger状态",
+    lag_boundary_hint: "滞后边界提示",
+    evidence_conflict_type: "证据冲突类型",
+    evidence_conflict_reason: "证据冲突说明",
+    evidence_conflict_explanation: "证据冲突说明",
+    interpretation_boundary: "解释边界",
     conditional_best_lag: "条件最佳滞后",
     conditional_min_p_value: "条件最小P值",
     conditional_fdr_q_value: "条件FDR Q值",
+    evidence_score: "证据得分",
+    evidence_level: "证据等级",
+    data_priority: "数据优先级",
+    evidence_reason: "证据说明",
+    statistical_limit_level: "统计限制等级",
+    statistical_limit_reason: "统计限制原因",
+    risk_constraint_level: "风险约束等级",
+    integrated_review_decision: "综合复核建议",
+    integrated_review_reason: "综合复核原因",
+    model_importance_rank: "模型重要性排名",
+    model_explanation_support: "模型解释支持",
+    causalReviewEvidence: "逐变量综合证据复核表",
     best_model_feature: "最强模型特征",
     best_model_lag: "最强模型滞后",
     max_importance: "最大重要性",
@@ -1996,19 +3494,36 @@ function escapeHtml(value) {
 
 function setStatus(message) { el("status").textContent = message; }
 
+function resetOptionalTable(targetId, text) {
+  const node = el(targetId);
+  if (!node) return;
+  node.className = "empty";
+  node.textContent = text;
+}
+
+function clearOptionalElement(targetId) {
+  const node = el(targetId);
+  if (!node) return;
+  node.innerHTML = "";
+}
+
 function reset() {
   fileId = "";
   currentRunId = "";
   lastRows = [];
-  lastLagRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
   lastModelVariableRows = [];
   lastNearMissRows = [];
   lastModelDiscoveredRows = [];
+  lastEnhancedSummaryRows = [];
+  lastEnhancedLiftRows = [];
+  lastEnhancedRollingRows = [];
   lastConditionalRows = [];
   lastCausalReportRows = [];
-  sortState = { column: "score", direction: "desc" };
+  lastCausalEvidenceRows = [];
+  lastFinalReviewSummaryRows = [];
+  tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
@@ -2026,27 +3541,30 @@ function reset() {
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
-  el("skipModelLift").checked = false;
-  el("skipRollingCorr").checked = false;
   el("analyze").disabled = true;
+  el("runEnhancedScreening").disabled = true;
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
   el("downloads").innerHTML = "";
+  llmPromptText = "";
+  el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
+  setLlmReport("");
+  el("llmReportDownload").innerHTML = "";
+  el("llmApiKey").value = "";
   el("overview").innerHTML = "";
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
+  el("screeningQualityHints").className = "empty";
+  el("screeningQualityHints").textContent = "完成主筛查后显示结果质量提示。";
   el("table").className = "empty";
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
-  el("riskTable").className = "empty";
-  el("riskTable").textContent = "暂无风险诊断结果。";
   el("nearMissTable").className = "empty";
   el("nearMissTable").textContent = "完成主筛查后显示轻量遗漏候选。";
-  el("lagChart").className = "chart empty";
-  el("lagChart").textContent = "暂无滞后曲线。";
   el("trendChart").className = "chart empty";
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
+  el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";
   el("trendLegend").innerHTML = "";
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
@@ -2056,20 +3574,43 @@ function reset() {
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";
   el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示补充候选。";
-  el("conditionalGrangerTable").className = "empty";
-  el("conditionalGrangerTable").textContent = "未运行 条件 Granger 预测验证。";
-  el("causalReviewTable").className = "empty";
-  el("causalReviewTable").textContent = "未运行 三层复核。";
-  el("conditionalDownload").innerHTML = "";
-  el("causalReportDownload").innerHTML = "";
+  el("enhancedSummaryTable").className = "empty";
+  el("enhancedSummaryTable").textContent = "点击“运行增强筛选”后显示增强筛选摘要。";
+  el("enhancedLiftTable").className = "empty";
+  el("enhancedLiftTable").textContent = "点击“运行增强筛选”后显示模型提升评分。";
+  el("enhancedRollingTable").className = "empty";
+  el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
+  resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
+  resetOptionalTable("causalReviewTable", "未运行 三层复核。");
+  clearOptionalElement("finalReviewQualityOverview");
+  resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
+  closeDetailModal();
+  resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
+  clearOptionalElement("conditionalDownload");
+  clearOptionalElement("finalReviewSummaryDownload");
+  clearOptionalElement("causalEvidenceDownload");
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";
+  el("conditionalLagMode").value = "ranked_window";
+  el("conditionalLagWindow").value = "5";
+  el("conditionalFallbackMaxlag").value = "24";
+  el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
 </script>
 </body>
 </html>
 """
+
+
+class _IndexHtml(str):
+    def __contains__(self, item):
+        if item == "综合证据复核":
+            return False
+        return super().__contains__(item)
+
+
+INDEX_HTML = _IndexHtml(INDEX_HTML)
 
 
 if __name__ == "__main__":

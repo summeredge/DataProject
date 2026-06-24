@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from chem_ts_corr.conditional_granger import run_conditional_granger_tests
+from chem_ts_corr.conditional_granger import build_candidate_lag_windows, run_conditional_granger_tests
 
 
 EXPECTED_OUT_COLS = [
@@ -18,6 +18,11 @@ EXPECTED_OUT_COLS = [
     "condition_number",
     "control_columns",
     "n_rows",
+    "tested_lags",
+    "lag_mode",
+    "lag_window",
+    "fallback_maxlag",
+    "baseline_maxlag",
     "interpretation",
 ]
 
@@ -180,3 +185,309 @@ def test_conditional_granger_non_collinear_sample_keeps_ok_status_and_condition_
     assert np.isfinite(float(row["base_condition_number"]))
     assert np.isfinite(float(row["full_condition_number"]))
     assert float(row["condition_number"]) <= 1e8
+
+
+def test_build_candidate_lag_windows_centers_long_ranked_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 80}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=100, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(75, 86))
+
+
+def test_build_candidate_lag_windows_clips_at_maxlag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 58}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=60, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(53, 61))
+
+
+def test_build_candidate_lag_windows_clips_at_one():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 3}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=100, window=5, fallback_maxlag=24)
+
+    assert out["x"] == list(range(1, 9))
+
+
+def test_build_candidate_lag_windows_uses_fallback_for_missing_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": np.nan}])
+
+    out = build_candidate_lag_windows(ranked, ["x", "missing"], maxlag=10, window=5, fallback_maxlag=6)
+
+    assert out["x"] == list(range(1, 7))
+    assert out["missing"] == list(range(1, 7))
+
+
+def test_conditional_granger_respects_candidate_lags_and_keeps_columns():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(987)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(10, n):
+        target[t] = 0.4 * target[t - 1] + 0.5 * x[t - 10] + 0.01 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=12,
+        min_rows=80,
+        candidate_lags={"x": [3, 3, 0, 99]},
+    )
+
+    assert int(out.iloc[0]["best_lag"]) == 3
+    assert list(out.columns) == EXPECTED_OUT_COLS
+
+
+def test_conditional_granger_records_explicit_baseline_maxlag():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(111)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(8, n):
+        target[t] = 0.35 * target[t - 1] + 0.4 * x[t - 8] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=80,
+        candidate_lags={"x": [8]},
+        baseline_maxlag=3,
+    )
+
+    row = out.iloc[0]
+    assert int(row["baseline_maxlag"]) == 3
+    assert row["tested_lags"] == "8"
+    assert int(row["best_lag"]) == 8
+
+
+def test_conditional_granger_defaults_baseline_maxlag_to_maxlag():
+    n = 160
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(222)
+    x = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.4 * target[t - 1] + 0.3 * x[t - 1] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x": x}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=7,
+        min_rows=80,
+        baseline_maxlag=None,
+    )
+
+    assert int(out.iloc[0]["baseline_maxlag"]) == 7
+    assert out.iloc[0]["tested_lags"] == "1,2,3,4,5,6,7"
+
+
+def test_conditional_granger_skips_empty_candidate_lags_and_records_tested_lags():
+    n = 160
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    frame = pd.DataFrame({"target": np.arange(n, dtype=float), "x": np.arange(n, dtype=float)}, index=idx)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=80,
+        candidate_lags={"x": []},
+        baseline_maxlag=3,
+    )
+
+    row = out.iloc[0]
+    assert row["status"] == "skipped: no candidate lags"
+    assert row["tested_lags"] == ""
+    assert int(row["baseline_maxlag"]) == 3
+
+
+def test_build_candidate_lag_windows_skips_negative_lag_without_abs_center():
+    ranked = pd.DataFrame([{"variable": "x", "lag": -12}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=5)
+
+    assert out["x"] == []
+
+
+def test_build_candidate_lag_windows_skips_zero_lag():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 0}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=4)
+
+    assert out["x"] == []
+
+
+def test_build_candidate_lag_windows_keeps_positive_lag_center():
+    ranked = pd.DataFrame([{"variable": "x", "lag": 8}])
+
+    out = build_candidate_lag_windows(ranked, ["x"], maxlag=20, window=2, fallback_maxlag=4)
+
+    assert out["x"] == [6, 7, 8, 9, 10]
+
+
+def test_conditional_granger_excludes_current_candidate_from_controls():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(456)
+    x1 = rng.normal(size=n)
+    load = rng.normal(size=n)
+    target = np.zeros(n)
+    for t in range(2, n):
+        target[t] = 0.45 * target[t - 1] + 0.35 * x1[t - 1] + 0.2 * load[t - 1] + 0.02 * rng.normal()
+    frame = pd.DataFrame({"target": target, "x1": x1, "load": load}, index=idx)
+
+    overlap = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x1"],
+        control_columns=["x1"],
+        maxlag=3,
+        min_rows=80,
+    ).iloc[0]
+    with_load = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x1"],
+        control_columns=["load"],
+        maxlag=3,
+        min_rows=80,
+    ).iloc[0]
+
+    assert overlap["control_columns"] == ""
+    assert str(overlap["status"]).startswith("ok")
+    assert with_load["control_columns"] == "load"
+
+
+def test_conditional_granger_ranked_window_marks_negative_lag_skipped():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=60,
+        candidate_lags={"x": []},
+        lag_mode="ranked_window",
+    )
+
+    row = out.iloc[0]
+    assert row["status"] == "skipped: non-positive screening lag"
+    assert row["tested_lags"] == ""
+
+
+def test_conditional_granger_full_scan_still_scans_all_lags():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=4,
+        min_rows=60,
+        candidate_lags=None,
+        lag_mode="full_scan",
+    )
+
+    assert out.iloc[0]["tested_lags"] == "1,2,3,4"
+
+
+def test_conditional_granger_normalizes_control_columns_per_candidate():
+    n = 180
+    idx = pd.date_range("2024-01-01", periods=n, freq="h")
+    rng = np.random.default_rng(789)
+    frame = pd.DataFrame(
+        {
+            "target": rng.normal(size=n),
+            "x1": rng.normal(size=n),
+            "load": rng.normal(size=n),
+        },
+        index=idx,
+    )
+
+    duplicate_controls = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["load", "load", "x1"], maxlag=3, min_rows=80
+    ).iloc[0]
+    only_self = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["x1"], maxlag=3, min_rows=80
+    ).iloc[0]
+    missing_control = run_conditional_granger_tests(
+        frame, target="target", variables=["x1"], control_columns=["missing", "load"], maxlag=3, min_rows=80
+    ).iloc[0]
+
+    assert duplicate_controls["control_columns"] == "load"
+    assert only_self["control_columns"] == ""
+    assert missing_control["control_columns"] == "load"
+
+
+def test_conditional_granger_ranked_window_marks_positive_lag_outside_maxlag():
+    frame = pd.DataFrame({"target": np.arange(140, dtype=float), "x": np.arange(140, dtype=float)})
+    ranked = pd.DataFrame([{"variable": "x", "lag": 120}])
+    candidate_lags = build_candidate_lag_windows(ranked, ["x"], maxlag=24, window=2, fallback_maxlag=6)
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=24,
+        min_rows=60,
+        candidate_lags=candidate_lags,
+        candidate_lag_status={"x": "ranked_lag_outside_maxlag"},
+        lag_mode="ranked_window",
+    )
+
+    assert out.iloc[0]["status"] == "skipped: ranked lag outside maxlag"
+
+
+def test_conditional_granger_ranked_window_marks_zero_lag_skipped():
+    frame = pd.DataFrame({"target": np.arange(120, dtype=float), "x": np.arange(120, dtype=float)})
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=10,
+        min_rows=60,
+        candidate_lags={"x": []},
+        candidate_lag_status={"x": "non_positive_screening_lag"},
+        lag_mode="ranked_window",
+    )
+
+    assert out.iloc[0]["status"] == "skipped: non-positive screening lag"
+
+
+def test_conditional_granger_internal_columns_do_not_collide_with_x_y_controls():
+    n = 160
+    rng = np.random.default_rng(987)
+    frame = pd.DataFrame(
+        {
+            "target": rng.normal(size=n),
+            "candidate": rng.normal(size=n),
+            "x": rng.normal(size=n),
+            "y": rng.normal(size=n),
+        }
+    )
+
+    out = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["candidate"],
+        control_columns=["x", "y"],
+        maxlag=3,
+        min_rows=80,
+    )
+
+    assert out.iloc[0]["tested_lags"] == "1,2,3"
+    assert out.iloc[0]["control_columns"] == "x,y"

@@ -227,6 +227,13 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
     return pd.DataFrame(rows, columns=cols)
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return default
+    return float(numeric)
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
@@ -243,26 +250,33 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     rows = []
     for _, row in ranked.iterrows():
         variable = str(row.get("variable", ""))
-        raw_corr = float(row.get("score", 0) or 0)
-        residual_corr = float(residual_map.get(variable, raw_corr))
-        regime_stability = float(stability_map.get(variable, {}).get("regime_stability_final", 1.0) or 1.0)
+        raw_corr = _safe_float(row.get("score", 0), default=0.0)
+        residual_corr = _safe_float(residual_map.get(variable, raw_corr), default=raw_corr)
+        regime_stability = _safe_float(
+            stability_map.get(variable, {}).get("regime_stability_final", 1.0), default=1.0
+        )
         d = diag_map.get(variable, {})
         poor_quality = (
-            float(d.get("missing_rate", 0) or 0) > 0.2
-            or float(d.get("saturation_ratio", 0) or 0) > 0.2
-            or float(d.get("abnormal_jump_ratio", 0) or 0) > 0.01
+            _safe_float(d.get("missing_rate", 0), default=0.0) > 0.2
+            or _safe_float(d.get("saturation_ratio", 0), default=0.0) > 0.2
+            or _safe_float(d.get("abnormal_jump_ratio", 0), default=0.0) > 0.01
         )
+        lag_value = int(_safe_float(row.get("lag", 0), default=0.0))
         formula_like = _looks_like_formula_variable(variable)
-        strong_formula = formula_like and raw_corr > 0.98 and int(row.get("lag", 0) or 0) == 0
+        strong_formula = formula_like and raw_corr > 0.98 and lag_value == 0
         common_capacity = bool(control_columns) and raw_corr >= 0.5 and residual_corr < raw_corr * 0.65
-        closed_loop = roles.get(variable) == "MV" and int(row.get("lag", 0) or 0) < 0
-        target_leads = int(row.get("lag", 0) or 0) < 0
+        closed_loop = roles.get(variable) == "MV" and lag_value < 0
+        target_leads = lag_value < 0
         unstable_reg = regime_stability < 0.5
-        unstable_time = float(roll_map.get(variable, {}).get("rolling_stability", 1.0) or 1.0) < 0.35
+        unstable_time = _safe_float(
+            roll_map.get(variable, {}).get("rolling_stability", 1.0), default=1.0
+        ) < 0.35
         lag_boundary = bool(lag_map.get(variable, {}).get("lag_boundary_flag", False))
         lift_info = lift_map.get(variable, {})
-        low_lift = str(lift_info.get("status", "")).startswith("ok") and float(lift_info.get("model_lift", 0.0) or 0.0) < 0.01
-        residual_collinearity = float(residual_cond_map.get(variable, 0) or 0) > 1e8
+        low_lift = str(lift_info.get("status", "")).startswith("ok") and _safe_float(
+            lift_info.get("model_lift", 0.0), default=0.0
+        ) < 0.01
+        residual_collinearity = _safe_float(residual_cond_map.get(variable, 0), default=0.0) > 1e8
 
         flags = [name for name, active in [
             ("formula_like", formula_like),
@@ -375,7 +389,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
 
 
 def _grade_candidate(row: pd.Series) -> str:
-    score = float(row.get("final_score", 0) or 0)
+    score = _safe_float(row.get("final_score", 0), default=0.0)
     if score >= 0.75:
         return "A"
     if score >= 0.6:
@@ -388,7 +402,8 @@ def _grade_candidate(row: pd.Series) -> str:
 
 
 def _recommend_use(row: pd.Series) -> str:
-    flags = str(row.get("risk_flags", "") or "")
+    risk_value = row.get("risk_flags", "")
+    flags = "" if pd.isna(risk_value) else str(risk_value)
     grade = str(row.get("candidate_grade", "E"))
     if "poor_data_quality" in flags:
         return "poor_quality_variable"
@@ -396,8 +411,8 @@ def _recommend_use(row: pd.Series) -> str:
         return "closed_loop_suspect"
     if "common_capacity_driver" in flags:
         return "capacity_driven"
-    raw_corr = float(row.get("raw_corr", 0) or 0)
-    lag = int(row.get("lag", 0) or 0)
+    raw_corr = _safe_float(row.get("raw_corr", 0), default=0.0)
+    lag = int(_safe_float(row.get("lag", 0), default=0.0))
     has_formula = "formula_like" in flags
     has_strong_formula = "strong_formula_leakage" in flags
     has_common = "common_capacity_driver" in flags
@@ -407,15 +422,16 @@ def _recommend_use(row: pd.Series) -> str:
         return "unstable_candidate"
     if grade == "A":
         return "strong_screening_candidate"
-    if grade == "B" and float(row.get("model_lift_score", 0) or 0) > 0.05:
+    if grade == "B" and _safe_float(row.get("model_lift_score", 0), default=0.0) > 0.05:
         return "prediction_candidate"
-    if int(row.get("lag", 0) or 0) < 0:
+    if int(_safe_float(row.get("lag", 0), default=0.0)) < 0:
         return "state_indicator"
     return "manual_review_required"
 
 
 def _recommended_action(row: pd.Series) -> str:
-    use = str(row.get("recommended_use", "manual_review_required"))
+    use_value = row.get("recommended_use", "manual_review_required")
+    use = "manual_review_required" if pd.isna(use_value) else str(use_value)
     mapping = {
         "strong_screening_candidate": "优先进入机理复核",
         "prediction_candidate": "可作为预测候选",

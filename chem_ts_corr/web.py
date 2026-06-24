@@ -1320,6 +1320,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
         <button class="tab-button" data-tab="llmReportTab">AI 综合解读</button>
         <button class="tab-button" data-tab="downloadsTab">下载</button>
+        <button class="tab-button" data-tab="termsHelpTab">术语与标签说明</button>
       </div>
 
       <div id="overviewTab" class="tab-panel active">
@@ -1474,6 +1475,16 @@ INDEX_HTML = r"""<!doctype html>
         <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
       </div>
+
+      <div id="termsHelpTab" class="tab-panel">
+        <h2>术语与标签说明</h2>
+        <div class="help">
+          <div>本页用于解释分析结果中的标签、风险、证据等级和模型指标，帮助工程人员理解页面显示名称对应的复核含义。</div>
+          <div>这些说明仅用于辅助工程复核，不改变分析结果，也不参与计算；后台分析输出和 CSV 下载保持不变。</div>
+        </div>
+        <div id="termsHelpTable" class="empty">术语说明加载中。</div>
+      </div>
+
     </section>
   </main>
 
@@ -1529,6 +1540,7 @@ el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
+renderTermsHelpTab();
 
 
 function fillCapacityOptions(columns) {
@@ -2081,6 +2093,48 @@ function inlineMarkdown(text) {
   return escapeHtml(text)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+
+const termsHelpRows = [
+  { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
+  { category: "风险标签说明", name: "目标领先风险", signal: "页面显示为目标领先变量或变量滞后目标。", reading: "目标变化先出现，候选变量更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
+  { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
+  { category: "风险标签说明", name: "数据质量风险", signal: "缺失、常数段、异常尖峰或有效比例不足影响结果。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
+  { category: "风险标签说明", name: "闭环反馈风险", signal: "变量可能处于控制回路内，与目标互相调节。", reading: "相关方向可能被 PID、APC 或人工操作反转。", action: "结合控制策略和阀位/设定值，必要时按开闭环时段分段验证。" },
+  { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
+  { category: "证据等级与复核建议", name: "强预测证据", signal: "相关、模型提升、预测贡献、稳定性等多类证据同时较好。", reading: "该变量对预测目标有较稳定信息量，但仍不是因果结论。", action: "进入优先复核，结合机理、趋势和现场操作记录确认。" },
+  { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、闭环或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程策略。" },
+  { category: "证据等级与复核建议", name: "优先复核", signal: "综合排序或最终推荐摘要中优先级较高。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
+  { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
+  { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
+  { category: "滞后与方向解释", name: "目标领先变量", signal: "最佳 lag 为负，目标变化早于候选变量。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
+  { category: "模型验证指标", name: "模型提升", signal: "加入候选变量后，相比基线模型的预测效果改善。", reading: "变量提供了目标自身历史以外的增量信息。", action: "优先关注提升稳定且跨工况一致的变量。" },
+  { category: "模型验证指标", name: "预测贡献", signal: "随机森林模型解释或重要性排序靠前。", reading: "模型依赖该变量做预测，但不代表可操作或因果成立。", action: "与相关性、Granger 和工程机理交叉验证。" },
+  { category: "模型验证指标", name: "仅作预测验证，不是因果结论", signal: "Granger、条件 Granger 或模型指标显著。", reading: "说明历史信息有助于预测，不自动证明调节该变量会改变目标。", action: "在工程应用前必须经过机理和可操作性复核。" },
+  { category: "稳定性指标", name: "滚动稳定性", signal: "滚动窗口内方向、强度或排名是否一致。", reading: "低稳定性可能表示关系只在局部时段成立。", action: "按时间段、开停工或异常时段拆分复核。" },
+  { category: "稳定性指标", name: "工况稳定性", signal: "低/中/高负荷或自定义工况下结果是否一致。", reading: "关系受负荷、配方或操作模式影响。", action: "分工况建立候选清单，避免跨工况混用。" },
+  { category: "工程使用建议", name: "可能 MV 候选", signal: "变量领先目标、风险可控且具备可调节属性。", reading: "可能适合作为操纵变量或控制策略候选。", action: "确认执行器约束、安全边界和操作权限后再试验。" },
+  { category: "工程使用建议", name: "可能前馈 / 干扰变量", signal: "变量领先目标但不可直接调节，且能代表上游扰动。", reading: "适合用于提前预警、前馈补偿或软测量输入。", action: "验证采样及时性和信号可靠性，设计前馈延时补偿。" }
+];
+
+function renderTermsHelpTab() {
+  const container = el("termsHelpTable");
+  if (!container) return;
+  const columns = ["分类", "页面显示名称", "具体表征", "工程解读", "建议动作"];
+  const keys = ["category", "name", "signal", "reading", "action"];
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead>`;
+  const body = document.createElement("tbody");
+  for (const row of termsHelpRows) {
+    body.innerHTML += `<tr>${keys.map((key) => `<td>${escapeHtml(row[key])}</td>`).join("")}</tr>`;
+  }
+  table.appendChild(body);
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  wrap.appendChild(table);
+  container.className = "";
+  container.replaceChildren(wrap);
 }
 
 function activateTab(tabId) {

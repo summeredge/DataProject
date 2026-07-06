@@ -28,18 +28,18 @@ def test_invalid_numeric_form_fields_fall_back_to_defaults():
 
 
 def test_preprocess_records_row_drop_metadata_after_interpolation():
-    index = pd.date_range("2026-01-01", periods=6, freq="min")
+    index = pd.date_range("2026-01-01", periods=12, freq="min")
     frame = pd.DataFrame(
         {
-            "target": [1, 2, 3, 4, 5, 6],
-            "x": [None, 2, 3, 4, 5, None],
+            "target": list(range(1, 13)),
+            "x": [None] + list(range(2, 12)) + [None],
         },
         index=index,
     )
     cleaned = preprocess_frame(frame, target="target", resample_rule=None, min_valid_ratio=0.0)
-    assert len(cleaned) == 4
-    assert cleaned.attrs.get("rows_before_dropna") == 6
-    assert cleaned.attrs.get("rows_after_dropna") == 4
+    assert len(cleaned) == 10
+    assert cleaned.attrs.get("rows_before_dropna") == 12
+    assert cleaned.attrs.get("rows_after_dropna") == 10
     assert cleaned.attrs.get("rows_dropped_by_dropna") == 2
     assert "rows_dropped_by_dropna" in cleaned.attrs.get("preprocess_warnings", "")
 

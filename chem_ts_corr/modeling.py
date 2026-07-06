@@ -123,13 +123,19 @@ def _selected_lags(best_lag: int | None, max_lag: int, lag_mode: str) -> list[in
 def _best_only_lag(best_lag: int | None, max_lag: int) -> int:
     if best_lag is None or pd.isna(best_lag):
         return 0
-    return min(max_lag, max(0, int(abs(best_lag))))
+    lag = int(best_lag)
+    if lag <= 0:
+        return 0
+    return min(max_lag, lag)
 
 
 def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[int]:
     if best_lag is None or pd.isna(best_lag):
         return list(range(0, min(max_lag, 6) + 1))
-    center = max(0, int(abs(best_lag)))
+    center = int(best_lag)
+    if center <= 0:
+        return [0]
+    center = min(max_lag, center)
     lower = max(0, center - radius)
     upper = min(max_lag, center + radius)
     return list(range(lower, upper + 1))

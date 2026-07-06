@@ -65,12 +65,21 @@ def preprocess_frame(
     keep_columns = [c for c in frame.columns if c in keep]
 
     cleaned = frame[keep_columns].interpolate(method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area)
-    cleaned = cleaned.dropna(axis=1, how="all").dropna(axis=0, how="any")
+    cleaned = cleaned.dropna(axis=1, how="all")
+    rows_before_dropna = int(len(cleaned))
+    cleaned = cleaned.dropna(axis=0, how="any")
+    rows_after_dropna = int(len(cleaned))
+    rows_dropped_by_dropna = rows_before_dropna - rows_after_dropna
+    cleaned.attrs["rows_before_dropna"] = rows_before_dropna
+    cleaned.attrs["rows_after_dropna"] = rows_after_dropna
+    cleaned.attrs["rows_dropped_by_dropna"] = rows_dropped_by_dropna
+    if rows_dropped_by_dropna:
+        warnings = [str(cleaned.attrs.get("preprocess_warnings", "")).strip()] if cleaned.attrs.get("preprocess_warnings") else []
+        warnings.append(f"rows_dropped_by_dropna={rows_dropped_by_dropna}")
+        cleaned.attrs["preprocess_warnings"] = "; ".join(warnings)
 
     if target not in cleaned.columns:
         raise ValueError("Target column was removed during preprocessing")
-    if cleaned.shape[0] < 10:
-        raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
 
     low_variance = cleaned.nunique(dropna=True) <= 1
     protected = set(protected_columns or [])

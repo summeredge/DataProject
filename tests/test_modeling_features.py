@@ -24,7 +24,7 @@ def test_build_lag_features_best_only_uses_one_lag_per_variable():
         lag_mode="best_only",
     )
 
-    assert list(features.columns) == ["x1__lag_2", "x2__lag_3"]
+    assert list(features.columns) == ["x1__lag_2", "x2__lag_0"]
 
 
 def test_build_lag_features_nearby_keeps_existing_lag_window_behavior():

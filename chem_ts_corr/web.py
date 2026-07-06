@@ -1003,22 +1003,42 @@ def _field(form: dict[str, Any], name: str, default: str = "") -> str:
 
 def _int_field(form: dict[str, Any], name: str, default: int) -> int:
     value = _field(form, name, "")
-    return int(value) if value else default
+    if not value:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _float_field(form: dict[str, Any], name: str, default: float) -> float:
     value = _field(form, name, "")
-    return float(value) if value else default
+    if not value:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _optional_float_field(form: dict[str, Any], name: str) -> float | None:
     value = _field(form, name, "")
-    return float(value) if value else None
+    if not value:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_int_field(form: dict[str, Any], name: str) -> int | None:
     value = _field(form, name, "")
-    return int(value) if value else None
+    if not value:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _list_field(form: dict[str, Any], name: str) -> list[str]:
@@ -1427,6 +1447,10 @@ INDEX_HTML = r"""<!doctype html>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
+        <h2>保守复核报告</h2>
+        <div class="help">旧版保守复核报告用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
+        <div class="download-buttons" id="causalReportDownload"></div>
+        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>最终推荐摘要</h2>
         <div class="help">该表基于逐变量综合证据复核表生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
         <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
@@ -3112,6 +3136,7 @@ function formatCellValue(column, value) {
 
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
+  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
   renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
 }

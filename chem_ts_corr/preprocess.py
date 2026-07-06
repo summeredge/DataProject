@@ -80,6 +80,8 @@ def preprocess_frame(
 
     if target not in cleaned.columns:
         raise ValueError("Target column was removed during preprocessing")
+    if len(cleaned) < 3:
+        raise ValueError("Not enough usable rows after preprocessing; at least 3 are required")
 
     low_variance = cleaned.nunique(dropna=True) <= 1
     protected = set(protected_columns or [])

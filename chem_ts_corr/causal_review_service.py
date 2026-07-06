@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from chem_ts_corr.common import as_text, left_join_missing, to_float
+
 
 INTERPRETATION = "predictive validation only; not a causal conclusion"
 
@@ -45,7 +47,7 @@ def build_causal_review_report(
     _ensure_column(report, "variable")
 
     ranked_cols = ["variable", "candidate_grade", "final_score", "recommended_use", "recommended_action"]
-    report = _left_join_missing(report, ranked_features, ranked_cols)
+    report = left_join_missing(report, ranked_features, columns=ranked_cols)
 
     conditional_cols = {
         "status": "conditional_granger_status",
@@ -54,10 +56,10 @@ def build_causal_review_report(
         "fdr_q_value": "conditional_fdr_q_value",
         "predictive_contribution": "predictive_contribution",
     }
-    report = _left_join_missing(report, conditional_granger_scores, ["variable", *conditional_cols], conditional_cols)
+    report = left_join_missing(report, conditional_granger_scores, columns=["variable", *conditional_cols], rename=conditional_cols)
 
     if risk_flags is not None:
-        report = _left_join_missing(report, risk_flags, ["variable", "risk_level", "risk_flags"])
+        report = left_join_missing(report, risk_flags, columns=["variable", "risk_level", "risk_flags"])
 
     for col in REPORT_COLUMNS:
         if col not in report.columns:
@@ -70,34 +72,6 @@ def build_causal_review_report(
     report["interpretation"] = INTERPRETATION
 
     return report[REPORT_COLUMNS].copy()
-
-
-def _left_join_missing(
-    left: pd.DataFrame,
-    right: pd.DataFrame,
-    columns: list[str],
-    rename: dict[str, str] | None = None,
-) -> pd.DataFrame:
-    if right.empty or "variable" not in right.columns:
-        return left
-
-    rename = rename or {}
-    available = [c for c in columns if c in right.columns]
-    if "variable" not in available:
-        return left
-
-    side = right[available].copy(deep=True).rename(columns=rename)
-    value_cols = [c for c in side.columns if c != "variable"]
-    if not value_cols:
-        return left
-
-    merged = left.merge(side, on="variable", how="left", suffixes=("", "__joined"))
-    for col in value_cols:
-        joined_col = f"{col}__joined"
-        if joined_col in merged.columns:
-            merged[col] = merged[col].combine_first(merged[joined_col])
-            merged = merged.drop(columns=[joined_col])
-    return merged
 
 
 def _ensure_column(frame: pd.DataFrame, column: str) -> None:
@@ -166,17 +140,10 @@ def _has_risk_limited_signal(row: pd.Series) -> bool:
 
 
 def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple, set)):
-        return ",".join(str(item) for item in value)
-    if pd.isna(value):
-        return ""
-    return str(value)
+    text = as_text(value)
+    return text.replace(";", ",") if isinstance(value, (list, tuple, set)) else text
 
 
 def _number(value: object) -> float | None:
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return None
-    return float(numeric)
+    numeric = to_float(value, default=float("nan"))
+    return None if pd.isna(numeric) else numeric

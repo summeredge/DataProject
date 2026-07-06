@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from chem_ts_corr.common import as_text, to_float
+
 
 INTERPRETATION = "screening near-miss only; not a causal conclusion"
 
@@ -193,18 +195,11 @@ def _near_miss_reason(row: pd.Series) -> str:
 
 
 def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if pd.isna(value):
-        return ""
-    return str(value)
+    return as_text(value)
 
 
 def _number(value: object, default: float) -> float:
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return default
-    return float(numeric)
+    return to_float(value, default)
 
 
 def _direction_from_lag(value: object) -> str:

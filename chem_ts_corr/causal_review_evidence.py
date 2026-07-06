@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from chem_ts_corr.common import as_text, left_join_missing, to_float
+
 
 INTERPRETATION = "integrated review evidence only; not a causal conclusion"
 
@@ -108,7 +110,7 @@ def build_causal_review_evidence(
     evidence = evidence[[c for c in base_cols if c in evidence.columns]].copy(deep=True)
     _ensure_columns(evidence, base_cols)
 
-    evidence = _left_join_missing(
+    evidence = left_join_missing(
         evidence,
         conditional_granger_scores,
         {
@@ -120,7 +122,7 @@ def build_causal_review_evidence(
             "condition_number": "condition_number",
         },
     )
-    evidence = _left_join_missing(
+    evidence = left_join_missing(
         evidence,
         risk_flags,
         {
@@ -131,7 +133,7 @@ def build_causal_review_evidence(
             "recommended_action": "recommended_action",
         },
     )
-    evidence = _left_join_missing(
+    evidence = left_join_missing(
         evidence,
         enhanced_validation_summary,
         {
@@ -141,7 +143,7 @@ def build_causal_review_evidence(
             "status": "enhanced_validation_status",
         },
     )
-    evidence = _left_join_missing(
+    evidence = left_join_missing(
         evidence,
         granger_tests,
         {
@@ -150,7 +152,7 @@ def build_causal_review_evidence(
             "status": "granger_status",
         },
     )
-    evidence = _left_join_missing(
+    evidence = left_join_missing(
         evidence,
         model_variable_importance,
         {
@@ -182,25 +184,6 @@ def build_causal_review_evidence(
     evidence["interpretation"] = INTERPRETATION
     return evidence[EVIDENCE_COLUMNS].copy(deep=True)
 
-
-def _left_join_missing(left: pd.DataFrame, right: pd.DataFrame | None, rename: dict[str, str]) -> pd.DataFrame:
-    if right is None or right.empty or "variable" not in right.columns:
-        return left
-    source_cols = ["variable", *[c for c in rename if c in right.columns]]
-    if len(source_cols) <= 1:
-        return left
-    side = right.copy(deep=True)[source_cols].rename(columns=rename)
-    side = _dedupe_variables(side)
-    value_cols = [c for c in side.columns if c != "variable"]
-    merged = left.merge(side, on="variable", how="left", suffixes=("", "__joined"))
-    for col in value_cols:
-        joined_col = f"{col}__joined"
-        if joined_col in merged.columns:
-            existing = merged[col] if col in merged.columns else pd.Series(pd.NA, index=merged.index)
-            missing = existing.isna() | existing.astype(str).str.strip().eq("")
-            merged[col] = existing.where(~missing, merged[joined_col])
-            merged = merged.drop(columns=[joined_col])
-    return merged
 
 
 def _dedupe_variables(frame: pd.DataFrame) -> pd.DataFrame:
@@ -554,20 +537,9 @@ def _is_insufficient_status(status: str) -> bool:
 
 
 def _text(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple, set)):
-        return ";".join(str(item) for item in value)
-    try:
-        if pd.isna(value):
-            return ""
-    except (TypeError, ValueError):
-        pass
-    return str(value)
+    return as_text(value)
 
 
 def _number(value: object) -> float | None:
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return None
-    return float(numeric)
+    numeric = to_float(value, default=float("nan"))
+    return None if pd.isna(numeric) else numeric

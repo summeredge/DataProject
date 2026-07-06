@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import math
 import re
 from typing import Any
 
 import pandas as pd
+
+from chem_ts_corr.common import to_float
 
 
 INTERPRETATION = "final review summary only; not a causal conclusion"
@@ -235,10 +236,5 @@ def _text(value: Any) -> str:
 
 
 def _number(value: Any) -> float | None:
-    try:
-        if value is None or value == "":
-            return None
-        num = float(value)
-        return None if math.isnan(num) else num
-    except (TypeError, ValueError):
-        return None
+    numeric = to_float(value, default=float("nan"))
+    return None if pd.isna(numeric) else numeric

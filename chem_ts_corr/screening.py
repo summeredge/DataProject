@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.common import to_float
+
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
@@ -228,10 +230,7 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return default
-    return float(numeric)
+    return to_float(value, default)
 
 
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:

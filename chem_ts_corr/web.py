@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.config import AnalysisConfig as _AnalysisConfig
 from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv, read_timeseries_table
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
@@ -26,6 +26,22 @@ from chem_ts_corr.model_discovery import build_model_discovered_candidates, buil
 from chem_ts_corr.pipeline import run_analysis
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
+
+
+def AnalysisConfig(
+    input_path: Path,
+    time_column: str,
+    target: str,
+    output_dir: Path = Path("reports"),
+    **kwargs: Any,
+) -> _AnalysisConfig:
+    return _AnalysisConfig(
+        input_path=input_path,
+        time_column=time_column,
+        target=target,
+        output_dir=output_dir,
+        **kwargs,
+    )
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,8 +73,13 @@ DOWNLOAD_FILES = {
     "llm_prompt.md",
     "llm_report.md",
 }
+MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
+TASK_TTL_SECONDS = 24 * 60 * 60
+MAX_TASKS = 100
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
+_SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
+_SCALED_FRAME_CACHE_LOCK = threading.Lock()
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -345,12 +366,16 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         skip_rolling_corr=True,
     )
     task_id = uuid.uuid4().hex
+    now = time.time()
     with TASKS_LOCK:
+        _cleanup_tasks_locked(now=now)
         TASKS[task_id] = {
             "status": "running",
             "message": "等待后台分析启动",
             "run_id": run_id,
-            "start_time": time.time(),
+            "start_time": now,
+            "created_at": now,
+            "updated_at": now,
         }
     thread = threading.Thread(
         target=_analyze_task,
@@ -370,6 +395,7 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                 task = TASKS.get(task_id)
                 if task is not None:
                     task["message"] = message
+                    task["updated_at"] = time.time()
 
         run_analysis(config, progress_callback=progress)
         with TASKS_LOCK:
@@ -378,12 +404,21 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                     "status": "done",
                     "message": "分析完成",
                     "end_time": time.time(),
+                    "updated_at": time.time(),
                     "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
                 }
             )
     except Exception as exc:
         with TASKS_LOCK:
-            TASKS[task_id].update({"status": "error", "message": str(exc), "error": str(exc), "end_time": time.time()})
+            TASKS[task_id].update(
+                {
+                    "status": "error",
+                    "message": str(exc),
+                    "error": str(exc),
+                    "end_time": time.time(),
+                    "updated_at": time.time(),
+                }
+            )
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
@@ -428,6 +463,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
 
 def _task_status_response(task_id: str) -> dict[str, Any]:
     with TASKS_LOCK:
+        _cleanup_tasks_locked()
         task = TASKS.get(task_id)
     if task is None:
         raise FileNotFoundError("任务不存在，请重新开始分析")
@@ -451,6 +487,7 @@ def _elapsed_seconds(task: dict[str, Any]) -> float:
 
 def _task_result_response(task_id: str) -> dict[str, Any]:
     with TASKS_LOCK:
+        _cleanup_tasks_locked()
         task = TASKS.get(task_id)
     if task is None:
         raise FileNotFoundError("任务不存在，请重新开始分析")
@@ -783,6 +820,12 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
     from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
 
+    cache_key = _scaled_frame_cache_key(config)
+    with _SCALED_FRAME_CACHE_LOCK:
+        cached = _SCALED_FRAME_CACHE.get(cache_key)
+        if cached is not None:
+            return cached.copy(deep=True)
+
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
     numeric = select_numeric_frame(raw, config.target)
     roles = load_roles(config, list(numeric.columns))
@@ -817,7 +860,41 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    return standardize_frame(transformed)
+    scaled = standardize_frame(transformed)
+    with _SCALED_FRAME_CACHE_LOCK:
+        _SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+    return scaled.copy(deep=True)
+
+
+def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
+    path = Path(config.input_path)
+    stat = path.stat() if path.exists() else None
+    return (
+        str(path.resolve()),
+        stat.st_mtime_ns if stat else None,
+        stat.st_size if stat else None,
+        config.encoding,
+        config.time_column,
+        config.target,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
+        tuple(config.capacity_columns or []),
+        tuple(config.residual_control_columns or []),
+        tuple(config.force_include_variables or []),
+        config.resample_rule,
+        config.min_valid_ratio,
+        config.max_interpolate_gap_points,
+        config.interpolate_limit_area,
+        config.preprocess_mode,
+        config.detrend_window,
+    )
+
+
+def _clear_scaled_frame_cache() -> None:
+    with _SCALED_FRAME_CACHE_LOCK:
+        _SCALED_FRAME_CACHE.clear()
 
 
 def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
@@ -922,6 +999,8 @@ def _resolve_encoding(path: Path, encoding: str) -> str:
 def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     content_type = handler.headers.get("Content-Type", "")
     content_length = int(handler.headers.get("Content-Length", "0") or 0)
+    if content_length > MAX_REQUEST_BODY_BYTES:
+        raise ValueError("请求体过大")
     body = handler.rfile.read(content_length)
     if "multipart/form-data" in content_type:
         msg = BytesParser(policy=email_default_policy).parsebytes(
@@ -945,7 +1024,13 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 
 def _resolve_upload(file_id: str) -> Path:
-    matches = sorted(UPLOADS_DIR.glob(f"{file_id}.*"))
+    file_id = _validate_file_id(file_id)
+    suffixes = sorted(TEXT_SUFFIXES | EXCEL_SUFFIXES)
+    matches = [
+        UPLOADS_DIR / f"{file_id}{suffix}"
+        for suffix in suffixes
+        if (UPLOADS_DIR / f"{file_id}{suffix}").exists()
+    ]
     if not matches:
         raise FileNotFoundError("上传文件不存在，请重新上传")
     path = matches[0].resolve()
@@ -954,6 +1039,49 @@ def _resolve_upload(file_id: str) -> Path:
     if path.suffix.lower() not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
         raise ValueError("Unsupported upload file type")
     return path
+
+
+def _validate_file_id(file_id: str) -> str:
+    value = str(file_id or "").strip()
+    if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError("Invalid upload file id")
+    return value
+
+
+def _cleanup_tasks(now: float | None = None) -> None:
+    with TASKS_LOCK:
+        _cleanup_tasks_locked(now=now)
+
+
+def _cleanup_tasks_locked(now: float | None = None) -> None:
+    current = time.time() if now is None else now
+    terminal_statuses = {"done", "error"}
+    expired = [
+        task_id
+        for task_id, task in TASKS.items()
+        if task.get("status") in terminal_statuses
+        and (
+            current
+            - float(task.get("updated_at") or task.get("end_time") or task.get("created_at") or current)
+            > TASK_TTL_SECONDS
+        )
+    ]
+    for task_id in expired:
+        TASKS.pop(task_id, None)
+    if len(TASKS) <= MAX_TASKS:
+        return
+    removable = sorted(
+        (
+            (float(task.get("updated_at") or task.get("end_time") or task.get("created_at") or 0), task_id)
+            for task_id, task in TASKS.items()
+            if task.get("status") in terminal_statuses
+        ),
+        key=lambda item: item[0],
+    )
+    for _, task_id in removable:
+        if len(TASKS) <= MAX_TASKS:
+            break
+        TASKS.pop(task_id, None)
 
 
 def _resolve_run_dir(run_id: str) -> Path:

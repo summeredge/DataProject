@@ -336,7 +336,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["model_lift_status"] = np.where(lift_raw.notna(), "ok", "not_computed")
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
     final["raw_corr_score"] = final["raw_corr"].fillna(0).clip(0, 1)
-    final["residual_corr_score"] = residual_raw.clip(0,1)
+    residual_score = residual_raw.clip(0,1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
     final["lag_quality"] = lagq_raw.clip(0,1)
@@ -349,7 +349,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     strong = final.get("strong_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 10)
     weak = final.get("weak_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 20)
     final["risk_penalty"] = 0.12 * strong + 0.03 * weak
-    parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (final["residual_corr_score"], 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
+    parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (residual_score, 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
     num = 0
     den = 0
     for series, w in parts.values():
@@ -508,7 +508,9 @@ def _residualize(y: pd.Series, x: pd.DataFrame) -> tuple[pd.Series, str, float, 
 def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[int]:
     if best_lag is None or pd.isna(best_lag):
         return list(range(0, min(max_lag, 6) + 1))
-    center = max(0, int(abs(best_lag)))
+    center = int(best_lag)
+    if center < 0:
+        return [0]
     lower = max(0, center - radius)
     upper = min(max_lag, center + radius)
     return list(range(lower, upper + 1))

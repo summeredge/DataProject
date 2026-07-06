@@ -15,11 +15,11 @@ def test_screening_negative_best_lag_is_not_abs_converted_for_model_lift():
 
 
 def test_preprocess_keeps_minimum_row_guard_after_recording_drop_metadata():
-    index = pd.date_range("2026-01-01", periods=6, freq="min")
+    index = pd.date_range("2026-01-01", periods=4, freq="min")
     frame = pd.DataFrame(
         {
-            "target": [1, 2, 3, 4, 5, 6],
-            "x": [None, 2, 3, 4, 5, None],
+            "target": [1, 2, 3, 4],
+            "x": [None, 2, 3, None],
         },
         index=index,
     )

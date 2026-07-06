@@ -509,7 +509,7 @@ def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[in
     if best_lag is None or pd.isna(best_lag):
         return list(range(0, min(max_lag, 6) + 1))
     center = int(best_lag)
-    if center < 0:
+    if center <= 0:
         return [0]
     lower = max(0, center - radius)
     upper = min(max_lag, center + radius)

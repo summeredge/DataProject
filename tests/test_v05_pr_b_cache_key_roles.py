@@ -49,6 +49,17 @@ def test_scaled_frame_cache_key_includes_roles_path_and_file_state(tmp_path):
     assert old_key != new_key
 
 
+def test_scaled_frame_cache_key_handles_missing_roles_file(tmp_path):
+    missing_roles = tmp_path / "missing_roles.csv"
+
+    key = web._scaled_frame_cache_key(_make_config(tmp_path, missing_roles))
+
+    assert str(missing_roles.resolve()) in key
+    roles_path_index = key.index(str(missing_roles.resolve()))
+    assert key[roles_path_index + 1] is None
+    assert key[roles_path_index + 2] is None
+
+
 def test_scaled_frame_cache_key_source_mentions_roles_path_and_stat():
     source = inspect.getsource(web._scaled_frame_cache_key)
     assert "roles_path" in source

@@ -877,10 +877,15 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
 def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
     path = Path(config.input_path)
     stat = path.stat() if path.exists() else None
+    roles_path = Path(config.roles_path).resolve() if config.roles_path else None
+    roles_stat = roles_path.stat() if roles_path and roles_path.exists() else None
     return (
         str(path.resolve()),
         stat.st_mtime_ns if stat else None,
         stat.st_size if stat else None,
+        str(roles_path) if roles_path else None,
+        roles_stat.st_mtime_ns if roles_stat else None,
+        roles_stat.st_size if roles_stat else None,
         config.encoding,
         config.time_column,
         config.target,

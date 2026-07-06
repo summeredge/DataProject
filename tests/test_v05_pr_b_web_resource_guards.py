@@ -1,4 +1,5 @@
 import inspect
+import io
 import re
 import time
 
@@ -16,12 +17,36 @@ def test_multipart_form_rejects_large_content_length_before_body_read():
     assert limit_pos < read_pos
     assert "content_length" in source
 
+    class UnreadableBody(io.BytesIO):
+        def read(self, *args, **kwargs):  # pragma: no cover - must not be reached
+            raise AssertionError("request body was read before Content-Length validation")
+
+    handler = type(
+        "Handler",
+        (),
+        {
+            "headers": {
+                "Content-Length": str(web.MAX_REQUEST_BODY_BYTES + 1),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            "rfile": UnreadableBody(),
+        },
+    )()
+    with pytest.raises(ValueError, match="上传文件过大"):
+        web._multipart_form(handler)
+
+    for invalid_length in ["not-an-int", "-1"]:
+        handler.headers["Content-Length"] = invalid_length
+        with pytest.raises(ValueError, match="Content-Length"):
+            web._multipart_form(handler)
+
 
 def test_resolve_upload_requires_uuid_hex_file_id():
     validator = getattr(web, "_validate_file_id", None)
     assert validator is not None
     valid = "0123456789abcdef0123456789abcdef"
     assert validator(valid) == valid
+    assert validator(valid.upper()) == valid
     for invalid in ["*", "../abc", "abc?", "[abc]", "not-a-uuid", ""]:
         with pytest.raises(ValueError):
             validator(invalid)
@@ -73,7 +98,13 @@ def test_secondary_scaled_frame_is_cached_per_run_config(monkeypatch, tmp_path):
         }
     ).to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    config = web.AnalysisConfig(input_path=csv_path, time_column="time", target="target", min_valid_ratio=0.0)
+    config = web.AnalysisConfig(
+        input_path=csv_path,
+        time_column="time",
+        target="target",
+        output_dir=tmp_path / "out",
+        min_valid_ratio=0.0,
+    )
     calls = {"n": 0}
     original_loader = web.load_timeseries_csv
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict
 import json
+import re
 import threading
 import time
 import uuid
@@ -74,12 +75,14 @@ DOWNLOAD_FILES = {
     "llm_report.md",
 }
 MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
-TASK_TTL_SECONDS = 24 * 60 * 60
+TASK_TTL_SECONDS = 6 * 60 * 60
 MAX_TASKS = 100
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
-_SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
-_SCALED_FRAME_CACHE_LOCK = threading.Lock()
+_FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
+SCALED_FRAME_CACHE_LOCK = threading.Lock()
+MAX_SCALED_FRAME_CACHE = 4
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -408,6 +411,7 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                     "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
                 }
             )
+        _cleanup_tasks()
     except Exception as exc:
         with TASKS_LOCK:
             TASKS[task_id].update(
@@ -419,6 +423,7 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                     "updated_at": time.time(),
                 }
             )
+        _cleanup_tasks()
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
@@ -821,8 +826,8 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
     from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
 
     cache_key = _scaled_frame_cache_key(config)
-    with _SCALED_FRAME_CACHE_LOCK:
-        cached = _SCALED_FRAME_CACHE.get(cache_key)
+    with SCALED_FRAME_CACHE_LOCK:
+        cached = SCALED_FRAME_CACHE.get(cache_key)
         if cached is not None:
             return cached.copy(deep=True)
 
@@ -861,8 +866,11 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         interpolate_limit_area=config.interpolate_limit_area,
     )
     scaled = standardize_frame(transformed)
-    with _SCALED_FRAME_CACHE_LOCK:
-        _SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+    with SCALED_FRAME_CACHE_LOCK:
+        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
+            oldest_key = next(iter(SCALED_FRAME_CACHE))
+            SCALED_FRAME_CACHE.pop(oldest_key, None)
     return scaled.copy(deep=True)
 
 
@@ -893,8 +901,8 @@ def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
 
 
 def _clear_scaled_frame_cache() -> None:
-    with _SCALED_FRAME_CACHE_LOCK:
-        _SCALED_FRAME_CACHE.clear()
+    with SCALED_FRAME_CACHE_LOCK:
+        SCALED_FRAME_CACHE.clear()
 
 
 def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
@@ -998,9 +1006,15 @@ def _resolve_encoding(path: Path, encoding: str) -> str:
 
 def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     content_type = handler.headers.get("Content-Type", "")
-    content_length = int(handler.headers.get("Content-Length", "0") or 0)
+    raw_content_length = handler.headers.get("Content-Length", "0") or 0
+    try:
+        content_length = int(raw_content_length)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid Content-Length") from exc
+    if content_length < 0:
+        raise ValueError("Invalid Content-Length")
     if content_length > MAX_REQUEST_BODY_BYTES:
-        raise ValueError("请求体过大")
+        raise ValueError("上传文件过大")
     body = handler.rfile.read(content_length)
     if "multipart/form-data" in content_type:
         msg = BytesParser(policy=email_default_policy).parsebytes(
@@ -1025,15 +1039,14 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
 
 def _resolve_upload(file_id: str) -> Path:
     file_id = _validate_file_id(file_id)
-    suffixes = sorted(TEXT_SUFFIXES | EXCEL_SUFFIXES)
-    matches = [
-        UPLOADS_DIR / f"{file_id}{suffix}"
-        for suffix in suffixes
-        if (UPLOADS_DIR / f"{file_id}{suffix}").exists()
-    ]
-    if not matches:
+    path = None
+    for suffix in sorted(TEXT_SUFFIXES | EXCEL_SUFFIXES):
+        candidate = (UPLOADS_DIR / f"{file_id}{suffix}").resolve()
+        if candidate.is_file():
+            path = candidate
+            break
+    if path is None:
         raise FileNotFoundError("上传文件不存在，请重新上传")
-    path = matches[0].resolve()
     if UPLOADS_DIR.resolve() not in path.parents:
         raise ValueError("Invalid upload path")
     if path.suffix.lower() not in TEXT_SUFFIXES | EXCEL_SUFFIXES:
@@ -1042,9 +1055,9 @@ def _resolve_upload(file_id: str) -> Path:
 
 
 def _validate_file_id(file_id: str) -> str:
-    value = str(file_id or "").strip()
-    if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError("Invalid upload file id")
+    value = str(file_id or "").strip().lower()
+    if not _FILE_ID_RE.fullmatch(value):
+        raise ValueError("Invalid file id")
     return value
 
 
@@ -1055,7 +1068,7 @@ def _cleanup_tasks(now: float | None = None) -> None:
 
 def _cleanup_tasks_locked(now: float | None = None) -> None:
     current = time.time() if now is None else now
-    terminal_statuses = {"done", "error"}
+    terminal_statuses = {"done", "error", "failed"}
     expired = [
         task_id
         for task_id, task in TASKS.items()
@@ -1074,7 +1087,7 @@ def _cleanup_tasks_locked(now: float | None = None) -> None:
         (
             (float(task.get("updated_at") or task.get("end_time") or task.get("created_at") or 0), task_id)
             for task_id, task in TASKS.items()
-            if task.get("status") in terminal_statuses
+            if task.get("status") != "running"
         ),
         key=lambda item: item[0],
     )

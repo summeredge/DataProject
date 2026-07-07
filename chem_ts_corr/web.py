@@ -1897,7 +1897,7 @@ async function waitForAnalysisResult(taskId) {
     const statusResponse = await fetch(`/api/status?task_id=${encodeURIComponent(taskId)}`);
     const statusData = await statusResponse.json();
     if (!statusResponse.ok) throw new Error(statusData.error || "任务状态查询失败");
-    setStatus(formatTaskStatus(statusData));
+    setStatus(formatTaskStatus(statusData), "loading");
     if (statusData.status === "error") throw new Error(statusData.error || statusData.message || "分析失败");
     if (statusData.status === "done") break;
   }
@@ -2118,7 +2118,7 @@ async function testLlmConnection() {
   } catch (error) {
     const message = error.message || String(error);
     el("llmConnectionStatus").textContent = message;
-    setStatus(appendElapsed(message, startedAt));
+    setStatus(appendElapsed(message, startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("testLlmConnection").disabled = false;
@@ -2436,6 +2436,7 @@ async function drawTrend() {
     el("trendChart").className = "chart empty";
     el("trendChart").textContent = error.message || String(error);
     el("trendLegend").innerHTML = "";
+    setStatus(error.message || String(error), "error");
   }
 }
 

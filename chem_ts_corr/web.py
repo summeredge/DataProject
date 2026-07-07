@@ -1647,8 +1647,7 @@ INDEX_HTML = r"""<!doctype html>
           <label>分析变量数量<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
             <select id="llmReportType">
-              <option value="apc_advice">APC/DCS 工程建议</option>
-              <option value="general">通用综合解读</option>
+              <option value="apc_advice">工程建议</option>
             </select>
           </label>
           <label>模型服务

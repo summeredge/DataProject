@@ -1723,6 +1723,9 @@ let tableSortStates = { table: { column: "final_score", direction: "desc" }, fin
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 const llmPromptEndpoint = "/api/llm_prompt";
+let lastTrendSeries = [];
+let lastTrendAxisMode = "shared";
+let trendResizeTimer = null;
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
@@ -1736,6 +1739,11 @@ el("runCausalReview").addEventListener("click", runCausalReview);
 el("detailModalClose").addEventListener("click", closeDetailModal);
 el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
+window.addEventListener("resize", () => {
+  if (!lastTrendSeries.length) return;
+  clearTimeout(trendResizeTimer);
+  trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+});
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
@@ -2488,7 +2496,7 @@ function renderTrendChart(series, axisMode) {
     ? "独立 Y 轴：坐标1对应数据1，坐标2对应数据2，其它曲线仍按自身范围缩放，仅作趋势形态对比"
     : "同一 Y 轴：所有曲线使用同一数值范围";
   container.className = "chart";
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}">
+  container.innerHTML = `<svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="${width}" height="${height}" fill="#fff"/>
     ${leftTickSvg}
     <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
@@ -3862,6 +3870,8 @@ function reset() {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastTrendSeries = [];
+  lastTrendAxisMode = "shared";
   tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";

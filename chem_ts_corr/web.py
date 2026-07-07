@@ -1327,6 +1327,14 @@ INDEX_HTML = r"""<!doctype html>
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
+    .trend-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+    .trend-stats.empty { display:block; color:var(--muted); font-size:var(--font-sm); }
+    .trend-stat-card { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:10px; }
+    .trend-stat-card h3 { margin:0 0 8px; font-size:var(--font-sm); overflow-wrap:anywhere; }
+    .trend-stat-card dl { display:grid; gap:4px; margin:0; }
+    .trend-stat-card dl div { display:grid; grid-template-columns:80px 1fr; gap:8px; font-size:var(--font-xs); }
+    .trend-stat-card dt { color:var(--muted); }
+    .trend-stat-card dd { margin:0; color:var(--text); text-align:right; font-variant-numeric:tabular-nums; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
     .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
@@ -1559,6 +1567,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div id="trendChart" class="chart empty">选择 1 到 4 个数据后点击“显示趋势”。</div>
         <div id="trendLegend" class="legend"></div>
+        <div id="trendStats" class="trend-stats empty">选择数据并点击“显示趋势”后显示统计摘要。</div>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
@@ -1714,6 +1723,9 @@ let tableSortStates = { table: { column: "final_score", direction: "desc" }, fin
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 const llmPromptEndpoint = "/api/llm_prompt";
+let lastTrendSeries = [];
+let lastTrendAxisMode = "shared";
+let trendResizeTimer = null;
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
@@ -1727,6 +1739,11 @@ el("runCausalReview").addEventListener("click", runCausalReview);
 el("detailModalClose").addEventListener("click", closeDetailModal);
 el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
+window.addEventListener("resize", () => {
+  if (!lastTrendSeries.length) return;
+  clearTimeout(trendResizeTimer);
+  trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+});
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
@@ -2436,6 +2453,8 @@ async function drawTrend() {
     el("trendChart").className = "chart empty";
     el("trendChart").textContent = error.message || String(error);
     el("trendLegend").innerHTML = "";
+    lastTrendSeries = [];
+    clearTrendStats();
     setStatus(error.message || String(error), "error");
   }
 }
@@ -2445,31 +2464,56 @@ function renderTrendChart(series, axisMode) {
   if (!series.length) {
     container.className = "chart empty";
     container.textContent = "没有可绘制的趋势数据。";
+    el("trendLegend").innerHTML = "";
+    lastTrendSeries = [];
+    clearTrendStats();
     return;
   }
-  const width = 960, height = 320, pad = { left: 58, right: axisMode === "independent" ? 58 : 20, top: 24, bottom: 44 };
+  lastTrendSeries = series;
+  lastTrendAxisMode = axisMode;
+  const width = trendChartWidth(container), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
   const maxLen = Math.max(...series.map((item) => item.points.length));
-  const allValues = series.flatMap((item) => item.points.map((point) => point.y).filter((value) => value !== null));
+  const allValues = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value)));
   const sharedRange = valueRange(allValues);
-  const ranges = series.map((item) => axisMode === "shared" ? sharedRange : valueRange(item.points.map((point) => point.y).filter((value) => value !== null)));
+  const ranges = series.map((item) => axisMode === "shared" ? sharedRange : valueRange(item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value))));
   const x = (index) => pad.left + (index / Math.max(1, maxLen - 1)) * (width - pad.left - pad.right);
   const y = (value, range) => pad.top + (1 - (value - range.min) / Math.max(1e-12, range.max - range.min)) * (height - pad.top - pad.bottom);
+  const tickLineEnd = width - pad.right;
+  const leftTicks = axisTicks(axisMode === "shared" ? sharedRange : ranges[0]);
+  const rightTicks = axisMode === "independent" && series.length > 1 ? axisTicks(ranges[1]) : [];
+  const leftTickSvg = leftTicks.map((tick) => {
+    const yPos = y(tick, axisMode === "shared" ? sharedRange : ranges[0]).toFixed(2);
+    return `<line x1="${pad.left - 4}" y1="${yPos}" x2="${tickLineEnd}" y2="${yPos}" stroke="#edf1f5"/><text x="${pad.left - 8}" y="${yPos}" text-anchor="end" dominant-baseline="middle" font-size="11" fill="#5f6b7a">${formatAxisValue(tick)}</text>`;
+  }).join("");
+  const rightTickSvg = rightTicks.map((tick) => {
+    const yPos = y(tick, ranges[1]).toFixed(2);
+    return `<line x1="${width - pad.right}" y1="${yPos}" x2="${width - pad.right + 4}" y2="${yPos}" stroke="#9aa4b2"/><text x="${width - pad.right + 8}" y="${yPos}" text-anchor="start" dominant-baseline="middle" font-size="11" fill="#5f6b7a">${formatAxisValue(tick)}</text>`;
+  }).join("");
   const paths = series.map((item, idx) => {
-    const points = item.points.map((point, index) => point.y === null ? null : `${x(index).toFixed(2)},${y(point.y, ranges[idx]).toFixed(2)}`).filter(Boolean).join(" ");
+    const points = item.points.map((point, index) => {
+      const value = Number(point.y);
+      return Number.isFinite(value) ? `${x(index).toFixed(2)},${y(value, ranges[idx]).toFixed(2)}` : null;
+    }).filter(Boolean).join(" ");
     return `<polyline points="${points}" fill="none" stroke="${trendColors[idx % trendColors.length]}" stroke-width="2.2"/>`;
   }).join("");
+  const axisNote = axisMode === "independent"
+    ? "独立 Y 轴：坐标1对应数据1，坐标2对应数据2，其它曲线仍按自身范围缩放，仅作趋势形态对比"
+    : "同一 Y 轴：所有曲线使用同一数值范围";
   container.className = "chart";
-  container.innerHTML = `<svg viewBox="0 0 ${width} ${height}">
+  container.innerHTML = `<svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}">
     <rect width="${width}" height="${height}" fill="#fff"/>
+    ${leftTickSvg}
     <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
     <line x1="${pad.left}" y1="${pad.top}" x2="${pad.left}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>
     ${axisMode === "independent" ? `<line x1="${width - pad.right}" y1="${pad.top}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>` : ""}
-    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">${axisMode === "independent" ? "独立 Y 轴：每条曲线按自身范围缩放" : "同一 Y 轴：所有曲线使用同一数值范围"}</text>
+    ${rightTickSvg}
+    <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">${escapeHtml(axisNote)}</text>
     ${paths}
   </svg>`;
   el("trendLegend").innerHTML = series.map((item, idx) =>
     `<span><i class="swatch" style="background:${trendColors[idx % trendColors.length]}"></i>${escapeHtml(item.name)}</span>`
   ).join("");
+  renderTrendStats(series);
 }
 
 function valueRange(values) {
@@ -2478,6 +2522,99 @@ function valueRange(values) {
   if (min === max) { min -= 1; max += 1; }
   const margin = (max - min) * 0.08;
   return { min: min - margin, max: max + margin };
+}
+
+function trendChartWidth(container) {
+  const rectWidth = container.getBoundingClientRect().width;
+  const parentWidth = container.parentElement ? container.parentElement.getBoundingClientRect().width : 0;
+  const measuredWidth = Math.round(rectWidth || container.clientWidth || parentWidth || document.documentElement.clientWidth || 960);
+  return Math.max(640, measuredWidth);
+}
+
+function axisTicks(range, count = 5) {
+  if (!range || count <= 1) return [];
+  const min = Number(range.min);
+  const max = Number(range.max);
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  const step = (max - min) / (count - 1 || 1);
+  return Array.from({ length: count }, (_, index) => min + step * index);
+}
+
+function formatAxisValue(value) {
+  if (!Number.isFinite(value)) return "-";
+  const abs = Math.abs(value);
+  if (abs > 0 && (abs < 0.001 || abs >= 1000000)) return value.toExponential(2);
+  if (abs >= 10000) return value.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+  if (abs >= 100) return value.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+  if (abs >= 1) return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  return value.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+}
+
+function clearTrendStats() {
+  const node = el("trendStats");
+  node.className = "trend-stats empty";
+  node.textContent = "选择数据并点击“显示趋势”后显示统计摘要。";
+}
+
+function renderTrendStats(series) {
+  const node = el("trendStats");
+  if (!series.length) {
+    clearTrendStats();
+    return;
+  }
+  const statRows = [
+    ["均值", "mean"],
+    ["标准差", "stddev"],
+    ["最大值", "max"],
+    ["最小值", "min"],
+    ["极差", "range"],
+    ["中位数", "median"],
+    ["有效点数/占比", "count"],
+  ];
+  node.className = "trend-stats";
+  node.innerHTML = series.map((item) => {
+    const stats = trendStats(item.points || []);
+    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? formatCountRatio(stats) : formatAxisValue(stats[key])}</dd></div>`).join("");
+    return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl></div>`;
+  }).join("");
+}
+
+function trendStats(points) {
+  const total = (points || []).length;
+  const values = (points || []).map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
+  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, validRatio: 0 };
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  return {
+    mean,
+    stddev: stddev(values),
+    max,
+    min,
+    range: max - min,
+    median: median(values),
+    count: values.length,
+    validRatio: total ? values.length / total : 0,
+  };
+}
+
+function formatCountRatio(stats) {
+  if (!stats.count) return "-";
+  return `${stats.count} / ${(stats.validRatio * 100).toFixed(1)}%`;
+}
+
+function median(values) {
+  if (!values.length) return NaN;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function stddev(values) {
+  if (!values.length) return NaN;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
 }
 
 const candidateTable = "table";
@@ -3751,6 +3888,8 @@ function reset() {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastTrendSeries = [];
+  lastTrendAxisMode = "shared";
   tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
@@ -3794,6 +3933,7 @@ function reset() {
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
   el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";
   el("trendLegend").innerHTML = "";
+  clearTrendStats();
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("modelVariableImportanceTable").className = "empty";

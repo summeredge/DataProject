@@ -2459,8 +2459,7 @@ function renderTrendChart(series, axisMode) {
     clearTrendStats();
     return;
   }
-  const measuredWidth = Math.round(container.getBoundingClientRect().width || container.clientWidth || 960);
-  const width = Math.max(640, measuredWidth), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
+  const width = 960, height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
   const maxLen = Math.max(...series.map((item) => item.points.length));
   const allValues = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value)));
   const sharedRange = valueRange(allValues);
@@ -2556,15 +2555,14 @@ function renderTrendStats(series) {
   node.className = "trend-stats";
   node.innerHTML = series.map((item) => {
     const stats = trendStats(item.points || []);
-    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? formatCountRatio(stats) : formatAxisValue(stats[key])}</dd></div>`).join("");
+    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? stats[key] : formatAxisValue(stats[key])}</dd></div>`).join("");
     return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl></div>`;
   }).join("");
 }
 
 function trendStats(points) {
-  const total = (points || []).length;
   const values = (points || []).map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
-  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, validRatio: 0 };
+  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0 };
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -2576,13 +2574,7 @@ function trendStats(points) {
     range: max - min,
     median: median(values),
     count: values.length,
-    validRatio: total ? values.length / total : 0,
   };
-}
-
-function formatCountRatio(stats) {
-  if (!stats.count) return "-";
-  return `${stats.count} / ${(stats.validRatio * 100).toFixed(1)}%`;
 }
 
 function median(values) {

@@ -8,7 +8,6 @@ def test_trend_stats_and_axis_helpers_are_present():
         'trend-stat-card',
         'axisTicks',
         'formatAxisValue',
-        'formatCountRatio',
     ]
     for token in required:
         assert token in INDEX_HTML
@@ -38,14 +37,3 @@ def test_trend_api_contract_remains_get_query_only():
     assert '/api/trend_stats' not in INDEX_HTML
     trend_fetch = INDEX_HTML.split("fetch(`/api/trend?${params.toString()}`)", 1)[0].rsplit("const response = await ", 1)[-1]
     assert "method" not in trend_fetch
-
-
-def test_trend_chart_width_uses_container_measurement():
-    assert 'container.getBoundingClientRect().width' in INDEX_HTML
-    assert 'Math.max(640, measuredWidth)' in INDEX_HTML
-    assert 'const width = 960' not in INDEX_HTML
-
-
-def test_effective_point_count_includes_ratio():
-    assert 'validRatio' in INDEX_HTML
-    assert '${stats.count} / ${(stats.validRatio * 100).toFixed(1)}%' in INDEX_HTML

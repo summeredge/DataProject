@@ -2453,7 +2453,6 @@ async function drawTrend() {
     el("trendChart").className = "chart empty";
     el("trendChart").textContent = error.message || String(error);
     el("trendLegend").innerHTML = "";
-    lastTrendSeries = [];
     clearTrendStats();
     setStatus(error.message || String(error), "error");
   }
@@ -2465,13 +2464,10 @@ function renderTrendChart(series, axisMode) {
     container.className = "chart empty";
     container.textContent = "没有可绘制的趋势数据。";
     el("trendLegend").innerHTML = "";
-    lastTrendSeries = [];
     clearTrendStats();
     return;
   }
-  lastTrendSeries = series;
-  lastTrendAxisMode = axisMode;
-  const width = trendChartWidth(container), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
+  const width = 960, height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
   const maxLen = Math.max(...series.map((item) => item.points.length));
   const allValues = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value)));
   const sharedRange = valueRange(allValues);
@@ -2524,13 +2520,6 @@ function valueRange(values) {
   return { min: min - margin, max: max + margin };
 }
 
-function trendChartWidth(container) {
-  const rectWidth = container.getBoundingClientRect().width;
-  const parentWidth = container.parentElement ? container.parentElement.getBoundingClientRect().width : 0;
-  const measuredWidth = Math.round(rectWidth || container.clientWidth || parentWidth || document.documentElement.clientWidth || 960);
-  return Math.max(640, measuredWidth);
-}
-
 function axisTicks(range, count = 5) {
   if (!range || count <= 1) return [];
   const min = Number(range.min);
@@ -2569,20 +2558,19 @@ function renderTrendStats(series) {
     ["最小值", "min"],
     ["极差", "range"],
     ["中位数", "median"],
-    ["有效点数/占比", "count"],
+    ["有效点数", "count"],
   ];
   node.className = "trend-stats";
   node.innerHTML = series.map((item) => {
     const stats = trendStats(item.points || []);
-    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? formatCountRatio(stats) : formatAxisValue(stats[key])}</dd></div>`).join("");
+    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? stats[key] : formatAxisValue(stats[key])}</dd></div>`).join("");
     return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl></div>`;
   }).join("");
 }
 
 function trendStats(points) {
-  const total = (points || []).length;
   const values = (points || []).map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
-  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, validRatio: 0 };
+  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0 };
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -2594,13 +2582,7 @@ function trendStats(points) {
     range: max - min,
     median: median(values),
     count: values.length,
-    validRatio: total ? values.length / total : 0,
   };
-}
-
-function formatCountRatio(stats) {
-  if (!stats.count) return "-";
-  return `${stats.count} / ${(stats.validRatio * 100).toFixed(1)}%`;
 }
 
 function median(values) {

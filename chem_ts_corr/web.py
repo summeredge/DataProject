@@ -1236,39 +1236,47 @@ INDEX_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>化工时序相关性分析</title>
   <style>
-    :root { --bg:#f6f7f9; --panel:#fff; --line:#d9dee7; --text:#16202a; --muted:#5f6b7a; --accent:#176b87; --green:#0f5132; --warn:#8a5a00; }
+    :root { --bg:#f6f7f9; --panel:#fff; --line:#d9dee7; --text:#16202a; --muted:#5f6b7a; --accent:#176b87; --green:#0f5132; --warn:#8a5a00; --font-xs:11px; --font-sm:12px; --font-base:13px; --surface-muted:#f8fafc; --line-soft:#e7ebf0; --text-subtle:#5f6b7a; --focus:#0f766e; --danger-bg:#fee2e2; --danger-text:#991b1b; --warning-bg:#fef3c7; --warning-text:#92400e; --info-bg:#e0f2fe; --info-text:#075985; --success-bg:#dcfce7; --success-text:#166534; }
     * { box-sizing: border-box; }
+    :focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
     body { margin:0; font-family:"Segoe UI","Microsoft YaHei",Arial,sans-serif; color:var(--text); background:var(--bg); }
-    header { padding:22px 28px 14px; border-bottom:1px solid var(--line); background:#fff; }
+    header { padding:22px 28px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
     h1 { margin:0 0 8px; font-size:24px; }
     .subtitle { color:var(--muted); font-size:14px; }
     main { display:grid; grid-template-columns:minmax(320px,430px) 1fr; gap:18px; padding:18px; }
     section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
-    .controls { display:grid; gap:8px; align-content:start; font-size:80%; }
-    label { display:grid; gap:3px; font-size:10px; line-height:1.2; color:var(--muted); }
-    input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:#fff; font-size:11px; line-height:1.2; }
+    .controls { display:grid; gap:10px; align-content:start; font-size:80%; }
+    .control-group { display:grid; gap:8px; padding:10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
+    .control-group-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
+    label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
+    input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
     .check input { width:auto; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; }
-    .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:#fff; }
-    .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:11px; text-align:left; }
+    .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:var(--panel); }
+    .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:var(--font-xs); text-align:left; }
     .multi-dropdown > summary::-webkit-details-marker { display:none; }
     .multi-options { max-height:180px; min-width:260px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:4px; }
-    .multi-options label { display:grid; grid-template-columns:16px 1fr; align-items:center; column-gap:8px; font-size:11px; color:var(--text); text-align:left; line-height:1.2; }
+    .multi-options label { display:grid; grid-template-columns:16px 1fr; align-items:center; column-gap:8px; font-size:var(--font-xs); color:var(--text); text-align:left; line-height:1.2; }
     .multi-options input[type="checkbox"] { margin:0; }
     .multi-options span { display:block; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     button { border:0; border-radius:6px; padding:10px 14px; font-weight:650; cursor:pointer; background:var(--accent); color:#fff; }
     button.secondary { background:#e8edf3; color:var(--text); }
     button:disabled { opacity:.5; cursor:not-allowed; }
-    .status { min-height:22px; color:var(--muted); font-size:13px; white-space:pre-wrap; }
-    .note { color:var(--warn); font-size:10px; line-height:1.2; }
+    .status { min-height:22px; padding:7px 9px; border:1px solid transparent; border-radius:6px; color:var(--muted); font-size:var(--font-base); white-space:pre-wrap; }
+    .status.info { background:var(--info-bg); color:var(--info-text); border-color:#bae6fd; }
+    .status.success { background:var(--success-bg); color:var(--success-text); border-color:#bbf7d0; }
+    .status.warning { background:var(--warning-bg); color:var(--warning-text); border-color:#fde68a; }
+    .status.error { background:var(--danger-bg); color:var(--danger-text); border-color:#fecaca; }
+    .status.loading { background:var(--surface-muted); color:var(--text); border-color:var(--line); }
+    .note { color:var(--warn); font-size:var(--font-xs); line-height:1.2; }
     .results { display:grid; gap:16px; min-width:0; align-content:start; position:relative; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; gap:10px; }
     h2 { margin:0; font-size:18px; }
     .download-buttons { display:flex; gap:8px; flex-wrap:wrap; }
-    .download-buttons a { display:inline-block; border-radius:6px; padding:8px 10px; background:var(--green); color:#fff; text-decoration:none; font-size:13px; }
-    .help { display:grid; gap:4px; color:var(--muted); font-size:10px; line-height:1.25; background:#f8fafc; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+    .download-buttons a { display:inline-block; border-radius:6px; padding:8px 10px; background:var(--green); color:#fff; text-decoration:none; font-size:var(--font-base); }
+    .help { display:grid; gap:4px; color:var(--muted); font-size:var(--font-xs); line-height:1.25; background:var(--surface-muted); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
     .tabs {
       position:sticky;
       top:0;
@@ -1309,50 +1317,50 @@ INDEX_HTML = r"""<!doctype html>
       border:1px solid var(--line);
       border-radius:8px;
       padding:10px 12px;
-      background:#f8fafc;
+      background:var(--surface-muted);
     }
     .metric-value { display:block; font-size:20px; line-height:1.15; font-weight:700; color:var(--text); }
-    .metric-label { color:var(--muted); font-size:12px; line-height:1.25; }
-    .chart { min-height:280px; border:1px solid var(--line); border-radius:6px; background:#fff; overflow:hidden; }
+    .metric-label { color:var(--muted); font-size:var(--font-sm); line-height:1.25; }
+    .chart { min-height:280px; border:1px solid var(--line); border-radius:6px; background:var(--panel); overflow:hidden; }
     .chart svg { width:100%; height:320px; display:block; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
-    .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:13px; }
+    .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
-    .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
-    .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    .terms-help-table-wrap { overflow-x:auto; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:#fff; }
-    .terms-help-table-wrap::after { content:"术语说明按正常页面高度完整展示；超出页面宽度时可横向滚动"; display:block; padding:5px 8px; color:var(--muted); font-size:11px; background:#f8fafc; border-top:1px solid var(--line); }
-    .terms-help-category-cell { font-weight:650; color:var(--text); background:#f8fafc; vertical-align:top; }
+    .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
+    .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
+    .terms-help-table-wrap { overflow-x:auto; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
+    .terms-help-table-wrap::after { content:"术语说明按正常页面高度完整展示；超出页面宽度时可横向滚动"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
+    .terms-help-category-cell { font-weight:650; color:var(--text); background:var(--surface-muted); vertical-align:top; }
     /* legacy regression marker: table-layout:fixed */
-    table { width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:12px; }
-    th, td { padding:7px 10px; border-bottom:1px solid #e7ebf0; text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
+    table { width:max-content; min-width:100%; table-layout:auto; border-collapse:separate; border-spacing:0; font-size:var(--font-sm); }
+    th, td { padding:7px 10px; border-bottom:1px solid var(--line-soft); text-align:left; vertical-align:top; white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
     th { position:sticky; top:0; background:#eef2f6; z-index:2; box-shadow:0 1px 0 var(--line); }
     tbody tr:nth-child(even) { background:#fbfcfe; }
     tbody tr:hover { background:#f1f5f9; }
-    th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 0 #e7ebf0; }
+    th:first-child, td:first-child { position:sticky; left:0; z-index:1; background:inherit; box-shadow:1px 0 0 var(--line-soft); }
     th:first-child { z-index:3; background:#eef2f6; }
     td.numeric { text-align:right; font-variant-numeric:tabular-nums; }
     td.wrap-cell { line-height:1.35; }
     .compact-result-table tbody tr { cursor:pointer; }
     .compact-result-table tbody tr.selected { background:#e0f2fe; }
-    .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:#f8fafc; }
+    .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--surface-muted); }
     .detail-panel h3 { margin:0 0 8px; font-size:15px; }
     .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.55); z-index:1000; }
     .modal-backdrop.open { display:flex; }
-    .modal-card { width:min(960px, 96vw); max-height:88vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 24px 60px rgba(15,23,42,.28); border:1px solid var(--line); }
-    .modal-header { position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); background:#fff; z-index:1; }
+    .modal-card { width:min(960px, 96vw); max-height:88vh; overflow:auto; background:var(--panel); border-radius:12px; box-shadow:0 24px 60px rgba(15,23,42,.28); border:1px solid var(--line); }
+    .modal-header { position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); background:var(--panel); z-index:1; }
     .modal-header h3 { margin:0; font-size:16px; }
     .modal-body { padding:16px; }
     .modal-close { background:#e8edf3; color:var(--text); padding:8px 12px; }
     .detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:8px; }
-    .detail-field { background:#fff; border:1px solid #e7ebf0; border-radius:6px; padding:8px; }
-    .detail-field strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .detail-field { background:var(--panel); border:1px solid var(--line-soft); border-radius:6px; padding:8px; }
+    .detail-field strong { display:block; color:var(--muted); font-size:var(--font-sm); margin-bottom:4px; }
     th.sortable { cursor:pointer; user-select:none; }
     th.sortable:hover { background:#dde6ef; }
-    th .sort-mark { color:var(--muted); margin-left:6px; font-size:11px; }
-    .decision-badge { display:inline-block; border-radius:999px; padding:3px 8px; font-weight:700; font-size:12px; }
+    th .sort-mark { color:var(--muted); margin-left:6px; font-size:var(--font-xs); }
+    .decision-badge { display:inline-block; border-radius:999px; padding:3px 8px; font-weight:700; font-size:var(--font-sm); }
     .decision-risk_limited_review { background:#fef3c7; color:#92400e; }
     .decision-priority_review { background:#fee2e2; color:#991b1b; }
     .decision-secondary_review { background:#ffedd5; color:#9a3412; }
@@ -1363,7 +1371,7 @@ INDEX_HTML = r"""<!doctype html>
       border:1px solid #d0d7de;
       border-radius:8px;
       padding:12px;
-      background:#fff;
+      background:var(--panel);
       margin-top:10px;
     }
     .review-card h3 { margin-top:0; }
@@ -1377,22 +1385,22 @@ INDEX_HTML = r"""<!doctype html>
       padding:8px;
       border-radius:6px;
     }
-    .metric-item strong { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
-    .small-button { padding:5px 8px; font-size:12px; }
+    .metric-item strong { display:block; color:var(--muted); font-size:var(--font-sm); margin-bottom:4px; }
+    .small-button { padding:5px 8px; font-size:var(--font-sm); }
     .clickable-row { cursor:pointer; }
     .clickable-row:hover { background:#f6f8fa; }
     .empty { color:var(--muted); padding:24px; text-align:center; border:1px dashed var(--line); border-radius:6px; }
-    pre { margin:0; padding:12px; background:#f8fafc; border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:12px; }
-    .markdown-report { min-height:320px; max-height:720px; overflow:auto; padding:18px 22px; border:1px solid var(--line); border-radius:8px; background:#fff; line-height:1.65; font-size:14px; }
+    pre { margin:0; padding:12px; background:var(--surface-muted); border:1px solid var(--line); border-radius:6px; max-height:260px; overflow:auto; white-space:pre-wrap; font-size:var(--font-sm); }
+    .markdown-report { min-height:320px; max-height:720px; overflow:auto; padding:18px 22px; border:1px solid var(--line); border-radius:8px; background:var(--panel); line-height:1.65; font-size:14px; }
     .markdown-report h1, .markdown-report h2, .markdown-report h3 { margin:1.1em 0 .45em; line-height:1.25; color:var(--text); }
     .markdown-report h1 { font-size:24px; border-bottom:1px solid var(--line); padding-bottom:8px; }
     .markdown-report h2 { font-size:20px; border-bottom:1px solid #edf0f4; padding-bottom:6px; }
     .markdown-report h3 { font-size:16px; }
     .markdown-report p, .markdown-report ul, .markdown-report ol { margin:.55em 0; }
-    .markdown-report blockquote { margin:10px 0; padding:8px 12px; border-left:4px solid var(--accent); background:#f8fafc; color:var(--muted); }
+    .markdown-report blockquote { margin:10px 0; padding:8px 12px; border-left:4px solid var(--accent); background:var(--surface-muted); color:var(--muted); }
     .markdown-report code { padding:2px 4px; border-radius:4px; background:#f1f5f9; font-family:Consolas,monospace; }
     .markdown-report pre { max-height:none; margin:10px 0; }
-    .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:13px; }
+    .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:var(--font-base); }
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
@@ -1406,6 +1414,8 @@ INDEX_HTML = r"""<!doctype html>
   </header>
   <main>
     <section class="controls">
+      <div class="control-group">
+        <div class="control-group-title">数据输入</div>
       <div class="actions">
         <button id="upload">上传并识别列</button>
         <button id="analyze" disabled>开始分析</button>
@@ -1421,6 +1431,9 @@ INDEX_HTML = r"""<!doctype html>
           <option value="gb18030">GBK / GB18030</option>
         </select>
       </label>
+      </div>
+      <div class="control-group">
+        <div class="control-group-title">基础分析参数</div>
       <div class="row">
         <label>时间列<select id="timeColumn"></select></label>
         <label>目标列<select id="targetColumn"></select></label>
@@ -1444,6 +1457,9 @@ INDEX_HTML = r"""<!doctype html>
         </label>
         <label>去趋势窗口点数<input id="detrendWindow" type="number" min="3" max="100000" value="24"></label>
       </div>
+      </div>
+      <div class="control-group">
+        <div class="control-group-title">工况与残差控制</div>
       <div class="row">
         <label>负荷代表列<select id="segmentColumn"></select></label>
         <label>工况分段
@@ -1466,6 +1482,9 @@ INDEX_HTML = r"""<!doctype html>
           <div id="capacityOptions" class="multi-options"></div>
         </details>
       </label>
+      </div>
+      <div class="control-group">
+        <div class="control-group-title">复核参数</div>
       <label>强制复核变量（多选）
         <details id="forceIncludeDropdown" class="multi-dropdown">
           <summary id="forceIncludeSummary">请选择强制复核变量</summary>
@@ -1476,30 +1495,31 @@ INDEX_HTML = r"""<!doctype html>
         <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
         <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
       </div>
-      <div id="status" class="status"></div>
+      </div>
+      <div id="status" class="status info" role="status" aria-live="polite"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
 
     <section class="results">
-      <div class="tabs">
-        <button class="tab-button active" data-tab="overviewTab">初步分析</button>
-        <button class="tab-button" data-tab="candidatesTab">候选变量</button>
-        <button class="tab-button" data-tab="trendTab">趋势图</button>
-        <button class="tab-button" data-tab="validationTab">二次验证</button>
-        <button class="tab-button" data-tab="causalReviewTab">三层复核</button>
-        <button class="tab-button" data-tab="llmReportTab">AI 综合解读</button>
-        <button class="tab-button" data-tab="downloadsTab">下载</button>
-        <button class="tab-button" data-tab="termsHelpTab">术语与标签说明</button>
+      <div class="tabs" role="tablist" aria-label="结果分类">
+        <button class="tab-button active" role="tab" aria-selected="true" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="0">初步分析</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="candidatesTab" id="tab-candidatesTab" data-tab="candidatesTab" tabindex="-1">候选变量</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
       </div>
 
-      <div id="overviewTab" class="tab-panel active">
+      <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
         <h2>初步分析</h2>
         <div id="overview" class="overview-grid"></div>
         <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
-      <div id="candidatesTab" class="tab-panel">
+      <div id="candidatesTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-candidatesTab" hidden>
         <h2>候选变量</h2>
         <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
         <h3>结果质量提示</h3>
@@ -1510,7 +1530,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
       </div>
 
-      <div id="trendTab" class="tab-panel">
+      <div id="trendTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-trendTab" hidden>
         <h2>趋势图</h2>
         <div id="trendReviewHint" class="help">点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。</div>
         <div class="chart-controls">
@@ -1541,7 +1561,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="trendLegend" class="legend"></div>
       </div>
 
-      <div id="validationTab" class="tab-panel">
+      <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
         <h2>二次验证</h2>
         <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
         <div class="help">Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</div>
@@ -1570,7 +1590,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示补充候选。</div>
       </div>
 
-      <div id="causalReviewTab" class="tab-panel">
+      <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
         <h2>三层复核</h2>
         <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
         <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</div>
@@ -1611,7 +1631,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
 
-      <div id="llmReportTab" class="tab-panel">
+      <div id="llmReportTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-llmReportTab" hidden>
         <h2>AI 综合解读</h2>
         <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
         <div class="llm-config-grid">
@@ -1644,12 +1664,12 @@ INDEX_HTML = r"""<!doctype html>
         <div id="llmReportRendered" class="markdown-report empty">生成后将在这里按 Markdown 格式显示 LLM 报告。</div>
       </div>
 
-      <div id="downloadsTab" class="tab-panel">
+      <div id="downloadsTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-downloadsTab" hidden>
         <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
       </div>
 
-      <div id="termsHelpTab" class="tab-panel">
+      <div id="termsHelpTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-termsHelpTab" hidden>
         <h2>术语与标签说明</h2>
         <div class="help">
           <div>本页用于解释分析结果中的标签、风险、证据等级和模型指标，帮助工程人员理解页面显示名称对应的复核含义。</div>
@@ -1689,6 +1709,7 @@ let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
 let llmPromptText = "";
 let llmReportMarkdown = "";
+let lastModalTrigger = null;
 let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
@@ -1696,6 +1717,7 @@ const llmPromptEndpoint = "/api/llm_prompt";
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
+  button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
 el("drawTrend").addEventListener("click", drawTrend);
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
@@ -1781,7 +1803,7 @@ async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
   try {
-    setStatus("正在上传文件...");
+    setStatus("正在上传文件...", "loading");
     const form = new FormData();
     form.append("file", file);
     const data = await postForm("/api/upload", form);
@@ -1789,7 +1811,7 @@ async function uploadFile() {
     setStatus(`已上传：${data.filename}\n正在识别列...`);
     await loadColumns();
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(error.message || String(error), "error");
   }
 }
 
@@ -1825,16 +1847,16 @@ async function loadColumns() {
     }
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
-    setStatus(`列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`);
+    setStatus(`列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
   } catch (error) {
     el("analyze").disabled = true;
-    setStatus(error.message || String(error));
+    setStatus(error.message || String(error), "error");
   }
 }
 
 async function analyze() {
   if (!fileId) return setStatus("请先上传文件。");
-  setStatus("Python 后台正在分析，数据较大时请等待...");
+  setStatus("Python 后台正在分析，数据较大时请等待...", "loading");
   el("analyze").disabled = true;
   try {
     const form = new FormData();
@@ -1860,9 +1882,9 @@ async function analyze() {
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
     renderAnalysisResult(result);
-    setStatus(`分析完成。运行 ID：${result.run_id}`);
+    setStatus(`分析完成。运行 ID：${result.run_id}`, "success");
   } catch (error) {
-    setStatus(error.message || String(error));
+    setStatus(error.message || String(error), "error");
   } finally {
     el("analyze").disabled = !fileId;
   }
@@ -1945,9 +1967,9 @@ function formatRunningElapsed(message, startedAt) {
 }
 
 function startStatusTimer(message, startedAt) {
-  setStatus(formatRunningElapsed(message, startedAt));
+  setStatus(formatRunningElapsed(message, startedAt), "loading");
   return setInterval(() => {
-    setStatus(formatRunningElapsed(message, startedAt));
+    setStatus(formatRunningElapsed(message, startedAt), "loading");
   }, 100);
 }
 
@@ -1975,9 +1997,9 @@ async function runEnhancedScreening() {
     renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
     renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
     renderDownloads(data.downloads || []);
-    setStatus(appendElapsed(data.message || "增强筛选完成。结果不代表因果结论。", startedAt));
+    setStatus(appendElapsed(data.message || "增强筛选完成。结果不代表因果结论。", startedAt), "success");
   } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runEnhancedScreening").disabled = !currentRunId;
@@ -1996,9 +2018,9 @@ async function runGranger() {
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
     renderDownloads(data.downloads || []);
-    setStatus(appendElapsed("Granger 二级验证完成。", startedAt));
+    setStatus(appendElapsed("Granger 二级验证完成。", startedAt), "success");
   } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runGranger").disabled = !currentRunId;
@@ -2023,9 +2045,9 @@ async function runModel() {
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
-    setStatus(appendElapsed(`随机森林模型解释完成。${metrics}`, startedAt));
+    setStatus(appendElapsed(`随机森林模型解释完成。${metrics}`, startedAt), "success");
   } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runModel").disabled = !currentRunId;
@@ -2063,9 +2085,9 @@ async function runCausalReview() {
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
-    setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt));
+    setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt), "success");
   } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
@@ -2092,7 +2114,7 @@ async function testLlmConnection() {
     form.append("max_tokens", "16");
     const data = await postForm("/api/llm_connection", form);
     el("llmConnectionStatus").textContent = data.message || (data.ok ? "API 连接成功" : "API 连接失败");
-    setStatus(appendElapsed(data.message || "API 连接测试完成。", startedAt));
+    setStatus(appendElapsed(data.message || "API 连接测试完成。", startedAt), "success");
   } catch (error) {
     const message = error.message || String(error);
     el("llmConnectionStatus").textContent = message;
@@ -2125,9 +2147,9 @@ async function generateLlmReport() {
     setLlmReport(data.report || "");
     renderDownloadTarget("llmReportDownload", data.downloads || [], "llm_report.md");
     renderDownloads(data.downloads || []);
-    setStatus(appendElapsed(data.message || "LLM 报告已生成。", startedAt));
+    setStatus(appendElapsed(data.message || "LLM 报告已生成。", startedAt), "success");
   } catch (error) {
-    setStatus(appendElapsed(error.message || String(error), startedAt));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("generateLlmReport").disabled = false;
@@ -2325,7 +2347,7 @@ function renderTermsHelpTab() {
   if (!container) return;
   const columns = ["分类", "页面显示名称", "具体表征", "工程解读", "建议动作"];
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr>${columns.map((col) => `<th>${escapeHtml(col)}</th>`).join("")}</tr></thead><tbody>${renderTermsHelpGroupedRows(termsHelpRows)}</tbody>`;
+  table.innerHTML = `<thead><tr>${columns.map((col) => `<th scope="col">${escapeHtml(col)}</th>`).join("")}</tr></thead><tbody>${renderTermsHelpGroupedRows(termsHelpRows)}</tbody>`;
   const wrap = document.createElement("div");
   wrap.className = "terms-help-table-wrap";
   wrap.appendChild(table);
@@ -2337,11 +2359,28 @@ renderTermsHelpTab();
 
 function activateTab(tabId) {
   for (const button of document.querySelectorAll(".tab-button")) {
-    button.classList.toggle("active", button.dataset.tab === tabId);
+    const isActive = button.dataset.tab === tabId;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+    button.tabIndex = isActive ? 0 : -1;
   }
   for (const panel of document.querySelectorAll(".tab-panel")) {
-    panel.classList.toggle("active", panel.id === tabId);
+    const isActive = panel.id === tabId;
+    panel.classList.toggle("active", isActive);
+    panel.hidden = !isActive;
   }
+}
+
+function handleTabKeydown(event, button) {
+  const buttons = Array.from(document.querySelectorAll(".tab-button"));
+  const currentIndex = buttons.indexOf(button);
+  if (!["ArrowLeft", "ArrowRight", "Enter", " "].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === "Enter" || event.key === " ") return activateTab(button.dataset.tab);
+  const offset = event.key === "ArrowRight" ? 1 : -1;
+  const nextButton = buttons[(currentIndex + offset + buttons.length) % buttons.length];
+  nextButton.focus();
+  activateTab(nextButton.dataset.tab);
 }
 
 async function postForm(url, form) {
@@ -2387,12 +2426,12 @@ async function drawTrend() {
       trend_end: el("trendEnd").value,
       trend_max_points: el("trendMaxPoints").value,
     });
-    setStatus("正在生成趋势图...");
+    setStatus("正在生成趋势图...", "loading");
     const response = await fetch(`/api/trend?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "趋势图生成失败");
     renderTrendChart(data.series || [], el("trendAxisMode").value);
-    setStatus(`趋势图已生成，原始 ${data.raw_rows} 点，显示 ${data.rows} 点，最大点数 ${data.max_points}。`);
+    setStatus(`趋势图已生成，原始 ${data.raw_rows} 点，显示 ${data.rows} 点，最大点数 ${data.max_points}。`, "success");
   } catch (error) {
     el("trendChart").className = "chart empty";
     el("trendChart").textContent = error.message || String(error);
@@ -2583,7 +2622,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   const table = document.createElement("table");
   table.className = "compact-result-table";
   table.setAttribute("aria-label", "核心列");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th>${escapeHtml(columnLabel("detail_action"))}</th></tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th scope="col">${escapeHtml(columnLabel("detail_action"))}</th></tr></thead>`;
   const body = document.createElement("tbody");
   displayRows.forEach((row, index) => {
     const tr = document.createElement("tr");
@@ -2603,11 +2642,11 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
     button.textContent = "查看详情";
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle);
+      selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle, event.currentTarget);
     });
     detailCell.appendChild(button);
     tr.appendChild(detailCell);
-    tr.addEventListener("click", () => selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle));
+    tr.addEventListener("click", (event) => selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle, event.currentTarget));
     body.appendChild(tr);
   });
   table.appendChild(body);
@@ -2619,10 +2658,10 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   container.replaceChildren(wrap);
 }
 
-function selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle) {
+function selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle, trigger = null) {
   table.querySelectorAll("tbody tr").forEach((item) => item.classList.remove("selected"));
   if (tr) tr.classList.add("selected");
-  openDetailModal(row, { detailColumns, valueGetter, title: modalTitle });
+  openDetailModal(row, { detailColumns, valueGetter, title: modalTitle, trigger });
 }
 
 function buildDetailModalBody(row, options = {}) {
@@ -2971,6 +3010,7 @@ function renderRawFields(row) {
 }
 
 function openDetailModal(row, options = {}) {
+  lastModalTrigger = options.trigger || document.activeElement;
   const modal = el("detailModal");
   const title = typeof options.title === "function" ? options.title(row) : options.title;
   el("detailModalTitle").textContent = title || `变量详情：${displayCellValue("variable", row.variable)}`;
@@ -2985,6 +3025,10 @@ function closeDetailModal() {
   if (!modal) return;
   modal.classList.remove("open");
   modal.hidden = true;
+  if (lastModalTrigger && typeof lastModalTrigger.focus === "function") {
+    lastModalTrigger.focus();
+  }
+  lastModalTrigger = null;
 }
 
 function rowForVariable(rows, variable) {
@@ -3314,18 +3358,26 @@ function ensureTableSortState(targetId, defaultColumn = null) {
 
 function sortableHeaderHtml(targetId, column) {
   if (targetId === "finalReviewSummaryTable" && column === "trend_action") {
-    return `<th>${escapeHtml(columnLabel(column))}</th>`;
+    return `<th scope="col">${escapeHtml(columnLabel(column))}</th>`;
   }
   const state = tableSortStates[targetId] || {};
-  const mark = state.column === column ? (state.direction === "asc" ? "↑" : "↓") : "";
-  return `<th class="sortable" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
+  const isSorted = state.column === column;
+  const mark = isSorted ? (state.direction === "asc" ? "↑" : "↓") : "";
+  const ariaSort = isSorted ? (state.direction === "asc" ? "ascending" : "descending") : "none";
+  return `<th scope="col" class="sortable" tabindex="0" aria-sort="${ariaSort}" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
 }
 
 function attachSortableHeaders(table, targetId, rerender) {
   for (const header of table.querySelectorAll("th.sortable")) {
-    header.addEventListener("click", () => {
+    const sort = () => {
       updateTableSortState(targetId, header.dataset.column);
       rerender();
+    };
+    header.addEventListener("click", sort);
+    header.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      sort();
     });
   }
 }
@@ -3663,7 +3715,11 @@ function escapeHtml(value) {
   }[char]));
 }
 
-function setStatus(message) { el("status").textContent = message; }
+function setStatus(message, type = "info") {
+  const node = el("status");
+  node.className = `status ${type}`;
+  node.textContent = message;
+}
 
 function resetOptionalTable(targetId, text) {
   const node = el(targetId);

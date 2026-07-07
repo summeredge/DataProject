@@ -1,6 +1,16 @@
 from chem_ts_corr.web import INDEX_HTML
 
 
+def test_trend_stats_grid_is_fixed_four_columns_on_desktop():
+    css_prefix = INDEX_HTML.split(".trend-stats.empty", 1)[0]
+    trend_stats_rule = css_prefix.rsplit(".trend-stats {", 1)[-1].split("}", 1)[0]
+
+    assert "display:grid" in trend_stats_rule
+    assert "grid-template-columns:repeat(4, minmax(0, 1fr))" in trend_stats_rule
+    assert "auto-fit" not in trend_stats_rule
+    assert "auto-fill" not in trend_stats_rule
+
+
 def test_trend_stats_and_axis_helpers_are_present():
     required = [
         'trendStats',

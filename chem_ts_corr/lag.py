@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.common import benjamini_hochberg
+
 
 def _safe_corr_stats(x: pd.Series, y: pd.Series, method: str) -> dict[str, float | int]:
     aligned = pd.concat([x, y], axis=1).dropna()
@@ -64,8 +66,8 @@ def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.Dat
 
     result = pd.DataFrame(rows)
     if not result.empty:
-        result["pearson_q"] = _benjamini_hochberg(result["pearson_p"])
-        result["spearman_q"] = _benjamini_hochberg(result["spearman_p"])
+        result["pearson_q"] = benjamini_hochberg(result["pearson_p"])
+        result["spearman_q"] = benjamini_hochberg(result["spearman_p"])
         use_pearson = result["abs_pearson"] >= result["abs_spearman"]
         result["p_value"] = np.where(use_pearson, result["pearson_p"], result["spearman_p"])
         result["corr_q_value"] = np.where(use_pearson, result["pearson_q"], result["spearman_q"])
@@ -116,20 +118,3 @@ def describe_lag_direction(lag: int) -> str:
     if lag < 0:
         return "变量滞后目标"
     return "同步变化"
-
-
-def _benjamini_hochberg(values: pd.Series) -> pd.Series:
-    pvals = pd.to_numeric(values, errors="coerce")
-    qvals = pd.Series(np.nan, index=values.index, dtype=float)
-    valid = pvals.dropna().sort_values()
-    m = len(valid)
-    if m == 0:
-        return qvals
-    ranked_items = list(valid.items())
-    running = 1.0
-    for rank in range(m, 0, -1):
-        original_idx, original_p = ranked_items[rank - 1]
-        value = min(running, float(original_p) * m / rank)
-        running = value
-        qvals.loc[original_idx] = value
-    return qvals

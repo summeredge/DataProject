@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from chem_ts_corr.common import benjamini_hochberg
+
 
 def run_granger_tests(
     frame: pd.DataFrame,
@@ -51,7 +53,7 @@ def run_granger_tests(
 
     frame = pd.DataFrame(rows)
     if "min_p_value" in frame.columns:
-        frame["fdr_q_value"] = _benjamini_hochberg(frame["min_p_value"])
+        frame["fdr_q_value"] = benjamini_hochberg(frame["min_p_value"])
         frame = frame.sort_values("fdr_q_value", na_position="last")
     return frame
 
@@ -73,22 +75,3 @@ def _linear_rmse(x: pd.DataFrame, y: object) -> float:
     coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
     pred = matrix @ coef
     return float(np.sqrt(np.mean((y - pred) ** 2)))
-
-
-def _benjamini_hochberg(values: pd.Series) -> pd.Series:
-    import numpy as np
-
-    pvals = pd.to_numeric(values, errors="coerce")
-    qvals = pd.Series(np.nan, index=values.index, dtype=float)
-    valid = pvals.dropna().sort_values()
-    m = len(valid)
-    if m == 0:
-        return qvals
-    running = 1.0
-    ranked_items = list(valid.items())
-    for rank in range(m, 0, -1):
-        original_idx, original_p = ranked_items[rank - 1]
-        value = min(running, float(original_p) * m / rank)
-        running = value
-        qvals.loc[original_idx] = value
-    return qvals

@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from chem_ts_corr.common import to_int
+
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.near_miss import build_near_miss_candidates
@@ -84,10 +86,8 @@ def write_outputs(
 
 def _metric_int(metrics: dict[str, float | str], key: str) -> int | None:
     value = metrics.get(key)
-    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return None
-    return int(numeric)
+    numeric = to_int(value, default=-1)
+    return None if numeric == -1 and value not in {-1, "-1"} else numeric
 
 
 def build_markdown_summary(

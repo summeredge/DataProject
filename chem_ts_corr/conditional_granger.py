@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.common import benjamini_hochberg
+
 
 OUT_COLS = [
     "variable",
@@ -230,7 +232,7 @@ def run_conditional_granger_tests(
 
     out = pd.DataFrame(rows, columns=OUT_COLS)
     if not out.empty:
-        out["fdr_q_value"] = _benjamini_hochberg(out["min_p_value"])
+        out["fdr_q_value"] = benjamini_hochberg(out["min_p_value"])
     return out
 
 
@@ -369,20 +371,3 @@ def _condition_number(matrix: np.ndarray) -> float:
         return float(np.linalg.cond(matrix))
     except Exception:
         return float("inf")
-
-
-def _benjamini_hochberg(values: pd.Series) -> pd.Series:
-    pvals = pd.to_numeric(values, errors="coerce")
-    qvals = pd.Series(np.nan, index=values.index, dtype=float)
-    valid = pvals.dropna().sort_values()
-    m = len(valid)
-    if m == 0:
-        return qvals
-    ranked_items = list(valid.items())
-    running = 1.0
-    for rank in range(m, 0, -1):
-        idx, p = ranked_items[rank - 1]
-        value = min(running, float(p) * m / rank)
-        running = value
-        qvals.loc[idx] = value
-    return qvals

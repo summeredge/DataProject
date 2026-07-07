@@ -2447,9 +2447,14 @@ async function drawTrend() {
     const response = await fetch(`/api/trend?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "趋势图生成失败");
-    renderTrendChart(data.series || [], el("trendAxisMode").value);
+    const series = data.series || [];
+    lastTrendSeries = series;
+    lastTrendAxisMode = el("trendAxisMode").value;
+    renderTrendChart(series, lastTrendAxisMode);
     setStatus(`趋势图已生成，原始 ${data.raw_rows} 点，显示 ${data.rows} 点，最大点数 ${data.max_points}。`, "success");
   } catch (error) {
+    lastTrendSeries = [];
+    lastTrendAxisMode = "shared";
     el("trendChart").className = "chart empty";
     el("trendChart").textContent = error.message || String(error);
     el("trendLegend").innerHTML = "";
@@ -2461,13 +2466,14 @@ async function drawTrend() {
 function renderTrendChart(series, axisMode) {
   const container = el("trendChart");
   if (!series.length) {
+    lastTrendSeries = [];
     container.className = "chart empty";
     container.textContent = "没有可绘制的趋势数据。";
     el("trendLegend").innerHTML = "";
     clearTrendStats();
     return;
   }
-  const width = 960, height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
+  const width = trendChartWidth(container), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
   const maxLen = Math.max(...series.map((item) => item.points.length));
   const allValues = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value)));
   const sharedRange = valueRange(allValues);
@@ -2510,6 +2516,11 @@ function renderTrendChart(series, axisMode) {
     `<span><i class="swatch" style="background:${trendColors[idx % trendColors.length]}"></i>${escapeHtml(item.name)}</span>`
   ).join("");
   renderTrendStats(series);
+}
+
+function trendChartWidth(container) {
+  const measured = Math.floor(container.getBoundingClientRect().width || container.clientWidth || 0);
+  return Math.max(320, measured || 960);
 }
 
 function valueRange(values) {
@@ -2558,19 +2569,25 @@ function renderTrendStats(series) {
     ["最小值", "min"],
     ["极差", "range"],
     ["中位数", "median"],
-    ["有效点数", "count"],
+    ["有效点数/占比", "countRatio"],
   ];
   node.className = "trend-stats";
   node.innerHTML = series.map((item) => {
     const stats = trendStats(item.points || []);
-    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "count" ? stats[key] : formatAxisValue(stats[key])}</dd></div>`).join("");
+    const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "countRatio" ? formatCountRatio(stats.count, stats.ratio) : formatAxisValue(stats[key])}</dd></div>`).join("");
     return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl></div>`;
   }).join("");
 }
 
+function formatCountRatio(count, ratio) {
+  const pct = Number.isFinite(ratio) ? `${(ratio * 100).toFixed(1)}%` : "0.0%";
+  return `${count} / ${pct}`;
+}
+
 function trendStats(points) {
+  const total = (points || []).length;
   const values = (points || []).map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
-  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0 };
+  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, ratio: 0 };
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -2582,6 +2599,7 @@ function trendStats(points) {
     range: max - min,
     median: median(values),
     count: values.length,
+    ratio: total ? values.length / total : 0,
   };
 }
 

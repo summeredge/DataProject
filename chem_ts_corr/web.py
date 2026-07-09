@@ -529,15 +529,15 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
-    lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)
-    best_lags = {} if lag_scale_changed else _best_lags_from_ranked(ranked)
+    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
+    best_lags = {} if lag_search_changed else _best_lags_from_ranked(ranked)
     best_lags = _secondary_best_lags_for_missing_variables(
         scaled,
         secondary_config.target,
         variables,
         best_lags,
         secondary_config.max_lag,
-        recompute_limit=None if lag_scale_changed else 20,
+        recompute_limit=None if lag_search_changed else 20,
     )
     lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
     rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
@@ -668,8 +668,8 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)
-    if lag_scale_changed:
+    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
+    if lag_search_changed:
         best_lags = {}
     else:
         best_lags = _best_lags_from_ranked(ranked)
@@ -680,7 +680,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         variables,
         best_lags,
         secondary_config.max_lag,
-        recompute_limit=None if lag_scale_changed else 20,
+        recompute_limit=None if lag_search_changed else 20,
     )
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -907,12 +907,14 @@ def _normalized_resample_rule(rule: str | None) -> str:
     return "" if rule is None else str(rule).strip().lower()
 
 
-def _secondary_lag_scale_changed(
+def _secondary_lag_search_changed(
     base_config: AnalysisConfig,
     secondary_config: AnalysisConfig,
 ) -> bool:
-    return _normalized_resample_rule(base_config.resample_rule) != _normalized_resample_rule(
-        secondary_config.resample_rule
+    return (
+        _normalized_resample_rule(base_config.resample_rule)
+        != _normalized_resample_rule(secondary_config.resample_rule)
+        or int(base_config.max_lag) != int(secondary_config.max_lag)
     )
 
 

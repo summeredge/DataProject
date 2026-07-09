@@ -8,7 +8,7 @@ from chem_ts_corr.web import (
     _enhanced_validation_summary,
     _secondary_best_lags_for_missing_variables,
     _secondary_config_from_form,
-    _secondary_lag_scale_changed,
+    _secondary_lag_search_changed,
     _secondary_variables_from_ranked,
 )
 
@@ -58,13 +58,14 @@ def test_secondary_variables_include_config_forced_when_no_force_column():
     assert variables == ["A", "C", "D"]
 
 
-def test_secondary_lag_scale_changed_normalizes_resample_rule():
+def test_secondary_lag_search_changed_normalizes_resample_rule():
     base = AnalysisConfig(
         input_path=Path("dummy.csv"),
         time_column="time",
         target="Y",
         output_dir=Path("out"),
         resample_rule="5min",
+        max_lag=72,
     )
     same = AnalysisConfig(
         input_path=Path("dummy.csv"),
@@ -72,6 +73,7 @@ def test_secondary_lag_scale_changed_normalizes_resample_rule():
         target="Y",
         output_dir=Path("out"),
         resample_rule=" 5MIN ",
+        max_lag=72,
     )
     raw = AnalysisConfig(
         input_path=Path("dummy.csv"),
@@ -79,10 +81,32 @@ def test_secondary_lag_scale_changed_normalizes_resample_rule():
         target="Y",
         output_dir=Path("out"),
         resample_rule=None,
+        max_lag=72,
     )
 
-    assert not _secondary_lag_scale_changed(base, same)
-    assert _secondary_lag_scale_changed(base, raw)
+    assert not _secondary_lag_search_changed(base, same)
+    assert _secondary_lag_search_changed(base, raw)
+
+
+def test_secondary_lag_search_changed_when_max_lag_changes():
+    base = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule=None,
+        max_lag=72,
+    )
+    secondary = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule=None,
+        max_lag=360,
+    )
+
+    assert _secondary_lag_search_changed(base, secondary)
 
 
 def test_secondary_config_defaults_to_raw_resample_and_custom_max_lag():
@@ -395,9 +419,9 @@ def test_enhanced_screening_recomputes_best_lags_when_secondary_resample_changes
     function_end = web_source.index("\ndef ", function_start + 1)
     function_body = web_source[function_start:function_end]
 
-    assert "lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)" in function_body
-    assert "best_lags = {} if lag_scale_changed else _best_lags_from_ranked(ranked)" in function_body
-    assert "recompute_limit=None if lag_scale_changed else 20" in function_body
+    assert "lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)" in function_body
+    assert "best_lags = {} if lag_search_changed else _best_lags_from_ranked(ranked)" in function_body
+    assert "recompute_limit=None if lag_search_changed else 20" in function_body
 
 
 def test_model_response_recomputes_best_lags_when_secondary_resample_changes():
@@ -406,13 +430,19 @@ def test_model_response_recomputes_best_lags_when_secondary_resample_changes():
     function_end = web_source.index("\ndef ", function_start + 1)
     function_body = web_source[function_start:function_end]
 
-    assert "lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)" in function_body
-    assert "if lag_scale_changed:" in function_body
+    assert "lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)" in function_body
+    assert "if lag_search_changed:" in function_body
     assert "best_lags = {}" in function_body
     assert "else:" in function_body
     assert "best_lags = _best_lags_from_ranked(ranked)" in function_body
     assert "best_lags = _merge_near_miss_lags(best_lags, near_miss)" in function_body
-    assert "recompute_limit=None if lag_scale_changed else 20" in function_body
+    assert "recompute_limit=None if lag_search_changed else 20" in function_body
+
+
+def test_web_source_does_not_keep_old_lag_scale_changed_helper():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+
+    assert "_secondary_lag_scale_changed" not in web_source
 
 
 def test_secondary_max_lag_does_not_fallback_to_primary_max_lag_in_frontend():

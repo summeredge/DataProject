@@ -96,11 +96,12 @@ def _fast_granger_ssr_ftests(
         try:
             y, y_lags, x_lags = _lagged_design(clean_pair, target, variable, lag)
             nobs = len(y)
-            df_num = lag
+            restricted_rank = _ols_design_rank(y_lags)
             unrestricted_x = np.column_stack([y_lags, x_lags])
             unrestricted_rank = _ols_design_rank(unrestricted_x)
+            df_num = unrestricted_rank - restricted_rank
             df_den = nobs - unrestricted_rank
-            if df_den <= 0:
+            if df_num <= 0 or df_den <= 0:
                 continue
 
             ssr_r = _ols_ssr(y_lags, y)
@@ -158,7 +159,7 @@ def _add_intercept(x: np.ndarray) -> np.ndarray:
 def _is_near_perfect_fit(ssr: float, y: np.ndarray) -> bool:
     centered = y - np.mean(y)
     target_variation = float(np.dot(centered, centered))
-    scale = max(target_variation, float(np.dot(y, y)), 1.0)
+    scale = max(target_variation, 1.0)
     return ssr <= np.finfo(float).eps * scale
 
 

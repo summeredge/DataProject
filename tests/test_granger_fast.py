@@ -117,7 +117,7 @@ def test_run_granger_tests_output_schema_is_stable():
     assert expected.issubset(set(result.columns))
 
 
-def test_fast_granger_uses_unrestricted_model_rank_for_df_den():
+def test_fast_granger_skips_lag_with_no_effective_restrictions():
     import numpy as np
     import pandas as pd
 
@@ -130,38 +130,7 @@ def test_fast_granger_uses_unrestricted_model_rank_for_df_den():
 
     result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=1)
 
-    assert 1 in result
-    fast_f, fast_p = result[1]
-
-    design = pd.DataFrame(
-        {
-            "target": pair["Y"],
-            "target_lag_1": pair["Y"].shift(1),
-            "variable_lag_1": pair["X"].shift(1),
-        }
-    ).dropna()
-    target_values = design["target"].to_numpy()
-    restricted_x = design[["target_lag_1"]].to_numpy()
-    unrestricted_x = design[["target_lag_1", "variable_lag_1"]].to_numpy()
-
-    restricted_matrix = np.column_stack([np.ones(len(restricted_x)), restricted_x])
-    unrestricted_matrix = np.column_stack([np.ones(len(unrestricted_x)), unrestricted_x])
-    restricted_coef, *_ = np.linalg.lstsq(restricted_matrix, target_values, rcond=None)
-    unrestricted_coef, *_ = np.linalg.lstsq(unrestricted_matrix, target_values, rcond=None)
-    restricted_residual = target_values - restricted_matrix @ restricted_coef
-    ssr_r = float(np.dot(restricted_residual, restricted_residual))
-    ssr_u = float(
-        np.dot(
-            target_values - unrestricted_matrix @ unrestricted_coef,
-            target_values - unrestricted_matrix @ unrestricted_coef,
-        )
-    )
-    df_den = len(target_values) - np.linalg.matrix_rank(unrestricted_matrix)
-    expected_f = max(0.0, ssr_r - ssr_u) / (ssr_u / df_den)
-
-    assert df_den == len(target_values) - 2
-    assert fast_f == pytest.approx(expected_f)
-    assert 0.0 <= fast_p <= 1.0
+    assert result == {}
 
 
 def test_fast_granger_rejects_near_perfect_unrestricted_fit():
@@ -179,3 +148,76 @@ def test_fast_granger_rejects_near_perfect_unrestricted_fit():
     result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=1)
 
     assert result == {}
+
+
+def test_fast_granger_uses_effective_restrictions_for_rank_deficient_lags():
+    import numpy as np
+    import pandas as pd
+
+    from chem_ts_corr.causality import _fast_granger_ssr_ftests
+
+    rng = np.random.default_rng(41)
+    n = 90
+    y = rng.normal(size=n)
+    x = np.arange(float(n))
+    pair = pd.DataFrame({"Y": y, "X": x})
+
+    result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=2)
+
+    assert 2 in result
+    fast_f, fast_p = result[2]
+
+    design = pd.DataFrame(
+        {
+            "target": pair["Y"],
+            "target_lag_1": pair["Y"].shift(1),
+            "target_lag_2": pair["Y"].shift(2),
+            "variable_lag_1": pair["X"].shift(1),
+            "variable_lag_2": pair["X"].shift(2),
+        }
+    ).dropna()
+    target_values = design["target"].to_numpy()
+    restricted_x = design[["target_lag_1", "target_lag_2"]].to_numpy()
+    unrestricted_x = design[
+        ["target_lag_1", "target_lag_2", "variable_lag_1", "variable_lag_2"]
+    ].to_numpy()
+    restricted_matrix = np.column_stack([np.ones(len(restricted_x)), restricted_x])
+    unrestricted_matrix = np.column_stack([np.ones(len(unrestricted_x)), unrestricted_x])
+    restricted_rank = np.linalg.matrix_rank(restricted_matrix)
+    unrestricted_rank = np.linalg.matrix_rank(unrestricted_matrix)
+    df_num = unrestricted_rank - restricted_rank
+    df_den = len(target_values) - unrestricted_rank
+
+    restricted_coef, *_ = np.linalg.lstsq(restricted_matrix, target_values, rcond=None)
+    unrestricted_coef, *_ = np.linalg.lstsq(unrestricted_matrix, target_values, rcond=None)
+    restricted_residual = target_values - restricted_matrix @ restricted_coef
+    unrestricted_residual = target_values - unrestricted_matrix @ unrestricted_coef
+    ssr_r = float(np.dot(restricted_residual, restricted_residual))
+    ssr_u = float(np.dot(unrestricted_residual, unrestricted_residual))
+    expected_f = ((ssr_r - ssr_u) / df_num) / (ssr_u / df_den)
+
+    assert df_num == 1
+    assert fast_f == pytest.approx(expected_f)
+    assert 0.0 <= fast_p <= 1.0
+
+
+def test_near_perfect_guard_uses_centered_target_variation_not_offset_scale():
+    import numpy as np
+    import pandas as pd
+
+    from chem_ts_corr.causality import _fast_granger_ssr_ftests
+
+    rng = np.random.default_rng(51)
+    n = 120
+    x = rng.normal(size=n)
+    y = 1e9 + rng.normal(scale=1.0, size=n)
+    for t in range(1, n):
+        y[t] += 0.8 * x[t - 1]
+    pair = pd.DataFrame({"Y": y, "X": x})
+
+    result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=1)
+
+    assert 1 in result
+    fast_f, fast_p = result[1]
+    assert np.isfinite(fast_f)
+    assert 0.0 <= fast_p <= 1.0

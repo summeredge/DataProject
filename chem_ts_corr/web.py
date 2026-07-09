@@ -529,7 +529,14 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
-    best_lags = _best_lags_for_secondary(ranked, scaled, secondary_config.target, variables, secondary_config.max_lag)
+    best_lags = _best_lags_from_ranked(ranked)
+    best_lags = _secondary_best_lags_for_missing_variables(
+        scaled,
+        secondary_config.target,
+        variables,
+        best_lags,
+        secondary_config.max_lag,
+    )
     lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
     rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
     enhanced = _enhanced_validation_summary(ranked, lift, rolling)
@@ -550,34 +557,60 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
 def _enhanced_validation_summary(
     ranked: pd.DataFrame, model_lift: pd.DataFrame, rolling: pd.DataFrame
 ) -> pd.DataFrame:
-    variable_sources = [
-        frame["variable"].dropna().astype(str).tolist()
-        for frame in (ranked, model_lift, rolling)
-        if not frame.empty and "variable" in frame.columns
-    ]
-    variables = list(dict.fromkeys(variable for source in variable_sources for variable in source))
-    if not variables:
-        return pd.DataFrame()
-    columns = [
+    base_columns = [
         column
         for column in ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"]
         if column in ranked.columns
     ]
+
+    variable_sources: list[str] = []
+    for frame in [ranked, model_lift, rolling]:
+        if not frame.empty and "variable" in frame.columns:
+            variable_sources.extend(frame["variable"].dropna().astype(str).tolist())
+
+    variables = list(dict.fromkeys([v for v in variable_sources if v]))
+    if not variables:
+        return pd.DataFrame()
+
     summary = pd.DataFrame({"variable": variables})
-    if columns:
-        summary = summary.merge(ranked[columns].copy(deep=True), on="variable", how="left")
-    if not model_lift.empty:
-        summary = summary.merge(
-            model_lift[[c for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"] if c in model_lift.columns]],
-            on="variable",
-            how="left",
-        )
-    if not rolling.empty:
-        summary = summary.merge(
-            rolling[[c for c in ["variable", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "valid_window_count"] if c in rolling.columns]],
-            on="variable",
-            how="left",
-        )
+
+    if base_columns and "variable" in base_columns:
+        ranked_meta = ranked[base_columns].copy(deep=True)
+        ranked_meta["variable"] = ranked_meta["variable"].astype(str)
+        ranked_meta = ranked_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(ranked_meta, on="variable", how="left")
+    else:
+        for column in ["final_score", "lag", "direction", "risk_flags", "recommended_use"]:
+            summary[column] = pd.NA
+
+    if not model_lift.empty and "variable" in model_lift.columns:
+        lift_columns = [
+            c
+            for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"]
+            if c in model_lift.columns
+        ]
+        lift_meta = model_lift[lift_columns].copy(deep=True)
+        lift_meta["variable"] = lift_meta["variable"].astype(str)
+        lift_meta = lift_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(lift_meta, on="variable", how="left")
+
+    if not rolling.empty and "variable" in rolling.columns:
+        rolling_columns = [
+            c
+            for c in [
+                "variable",
+                "rolling_stability",
+                "rolling_corr_median",
+                "rolling_sign_consistency",
+                "valid_window_count",
+            ]
+            if c in rolling.columns
+        ]
+        rolling_meta = rolling[rolling_columns].copy(deep=True)
+        rolling_meta["variable"] = rolling_meta["variable"].astype(str)
+        rolling_meta = rolling_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(rolling_meta, on="variable", how="left")
+
     summary["interpretation"] = "enhanced screening only; not a causal conclusion"
     return summary
 
@@ -633,8 +666,15 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    best_lags = _best_lags_for_secondary(ranked, scaled, secondary_config.target, variables, secondary_config.max_lag)
+    best_lags = _best_lags_from_ranked(ranked)
     best_lags = _merge_near_miss_lags(best_lags, near_miss)
+    best_lags = _secondary_best_lags_for_missing_variables(
+        scaled,
+        secondary_config.target,
+        variables,
+        best_lags,
+        secondary_config.max_lag,
+    )
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     importance, metrics = fit_explainable_model(
@@ -840,10 +880,19 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
     else:
         resample_rule = None
 
+    extra_variables = _secondary_extra_variables_from_form(form)
+    force_include_variables = list(
+        dict.fromkeys(
+            [v for v in (config.force_include_variables or []) if v]
+            + [v for v in extra_variables if v]
+        )
+    )
+
     return replace(
         config,
         resample_rule=resample_rule,
         max_lag=secondary_max_lag,
+        force_include_variables=force_include_variables,
     )
 
 
@@ -866,42 +915,37 @@ def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
     }
 
 
-def _best_lags_for_secondary(
-    ranked: pd.DataFrame,
+def _secondary_best_lags_for_missing_variables(
     frame: pd.DataFrame,
     target: str,
     variables: list[str],
+    existing_best_lags: dict[str, int],
     max_lag: int,
 ) -> dict[str, int]:
-    best_lags = _best_lags_from_ranked(ranked)
-    missing = [
-        variable
-        for variable in variables
-        if variable not in best_lags and variable in frame.columns and variable != target
-    ]
-    if not missing:
-        return best_lags
-
     from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
-    for variable in missing:
+    merged = dict(existing_best_lags or {})
+    if target not in frame.columns or max_lag <= 0:
+        return merged
+
+    for variable in variables:
+        if variable in merged or variable == target or variable not in frame.columns:
+            continue
+
         pair = frame[[target, variable]].dropna()
-        if pair.empty:
+        if len(pair) < max(10, max_lag + 5):
             continue
+
+        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        if best.empty or "lag" not in best.columns:
+            continue
+
         try:
-            best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
-        except Exception:
-            continue
-        if best.empty or "variable" not in best.columns or "lag" not in best.columns:
-            continue
-        variable_best = best[best["variable"].astype(str) == variable]
-        if variable_best.empty:
-            continue
-        try:
-            best_lags[variable] = int(variable_best.iloc[0]["lag"])
+            merged[variable] = int(best.iloc[0]["lag"])
         except (TypeError, ValueError):
             continue
-    return best_lags
+
+    return merged
 
 
 def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:

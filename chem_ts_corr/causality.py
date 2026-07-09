@@ -91,21 +91,25 @@ def _fast_granger_ssr_ftests(
         raise KeyError(f"missing required columns: {target}, {variable}")
 
     clean_pair = pair[[target, variable]].dropna()
+    target_values = clean_pair[target].to_numpy(dtype=float)
+    variable_values = clean_pair[variable].to_numpy(dtype=float)
+
     results: dict[int, tuple[float, float]] = {}
     for lag in range(1, maxlag + 1):
         try:
-            y, y_lags, x_lags = _lagged_design(clean_pair, target, variable, lag)
+            y, y_lags, x_lags = _lagged_arrays(target_values, variable_values, lag)
             nobs = len(y)
-            restricted_rank = _ols_design_rank(y_lags)
+            if nobs == 0:
+                continue
+
+            ssr_r, restricted_rank = _ols_ssr_and_rank(y_lags, y)
             unrestricted_x = np.column_stack([y_lags, x_lags])
-            unrestricted_rank = _ols_design_rank(unrestricted_x)
+            ssr_u, unrestricted_rank = _ols_ssr_and_rank(unrestricted_x, y)
             df_num = unrestricted_rank - restricted_rank
             df_den = nobs - unrestricted_rank
             if df_num <= 0 or df_den <= 0:
                 continue
 
-            ssr_r = _ols_ssr(y_lags, y)
-            ssr_u = _ols_ssr(unrestricted_x, y)
             if (
                 not np.isfinite(ssr_r)
                 or not np.isfinite(ssr_u)
@@ -125,31 +129,33 @@ def _fast_granger_ssr_ftests(
     return results
 
 
-def _lagged_design(
-    pair: pd.DataFrame, target: str, variable: str, lag: int
+def _lagged_arrays(
+    target_values: np.ndarray,
+    variable_values: np.ndarray,
+    lag: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    data = pd.DataFrame(index=pair.index)
-    data["target"] = pair[target]
-    for i in range(1, lag + 1):
-        data[f"target_lag_{i}"] = pair[target].shift(i)
-        data[f"variable_lag_{i}"] = pair[variable].shift(i)
-    data = data.dropna()
+    if lag <= 0:
+        raise ValueError("lag must be positive")
+    n = len(target_values)
+    if n <= lag:
+        return (
+            np.empty(0, dtype=float),
+            np.empty((0, lag), dtype=float),
+            np.empty((0, lag), dtype=float),
+        )
 
-    y = data["target"].to_numpy(dtype=float)
-    y_lags = data[[f"target_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
-    x_lags = data[[f"variable_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
+    y = target_values[lag:]
+    y_lags = np.column_stack([target_values[lag - i : n - i] for i in range(1, lag + 1)])
+    x_lags = np.column_stack([variable_values[lag - i : n - i] for i in range(1, lag + 1)])
     return y, y_lags, x_lags
 
 
-def _ols_ssr(x: np.ndarray, y: np.ndarray) -> float:
+def _ols_ssr_and_rank(x: np.ndarray, y: np.ndarray) -> tuple[float, int]:
     matrix = _add_intercept(x)
-    coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
+    coef, _residuals, rank, _singular_values = np.linalg.lstsq(matrix, y, rcond=None)
     residual = y - matrix @ coef
-    return float(np.dot(residual, residual))
-
-
-def _ols_design_rank(x: np.ndarray) -> int:
-    return int(np.linalg.matrix_rank(_add_intercept(x)))
+    ssr = float(np.dot(residual, residual))
+    return ssr, int(rank)
 
 
 def _add_intercept(x: np.ndarray) -> np.ndarray:

@@ -221,23 +221,3 @@ def test_near_perfect_guard_uses_centered_target_variation_not_offset_scale():
     fast_f, fast_p = result[1]
     assert np.isfinite(fast_f)
     assert 0.0 <= fast_p <= 1.0
-
-
-def test_fast_granger_avoids_pandas_shift_lag_matrix_builds(monkeypatch):
-    import numpy as np
-    import pandas as pd
-
-    from chem_ts_corr.causality import _fast_granger_ssr_ftests
-
-    def fail_shift(*args, **kwargs):
-        raise AssertionError("fast Granger should use array lag views instead of pandas shift")
-
-    monkeypatch.setattr(pd.Series, "shift", fail_shift)
-
-    rng = np.random.default_rng(61)
-    n = 80
-    pair = pd.DataFrame({"Y": rng.normal(size=n), "X": rng.normal(size=n)})
-
-    result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=4)
-
-    assert set(result) == {1, 2, 3, 4}

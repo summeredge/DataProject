@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from numpy.lib.stride_tricks import sliding_window_view
 from scipy.stats import f
 
 from chem_ts_corr.common import benjamini_hochberg
@@ -92,12 +91,10 @@ def _fast_granger_ssr_ftests(
         raise KeyError(f"missing required columns: {target}, {variable}")
 
     clean_pair = pair[[target, variable]].dropna()
-    target_values = clean_pair[target].to_numpy(dtype=float)
-    variable_values = clean_pair[variable].to_numpy(dtype=float)
     results: dict[int, tuple[float, float]] = {}
     for lag in range(1, maxlag + 1):
         try:
-            y, y_lags, x_lags = _lagged_arrays(target_values, variable_values, lag)
+            y, y_lags, x_lags = _lagged_design(clean_pair, target, variable, lag)
             nobs = len(y)
             restricted_rank = _ols_design_rank(y_lags)
             unrestricted_x = np.column_stack([y_lags, x_lags])
@@ -131,25 +128,16 @@ def _fast_granger_ssr_ftests(
 def _lagged_design(
     pair: pd.DataFrame, target: str, variable: str, lag: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    clean_pair = pair[[target, variable]].dropna()
-    return _lagged_arrays(
-        clean_pair[target].to_numpy(dtype=float),
-        clean_pair[variable].to_numpy(dtype=float),
-        lag,
-    )
+    data = pd.DataFrame(index=pair.index)
+    data["target"] = pair[target]
+    for i in range(1, lag + 1):
+        data[f"target_lag_{i}"] = pair[target].shift(i)
+        data[f"variable_lag_{i}"] = pair[variable].shift(i)
+    data = data.dropna()
 
-
-def _lagged_arrays(
-    target_values: np.ndarray, variable_values: np.ndarray, lag: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if lag <= 0 or len(target_values) <= lag or len(variable_values) <= lag:
-        raise ValueError("lag must be positive and smaller than the sample size")
-
-    target_windows = sliding_window_view(target_values, lag + 1)
-    variable_windows = sliding_window_view(variable_values, lag + 1)
-    y = target_windows[:, -1]
-    y_lags = target_windows[:, -2::-1]
-    x_lags = variable_windows[:, -2::-1]
+    y = data["target"].to_numpy(dtype=float)
+    y_lags = data[[f"target_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
+    x_lags = data[[f"variable_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
     return y, y_lags, x_lags
 
 

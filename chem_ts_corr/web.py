@@ -638,7 +638,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         scaled,
         target=secondary_config.target,
         variables=variables,
-        maxlag=secondary_config.max_lag,
+        maxlag=max(1, secondary_config.max_lag),
     )
     granger.to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
     return {
@@ -871,7 +871,7 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
     mode = _field(form, "secondary_resample_mode", "raw").strip().lower()
     custom_rule = _field(form, "secondary_resample_rule", "").strip()
     secondary_max_lag = _int_field(form, "secondary_max_lag", config.max_lag)
-    secondary_max_lag = max(0, secondary_max_lag)
+    secondary_max_lag = min(5000, max(0, secondary_max_lag))
 
     if mode == "inherit":
         resample_rule = config.resample_rule
@@ -928,7 +928,15 @@ def _secondary_best_lags_for_missing_variables(
     if target not in frame.columns or max_lag <= 0:
         return merged
 
-    for variable in variables:
+    missing_lag_variables = [
+        variable
+        for variable in variables
+        if variable not in merged and variable != target and variable in frame.columns
+    ]
+    if len(missing_lag_variables) > 20:
+        return merged
+
+    for variable in missing_lag_variables:
         if variable in merged or variable == target or variable not in frame.columns:
             continue
 
@@ -1397,6 +1405,8 @@ INDEX_HTML = r"""<!doctype html>
     section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
     .controls { display:grid; gap:10px; align-content:start; font-size:80%; }
     .control-group { display:grid; gap:8px; padding:10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
+    .card { display:grid; gap:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface-muted); }
+    .grid { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:10px; align-items:end; }
     .control-group-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
@@ -1562,7 +1572,7 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
-    @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } }
+    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>

@@ -293,3 +293,52 @@ def test_index_html_reset_restores_secondary_validation_defaults():
     assert 'el("secondaryResampleMode").value = "raw"' in reset_body
     assert 'el("secondaryResampleRule").value = ""' in reset_body
     assert 'el("secondaryMaxLag").value = ""' in reset_body
+
+
+def test_secondary_config_caps_secondary_max_lag_to_ui_limit():
+    config = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        max_lag=72,
+    )
+
+    secondary = _secondary_config_from_form(config, {"secondary_max_lag": "50000"})
+
+    assert secondary.max_lag == 5000
+
+
+def test_run_granger_response_clamps_zero_max_lag_for_granger_api():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    function_start = web_source.index("def _run_granger_response")
+    function_end = web_source.index("\ndef ", function_start + 1)
+    function_body = web_source[function_start:function_end]
+
+    assert "maxlag=max(1, secondary_config.max_lag)" in function_body
+
+
+def test_secondary_best_lags_skips_bulk_missing_lag_scan():
+    import numpy as np
+    import pandas as pd
+
+    n = 80
+    data = {"Y": np.arange(n, dtype=float)}
+    data.update({f"X{i}": np.arange(n, dtype=float) for i in range(21)})
+    frame = pd.DataFrame(data)
+
+    result = _secondary_best_lags_for_missing_variables(
+        frame,
+        target="Y",
+        variables=[f"X{i}" for i in range(21)],
+        existing_best_lags={},
+        max_lag=8,
+    )
+
+    assert result == {}
+
+
+def test_index_html_defines_secondary_validation_card_grid_styles():
+    assert ".card {" in INDEX_HTML
+    assert ".grid {" in INDEX_HTML
+    assert "grid-template-columns:repeat(2, minmax(160px, 1fr))" in INDEX_HTML

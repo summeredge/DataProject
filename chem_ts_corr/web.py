@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import re
 import threading
@@ -509,23 +509,29 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查并生成 ranked_features.csv")
 
-    variables = [variable for variable in _secondary_variables_from_ranked(ranked, config) if variable != config.target]
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
-    scaled = _scaled_frame_for_secondary(config)
-    variables = [variable for variable in variables if variable in scaled.columns]
+    scaled = _scaled_frame_for_secondary(secondary_config)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
-        raise ValueError("候选变量在预处理后的数据中不存在，请检查上传数据和配置")
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
     best_lags = _best_lags_from_ranked(ranked)
-    lift = model_lift_scores(scaled, config.target, variables, config.max_lag, best_lags=best_lags)
-    rolling = rolling_corr_scores(scaled, config.target, variables, config.max_lag)
+    lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
+    rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
     enhanced = _enhanced_validation_summary(ranked, lift, rolling)
 
     lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
@@ -572,17 +578,26 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(ranked, config)
-    scaled = _scaled_frame_for_secondary(config)
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
+    scaled = _scaled_frame_for_secondary(secondary_config)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
+    if not variables:
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     granger = run_granger_tests(
         scaled,
-        target=config.target,
+        target=secondary_config.target,
         variables=variables,
-        maxlag=config.resolved_granger_maxlag(),
+        maxlag=secondary_config.max_lag,
     )
     granger.to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
     return {
@@ -595,24 +610,32 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(ranked, config)
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     best_lags = _best_lags_from_ranked(ranked)
     best_lags = _merge_near_miss_lags(best_lags, near_miss)
-    scaled = _scaled_frame_for_secondary(config)
-    variables = [variable for variable in variables if variable in scaled.columns]
+    scaled = _scaled_frame_for_secondary(secondary_config)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
+    if not variables:
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     importance, metrics = fit_explainable_model(
         scaled,
-        target=config.target,
-        max_lag=config.max_lag,
+        target=secondary_config.target,
+        max_lag=secondary_config.max_lag,
         candidate_variables=variables,
-        max_features=config.max_model_features,
-        random_state=config.random_state,
+        max_features=secondary_config.max_model_features,
+        random_state=secondary_config.random_state,
         best_lags=best_lags,
         lag_mode="best_only",
     )
@@ -622,8 +645,8 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         importance,
         ranked,
         risk_flags=risk,
-        screening_top_n=config.top_k,
-        max_lag=config.max_lag,
+        screening_top_n=base_config.top_k,
+        max_lag=secondary_config.max_lag,
     )
     importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
     model_variable_importance.to_csv(output_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig")
@@ -780,15 +803,45 @@ def _filter_candidates_by_risk_flags(
     return candidates[candidates["variable"].astype(str).isin(variables)].copy(deep=True)
 
 
-def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfig) -> list[str]:
+def _secondary_variables_from_ranked(
+    ranked: pd.DataFrame,
+    config: AnalysisConfig,
+    extra_variables: list[str] | None = None,
+) -> list[str]:
     if ranked.empty or "variable" not in ranked.columns:
-        return []
+        return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
     top = ranked.head(config.top_k)["variable"].astype(str).tolist()
     if "force_included" in ranked.columns:
         forced = ranked[ranked["force_included"].astype(bool)]["variable"].astype(str).tolist()
     else:
         forced = [v for v in (config.force_include_variables or []) if v]
-    return list(dict.fromkeys(top + forced))
+    extra = [v for v in (extra_variables or []) if v]
+    return list(dict.fromkeys(top + forced + extra))
+
+
+def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) -> AnalysisConfig:
+    mode = _field(form, "secondary_resample_mode", "raw").strip().lower()
+    custom_rule = _field(form, "secondary_resample_rule", "").strip()
+    secondary_max_lag = _int_field(form, "secondary_max_lag", config.max_lag)
+    secondary_max_lag = max(0, secondary_max_lag)
+
+    if mode == "inherit":
+        resample_rule = config.resample_rule
+    elif mode == "custom":
+        resample_rule = custom_rule or None
+    else:
+        resample_rule = None
+
+    return replace(
+        config,
+        resample_rule=resample_rule,
+        max_lag=secondary_max_lag,
+    )
+
+
+def _secondary_extra_variables_from_form(form: dict[str, Any]) -> list[str]:
+    return _list_field(form, "secondary_include_variables")
+
 
 def _near_miss_variables(near_miss: pd.DataFrame, limit: int = 10) -> list[str]:
     if near_miss.empty or "variable" not in near_miss.columns:
@@ -1574,6 +1627,32 @@ INDEX_HTML = r"""<!doctype html>
         <h2>二次验证</h2>
         <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
         <div class="help">Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</div>
+        <div class="card">
+          <h3>二次验证参数</h3>
+          <div class="help">原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化。</div>
+          <div class="grid">
+            <label>二次验证补充变量（白名单）
+              <details id="secondaryIncludeDropdown" class="multi-dropdown">
+                <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
+                <div id="secondaryIncludeOptions" class="multi-options"></div>
+              </details>
+            </label>
+            <label>二次验证重采样
+              <select id="secondaryResampleMode">
+                <option value="raw" selected>原始数据（不重采样）</option>
+                <option value="inherit">继承主筛查</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label>二次验证自定义重采样规则
+              <input id="secondaryResampleRule" placeholder="例如 2min / 5min，仅自定义时使用">
+            </label>
+            <label>二次验证最大滞后点数
+              <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
+            </label>
+          </div>
+          <div class="help">在主筛查 TopK 和主筛查强制复核变量之外，追加补充变量进入二次验证。如果二次验证改用原始采样，请按原始采样间隔重新填写最大滞后点数。例如 1min 数据验证 360min 滞后，应填 360。</div>
+        </div>
         <div class="actions">
           <button id="runEnhancedScreening" disabled>运行增强筛选</button>
           <button id="runGranger" disabled>运行 Granger 验证</button>
@@ -1815,6 +1894,35 @@ function updateForceIncludeSummary() {
   el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
 }
 
+function fillSecondaryIncludeOptions(columns) {
+  const box = el("secondaryIncludeOptions");
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("change", updateSecondaryIncludeSummary);
+    box.appendChild(row);
+  });
+  updateSecondaryIncludeSummary();
+}
+
+function getSecondaryIncludeSelection() {
+  return Array.from(document.querySelectorAll('#secondaryIncludeOptions input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+function updateSecondaryIncludeSummary() {
+  const selected = getSecondaryIncludeSelection();
+  el("secondaryIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择二次验证补充变量";
+}
+
+function appendSecondaryValidationOptions(form) {
+  form.append("secondary_include_variables", getSecondaryIncludeSelection().join(","));
+  form.append("secondary_resample_mode", el("secondaryResampleMode").value || "raw");
+  form.append("secondary_resample_rule", el("secondaryResampleRule").value.trim());
+  form.append("secondary_max_lag", el("secondaryMaxLag").value || el("maxLag").value);
+}
+
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
@@ -1842,8 +1950,10 @@ async function loadColumns() {
   fillSelect(el("segmentColumn"), data.numericColumns, true);
   fillCapacityOptions(data.numericColumns);
   fillForceIncludeOptions(data.numericColumns);
+  fillSecondaryIncludeOptions(data.numericColumns);
   el("capacityDropdown").open = false;
   el("forceIncludeDropdown").open = false;
+  el("secondaryIncludeDropdown").open = false;
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
@@ -2005,6 +2115,7 @@ async function runEnhancedScreening() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_enhanced_screening", form);
     lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
     lastEnhancedLiftRows = data.modelLiftScores || [];
@@ -2030,6 +2141,7 @@ async function runGranger() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_granger", form);
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
@@ -2052,6 +2164,7 @@ async function runModel() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
     lastModelVariableRows = data.modelVariableImportance || [];
@@ -3900,6 +4013,9 @@ function reset() {
   el("forceIncludeOptions").innerHTML = "";
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
+  el("secondaryIncludeOptions").innerHTML = "";
+  el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
+  el("secondaryIncludeDropdown").open = false;
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

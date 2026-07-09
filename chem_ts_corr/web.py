@@ -529,13 +529,15 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
-    best_lags = _best_lags_from_ranked(ranked)
+    lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)
+    best_lags = {} if lag_scale_changed else _best_lags_from_ranked(ranked)
     best_lags = _secondary_best_lags_for_missing_variables(
         scaled,
         secondary_config.target,
         variables,
         best_lags,
         secondary_config.max_lag,
+        recompute_limit=None if lag_scale_changed else 20,
     )
     lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
     rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
@@ -666,14 +668,19 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    best_lags = _best_lags_from_ranked(ranked)
-    best_lags = _merge_near_miss_lags(best_lags, near_miss)
+    lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)
+    if lag_scale_changed:
+        best_lags = {}
+    else:
+        best_lags = _best_lags_from_ranked(ranked)
+        best_lags = _merge_near_miss_lags(best_lags, near_miss)
     best_lags = _secondary_best_lags_for_missing_variables(
         scaled,
         secondary_config.target,
         variables,
         best_lags,
         secondary_config.max_lag,
+        recompute_limit=None if lag_scale_changed else 20,
     )
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -896,6 +903,19 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
     )
 
 
+def _normalized_resample_rule(rule: str | None) -> str:
+    return "" if rule is None else str(rule).strip().lower()
+
+
+def _secondary_lag_scale_changed(
+    base_config: AnalysisConfig,
+    secondary_config: AnalysisConfig,
+) -> bool:
+    return _normalized_resample_rule(base_config.resample_rule) != _normalized_resample_rule(
+        secondary_config.resample_rule
+    )
+
+
 def _secondary_extra_variables_from_form(form: dict[str, Any]) -> list[str]:
     return _list_field(form, "secondary_include_variables")
 
@@ -921,6 +941,7 @@ def _secondary_best_lags_for_missing_variables(
     variables: list[str],
     existing_best_lags: dict[str, int],
     max_lag: int,
+    recompute_limit: int | None = 20,
 ) -> dict[str, int]:
     from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
@@ -933,13 +954,12 @@ def _secondary_best_lags_for_missing_variables(
         for variable in variables
         if variable not in merged and variable != target and variable in frame.columns
     ]
-    if len(missing_lag_variables) > 20:
-        return merged
+
+    if recompute_limit is not None:
+        limit = max(0, int(recompute_limit))
+        missing_lag_variables = missing_lag_variables[:limit]
 
     for variable in missing_lag_variables:
-        if variable in merged or variable == target or variable not in frame.columns:
-            continue
-
         pair = frame[[target, variable]].dropna()
         if len(pair) < max(10, max_lag + 5):
             continue
@@ -2027,7 +2047,7 @@ function appendSecondaryValidationOptions(form) {
   form.append("secondary_include_variables", getSecondaryIncludeSelection().join(","));
   form.append("secondary_resample_mode", el("secondaryResampleMode").value || "raw");
   form.append("secondary_resample_rule", el("secondaryResampleRule").value.trim());
-  form.append("secondary_max_lag", el("secondaryMaxLag").value || el("maxLag").value);
+  form.append("secondary_max_lag", el("secondaryMaxLag").value);
 }
 
 async function uploadFile() {

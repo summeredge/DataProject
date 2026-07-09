@@ -5,6 +5,7 @@ import pandas as pd
 from chem_ts_corr.web import (
     INDEX_HTML,
     AnalysisConfig,
+    _enhanced_validation_summary,
     _secondary_config_from_form,
     _secondary_variables_from_ranked,
 )
@@ -152,7 +153,7 @@ def test_secondary_validation_buttons_append_options():
 
 
 def test_backend_secondary_endpoints_use_secondary_form_helpers():
-    web_source = Path("chem_ts_corr/web.py").read_text()
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
     for function_name in [
         "_run_enhanced_screening_response",
         "_run_granger_response",
@@ -164,4 +165,43 @@ def test_backend_secondary_endpoints_use_secondary_form_helpers():
         assert "_secondary_config_from_form" in function_body
         assert "_secondary_extra_variables_from_form" in function_body
         assert "secondary_config.max_lag" in function_body
-        assert "_scaled_frame_for_secondary(secondary_config)" in function_body
+        assert "_scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)" in function_body
+
+
+def test_enhanced_validation_summary_includes_secondary_whitelist_variables():
+    ranked = pd.DataFrame(
+        {
+            "variable": ["A"],
+            "final_score": [0.8],
+            "lag": [12],
+        }
+    )
+    model_lift = pd.DataFrame(
+        {
+            "variable": ["A", "WHITELIST_ONLY"],
+            "status": ["ok", "ok"],
+            "model_lift": [0.1, 0.2],
+        }
+    )
+    rolling = pd.DataFrame(
+        {
+            "variable": ["WHITELIST_ONLY"],
+            "rolling_stability": [0.7],
+        }
+    )
+
+    summary = _enhanced_validation_summary(ranked, model_lift, rolling)
+
+    assert summary["variable"].tolist() == ["A", "WHITELIST_ONLY"]
+    whitelist_row = summary[summary["variable"] == "WHITELIST_ONLY"].iloc[0]
+    assert whitelist_row["model_lift"] == 0.2
+    assert whitelist_row["rolling_stability"] == 0.7
+
+
+def test_index_html_reset_restores_secondary_validation_defaults():
+    function_start = INDEX_HTML.index("function reset()")
+    reset_body = INDEX_HTML[function_start:]
+
+    assert 'el("secondaryResampleMode").value = "raw"' in reset_body
+    assert 'el("secondaryResampleRule").value = ""' in reset_body
+    assert 'el("secondaryMaxLag").value = ""' in reset_body

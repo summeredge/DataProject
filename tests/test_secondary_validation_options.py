@@ -8,6 +8,7 @@ from chem_ts_corr.web import (
     _enhanced_validation_summary,
     _secondary_best_lags_for_missing_variables,
     _secondary_config_from_form,
+    _secondary_lag_scale_changed,
     _secondary_variables_from_ranked,
 )
 
@@ -55,6 +56,33 @@ def test_secondary_variables_include_config_forced_when_no_force_column():
     )
 
     assert variables == ["A", "C", "D"]
+
+
+def test_secondary_lag_scale_changed_normalizes_resample_rule():
+    base = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule="5min",
+    )
+    same = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule=" 5MIN ",
+    )
+    raw = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule=None,
+    )
+
+    assert not _secondary_lag_scale_changed(base, same)
+    assert _secondary_lag_scale_changed(base, raw)
 
 
 def test_secondary_config_defaults_to_raw_resample_and_custom_max_lag():
@@ -318,7 +346,7 @@ def test_run_granger_response_clamps_zero_max_lag_for_granger_api():
     assert "maxlag=max(1, secondary_config.max_lag)" in function_body
 
 
-def test_secondary_best_lags_skips_bulk_missing_lag_scan():
+def test_secondary_best_lags_limits_bulk_missing_lag_scan_without_skipping_all():
     import numpy as np
     import pandas as pd
 
@@ -335,7 +363,65 @@ def test_secondary_best_lags_skips_bulk_missing_lag_scan():
         max_lag=8,
     )
 
-    assert result == {}
+    assert result
+    assert len(result) <= 20
+
+
+def test_secondary_best_lags_recomputes_all_when_limit_is_none():
+    import numpy as np
+    import pandas as pd
+
+    n = 80
+    data = {"Y": np.arange(n, dtype=float)}
+    data.update({f"X{i}": np.arange(n, dtype=float) for i in range(21)})
+    frame = pd.DataFrame(data)
+
+    result = _secondary_best_lags_for_missing_variables(
+        frame,
+        target="Y",
+        variables=[f"X{i}" for i in range(21)],
+        existing_best_lags={},
+        max_lag=8,
+        recompute_limit=None,
+    )
+
+    assert len(result) == 21
+    assert all(isinstance(value, int) for value in result.values())
+
+
+def test_enhanced_screening_recomputes_best_lags_when_secondary_resample_changes():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    function_start = web_source.index("def _run_enhanced_screening_response")
+    function_end = web_source.index("\ndef ", function_start + 1)
+    function_body = web_source[function_start:function_end]
+
+    assert "lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)" in function_body
+    assert "best_lags = {} if lag_scale_changed else _best_lags_from_ranked(ranked)" in function_body
+    assert "recompute_limit=None if lag_scale_changed else 20" in function_body
+
+
+def test_model_response_recomputes_best_lags_when_secondary_resample_changes():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    function_start = web_source.index("def _run_model_response")
+    function_end = web_source.index("\ndef ", function_start + 1)
+    function_body = web_source[function_start:function_end]
+
+    assert "lag_scale_changed = _secondary_lag_scale_changed(base_config, secondary_config)" in function_body
+    assert "if lag_scale_changed:" in function_body
+    assert "best_lags = {}" in function_body
+    assert "else:" in function_body
+    assert "best_lags = _best_lags_from_ranked(ranked)" in function_body
+    assert "best_lags = _merge_near_miss_lags(best_lags, near_miss)" in function_body
+    assert "recompute_limit=None if lag_scale_changed else 20" in function_body
+
+
+def test_secondary_max_lag_does_not_fallback_to_primary_max_lag_in_frontend():
+    function_start = INDEX_HTML.index("function appendSecondaryValidationOptions")
+    function_end = INDEX_HTML.index("async function", function_start)
+    function_body = INDEX_HTML[function_start:function_end]
+
+    assert 'form.append("secondary_max_lag", el("secondaryMaxLag").value);' in function_body
+    assert 'secondaryMaxLag").value || el("maxLag").value' not in function_body
 
 
 def test_index_html_defines_secondary_validation_card_grid_styles():

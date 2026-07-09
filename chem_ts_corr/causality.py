@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+from scipy.stats import f
 
 from chem_ts_corr.common import benjamini_hochberg
+
+
+_GRANGER_COLUMNS = [
+    "variable",
+    "status",
+    "best_granger_lag",
+    "min_p_value",
+    "f_statistic",
+    "predictive_contribution",
+    "interpretation",
+    "fdr_q_value",
+]
 
 
 def run_granger_tests(
@@ -11,19 +25,21 @@ def run_granger_tests(
     variables: list[str],
     maxlag: int,
 ) -> pd.DataFrame:
-    try:
-        from statsmodels.tsa.stattools import grangercausalitytests
-    except Exception:
-        return pd.DataFrame(
-            [{"status": "skipped: statsmodels is not installed", "variable": "", "min_p_value": None}]
-        )
-
     rows: list[dict[str, float | int | str | None]] = []
     for variable in variables:
         if variable == target:
             continue
 
-        pair = frame[[target, variable]].dropna()
+        try:
+            pair = frame[[target, variable]].dropna()
+        except Exception as exc:
+            rows.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
+            continue
+
+        if maxlag <= 0:
+            rows.append({"variable": variable, "status": "skipped: no valid lag tests", "min_p_value": None})
+            continue
+
         if len(pair) < max(30, maxlag * 5):
             rows.append(
                 {"variable": variable, "status": "skipped: insufficient rows", "min_p_value": None}
@@ -31,31 +47,97 @@ def run_granger_tests(
             continue
 
         try:
-            result = grangercausalitytests(pair[[target, variable]], maxlag=maxlag, verbose=False)
+            lag_results = _fast_granger_ssr_ftests(pair, target, variable, maxlag)
         except Exception as exc:
             rows.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
             continue
 
-        lag_p_values = {lag: float(test_result[0]["ssr_ftest"][1]) for lag, test_result in result.items()}
-        lag_f_values = {lag: float(test_result[0]["ssr_ftest"][0]) for lag, test_result in result.items()}
-        best_lag = min(lag_p_values, key=lag_p_values.get)
+        if not lag_results:
+            rows.append(
+                {"variable": variable, "status": "skipped: no valid lag tests", "min_p_value": None}
+            )
+            continue
+
+        best_lag = min(lag_results, key=lambda lag: lag_results[lag][1])
+        f_statistic, min_p_value = lag_results[best_lag]
         rows.append(
             {
                 "variable": variable,
                 "status": "ok",
                 "best_granger_lag": best_lag,
-                "min_p_value": lag_p_values[best_lag],
-                "f_statistic": lag_f_values[best_lag],
+                "min_p_value": min_p_value,
+                "f_statistic": f_statistic,
                 "predictive_contribution": _predictive_contribution(pair[target], pair[variable], best_lag),
                 "interpretation": "predictive validation only; not a causal conclusion",
             }
         )
 
-    frame = pd.DataFrame(rows)
-    if "min_p_value" in frame.columns:
-        frame["fdr_q_value"] = benjamini_hochberg(frame["min_p_value"])
-        frame = frame.sort_values("fdr_q_value", na_position="last")
-    return frame
+    result_frame = pd.DataFrame(rows)
+    if "min_p_value" in result_frame.columns:
+        result_frame["fdr_q_value"] = benjamini_hochberg(result_frame["min_p_value"])
+        result_frame = result_frame.sort_values("fdr_q_value", na_position="last")
+    return result_frame.reindex(columns=_GRANGER_COLUMNS)
+
+
+def _fast_granger_ssr_ftests(
+    pair: pd.DataFrame,
+    target: str,
+    variable: str,
+    maxlag: int,
+) -> dict[int, tuple[float, float]]:
+    if maxlag <= 0:
+        return {}
+    if target not in pair.columns or variable not in pair.columns:
+        raise KeyError(f"missing required columns: {target}, {variable}")
+
+    clean_pair = pair[[target, variable]].dropna()
+    results: dict[int, tuple[float, float]] = {}
+    for lag in range(1, maxlag + 1):
+        try:
+            y, y_lags, x_lags = _lagged_design(clean_pair, target, variable, lag)
+            nobs = len(y)
+            df_num = lag
+            df_den = nobs - (1 + 2 * lag)
+            if df_den <= 0:
+                continue
+
+            ssr_r = _ols_ssr(y_lags, y)
+            ssr_u = _ols_ssr(np.column_stack([y_lags, x_lags]), y)
+            if not np.isfinite(ssr_r) or not np.isfinite(ssr_u) or ssr_u <= 0:
+                continue
+
+            ssr_delta = max(0.0, ssr_r - ssr_u)
+            f_statistic = (ssr_delta / df_num) / (ssr_u / df_den)
+            p_value = float(f.sf(f_statistic, df_num, df_den))
+            if not np.isfinite(f_statistic) or not np.isfinite(p_value):
+                continue
+            results[lag] = (float(f_statistic), p_value)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+            continue
+    return results
+
+
+def _lagged_design(
+    pair: pd.DataFrame, target: str, variable: str, lag: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    data = pd.DataFrame(index=pair.index)
+    data["target"] = pair[target]
+    for i in range(1, lag + 1):
+        data[f"target_lag_{i}"] = pair[target].shift(i)
+        data[f"variable_lag_{i}"] = pair[variable].shift(i)
+    data = data.dropna()
+
+    y = data["target"].to_numpy(dtype=float)
+    y_lags = data[[f"target_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
+    x_lags = data[[f"variable_lag_{i}" for i in range(1, lag + 1)]].to_numpy(dtype=float)
+    return y, y_lags, x_lags
+
+
+def _ols_ssr(x: np.ndarray, y: np.ndarray) -> float:
+    matrix = np.column_stack([np.ones(len(x)), x])
+    coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
+    residual = y - matrix @ coef
+    return float(np.dot(residual, residual))
 
 
 def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -> float:
@@ -69,8 +151,6 @@ def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -
 
 
 def _linear_rmse(x: pd.DataFrame, y: object) -> float:
-    import numpy as np
-
     matrix = np.column_stack([np.ones(len(x)), x.to_numpy()])
     coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
     pred = matrix @ coef

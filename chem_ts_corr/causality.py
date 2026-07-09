@@ -97,13 +97,20 @@ def _fast_granger_ssr_ftests(
             y, y_lags, x_lags = _lagged_design(clean_pair, target, variable, lag)
             nobs = len(y)
             df_num = lag
-            df_den = nobs - (1 + 2 * lag)
+            unrestricted_x = np.column_stack([y_lags, x_lags])
+            unrestricted_rank = _ols_design_rank(unrestricted_x)
+            df_den = nobs - unrestricted_rank
             if df_den <= 0:
                 continue
 
             ssr_r = _ols_ssr(y_lags, y)
-            ssr_u = _ols_ssr(np.column_stack([y_lags, x_lags]), y)
-            if not np.isfinite(ssr_r) or not np.isfinite(ssr_u) or ssr_u <= 0:
+            ssr_u = _ols_ssr(unrestricted_x, y)
+            if (
+                not np.isfinite(ssr_r)
+                or not np.isfinite(ssr_u)
+                or ssr_u <= 0
+                or _is_near_perfect_fit(ssr_u, y)
+            ):
                 continue
 
             ssr_delta = max(0.0, ssr_r - ssr_u)
@@ -134,10 +141,25 @@ def _lagged_design(
 
 
 def _ols_ssr(x: np.ndarray, y: np.ndarray) -> float:
-    matrix = np.column_stack([np.ones(len(x)), x])
+    matrix = _add_intercept(x)
     coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
     residual = y - matrix @ coef
     return float(np.dot(residual, residual))
+
+
+def _ols_design_rank(x: np.ndarray) -> int:
+    return int(np.linalg.matrix_rank(_add_intercept(x)))
+
+
+def _add_intercept(x: np.ndarray) -> np.ndarray:
+    return np.column_stack([np.ones(len(x)), x])
+
+
+def _is_near_perfect_fit(ssr: float, y: np.ndarray) -> bool:
+    centered = y - np.mean(y)
+    target_variation = float(np.dot(centered, centered))
+    scale = max(target_variation, float(np.dot(y, y)), 1.0)
+    return ssr <= np.finfo(float).eps * scale
 
 
 def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -> float:
@@ -151,7 +173,7 @@ def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -
 
 
 def _linear_rmse(x: pd.DataFrame, y: object) -> float:
-    matrix = np.column_stack([np.ones(len(x)), x.to_numpy()])
+    matrix = _add_intercept(x.to_numpy())
     coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
     pred = matrix @ coef
     return float(np.sqrt(np.mean((y - pred) ** 2)))

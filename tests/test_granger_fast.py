@@ -115,3 +115,67 @@ def test_run_granger_tests_output_schema_is_stable():
         "fdr_q_value",
     }
     assert expected.issubset(set(result.columns))
+
+
+def test_fast_granger_uses_unrestricted_model_rank_for_df_den():
+    import numpy as np
+    import pandas as pd
+
+    from chem_ts_corr.causality import _fast_granger_ssr_ftests
+
+    rng = np.random.default_rng(31)
+    n = 80
+    y = rng.normal(size=n)
+    pair = pd.DataFrame({"Y": y, "X": y})
+
+    result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=1)
+
+    assert 1 in result
+    fast_f, fast_p = result[1]
+
+    design = pd.DataFrame(
+        {
+            "target": pair["Y"],
+            "target_lag_1": pair["Y"].shift(1),
+            "variable_lag_1": pair["X"].shift(1),
+        }
+    ).dropna()
+    target_values = design["target"].to_numpy()
+    restricted_x = design[["target_lag_1"]].to_numpy()
+    unrestricted_x = design[["target_lag_1", "variable_lag_1"]].to_numpy()
+
+    restricted_matrix = np.column_stack([np.ones(len(restricted_x)), restricted_x])
+    unrestricted_matrix = np.column_stack([np.ones(len(unrestricted_x)), unrestricted_x])
+    restricted_coef, *_ = np.linalg.lstsq(restricted_matrix, target_values, rcond=None)
+    unrestricted_coef, *_ = np.linalg.lstsq(unrestricted_matrix, target_values, rcond=None)
+    restricted_residual = target_values - restricted_matrix @ restricted_coef
+    ssr_r = float(np.dot(restricted_residual, restricted_residual))
+    ssr_u = float(
+        np.dot(
+            target_values - unrestricted_matrix @ unrestricted_coef,
+            target_values - unrestricted_matrix @ unrestricted_coef,
+        )
+    )
+    df_den = len(target_values) - np.linalg.matrix_rank(unrestricted_matrix)
+    expected_f = max(0.0, ssr_r - ssr_u) / (ssr_u / df_den)
+
+    assert df_den == len(target_values) - 2
+    assert fast_f == pytest.approx(expected_f)
+    assert 0.0 <= fast_p <= 1.0
+
+
+def test_fast_granger_rejects_near_perfect_unrestricted_fit():
+    import numpy as np
+    import pandas as pd
+
+    from chem_ts_corr.causality import _fast_granger_ssr_ftests
+
+    n = 60
+    x = np.arange(float(n))
+    y = np.zeros(n)
+    y[1:] = x[:-1]
+    pair = pd.DataFrame({"Y": y, "X": x})
+
+    result = _fast_granger_ssr_ftests(pair, "Y", "X", maxlag=1)
+
+    assert result == {}

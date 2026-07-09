@@ -6,6 +6,7 @@ from chem_ts_corr.web import (
     INDEX_HTML,
     AnalysisConfig,
     _enhanced_validation_summary,
+    _secondary_best_lags_for_missing_variables,
     _secondary_config_from_form,
     _secondary_variables_from_ranked,
 )
@@ -72,6 +73,31 @@ def test_secondary_config_defaults_to_raw_resample_and_custom_max_lag():
     assert secondary.max_lag == 360
     assert config.resample_rule == "5min"
     assert config.max_lag == 72
+
+
+def test_secondary_config_merges_extra_variables_into_force_include():
+    config = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule="5min",
+        max_lag=72,
+        force_include_variables=["A"],
+    )
+
+    secondary = _secondary_config_from_form(
+        config,
+        {
+            "secondary_include_variables": "B,C,A",
+            "secondary_max_lag": "360",
+        },
+    )
+
+    assert secondary.resample_rule is None
+    assert secondary.max_lag == 360
+    assert secondary.force_include_variables == ["A", "B", "C"]
+    assert config.force_include_variables == ["A"]
 
 
 def test_secondary_config_can_inherit_resample_rule():
@@ -154,6 +180,7 @@ def test_secondary_validation_buttons_append_options():
 
 def test_backend_secondary_endpoints_use_secondary_form_helpers():
     web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    assert 'read_text(encoding="utf-8")' in Path("tests/test_secondary_validation_options.py").read_text(encoding="utf-8")
     for function_name in [
         "_run_enhanced_screening_response",
         "_run_granger_response",
@@ -196,6 +223,67 @@ def test_enhanced_validation_summary_includes_secondary_whitelist_variables():
     whitelist_row = summary[summary["variable"] == "WHITELIST_ONLY"].iloc[0]
     assert whitelist_row["model_lift"] == 0.2
     assert whitelist_row["rolling_stability"] == 0.7
+
+
+def test_enhanced_validation_summary_keeps_variables_only_in_secondary_outputs():
+    ranked = pd.DataFrame(
+        {
+            "variable": ["A"],
+            "final_score": [0.8],
+            "lag": [10],
+            "direction": ["positive"],
+            "risk_flags": [""],
+            "recommended_use": ["strong_screening_candidate"],
+        }
+    )
+    model_lift = pd.DataFrame(
+        {
+            "variable": ["B"],
+            "status": ["ok"],
+            "model_lift": [0.12],
+            "ar_baseline_rmse": [1.0],
+            "candidate_rmse": [0.88],
+        }
+    )
+    rolling = pd.DataFrame(
+        {
+            "variable": ["B"],
+            "rolling_stability": [0.6],
+            "rolling_corr_median": [0.5],
+            "rolling_sign_consistency": [1.0],
+            "valid_window_count": [20],
+        }
+    )
+
+    summary = _enhanced_validation_summary(ranked, model_lift, rolling)
+
+    assert summary["variable"].tolist() == ["A", "B"]
+    row_b = summary.loc[summary["variable"] == "B"].iloc[0]
+    assert row_b["status"] == "ok"
+    assert row_b["model_lift"] == 0.12
+    assert row_b["rolling_stability"] == 0.6
+    assert row_b["interpretation"] == "enhanced screening only; not a causal conclusion"
+
+
+def test_secondary_best_lags_for_missing_variables_adds_lag_for_extra_candidate():
+    import numpy as np
+    import pandas as pd
+
+    n = 80
+    x = np.arange(n, dtype=float)
+    y = pd.Series(x).shift(3).bfill()
+
+    frame = pd.DataFrame({"Y": y, "X": x})
+    result = _secondary_best_lags_for_missing_variables(
+        frame,
+        target="Y",
+        variables=["X"],
+        existing_best_lags={},
+        max_lag=8,
+    )
+
+    assert "X" in result
+    assert isinstance(result["X"], int)
 
 
 def test_index_html_reset_restores_secondary_validation_defaults():

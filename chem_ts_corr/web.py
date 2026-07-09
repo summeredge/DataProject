@@ -1753,12 +1753,13 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
-        <h2>二次验证</h2>
-        <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
-        <div class="help">Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</div>
         <div class="card">
           <h3>二次验证参数</h3>
-          <div class="help">原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化。</div>
+          <div class="help">
+            <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
+            <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
+            <span>原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；在主筛查 TopK 和主筛查强制复核变量之外，可追加补充变量进入二次验证；若改用原始采样，请按原始采样间隔重新填写最大滞后点数，例如 1min 数据验证 360min 滞后，应填 360。</span>
+          </div>
           <div class="grid">
             <label>二次验证补充变量（白名单）
               <details id="secondaryIncludeDropdown" class="multi-dropdown">
@@ -1780,7 +1781,6 @@ INDEX_HTML = r"""<!doctype html>
               <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
             </label>
           </div>
-          <div class="help">在主筛查 TopK 和主筛查强制复核变量之外，追加补充变量进入二次验证。如果二次验证改用原始采样，请按原始采样间隔重新填写最大滞后点数。例如 1min 数据验证 360min 滞后，应填 360。</div>
         </div>
         <div class="actions">
           <button id="runEnhancedScreening" disabled>运行增强筛选</button>

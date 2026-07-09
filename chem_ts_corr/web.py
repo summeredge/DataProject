@@ -524,12 +524,12 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    scaled = _scaled_frame_for_secondary(secondary_config)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
-    best_lags = _best_lags_for_secondary(ranked, scaled, secondary_config.target, variables, secondary_config.max_lag)
+    best_lags = _best_lags_from_ranked(ranked)
     lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
     rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
     enhanced = _enhanced_validation_summary(ranked, lift, rolling)
@@ -550,22 +550,14 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
 def _enhanced_validation_summary(
     ranked: pd.DataFrame, model_lift: pd.DataFrame, rolling: pd.DataFrame
 ) -> pd.DataFrame:
-    variable_sources = [
-        frame["variable"].dropna().astype(str).tolist()
-        for frame in (ranked, model_lift, rolling)
-        if not frame.empty and "variable" in frame.columns
-    ]
-    variables = list(dict.fromkeys(variable for source in variable_sources for variable in source))
-    if not variables:
+    if ranked.empty or "variable" not in ranked.columns:
         return pd.DataFrame()
     columns = [
         column
         for column in ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"]
         if column in ranked.columns
     ]
-    summary = pd.DataFrame({"variable": variables})
-    if columns:
-        summary = summary.merge(ranked[columns].copy(deep=True), on="variable", how="left")
+    summary = ranked[columns].copy(deep=True)
     if not model_lift.empty:
         summary = summary.merge(
             model_lift[[c for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"] if c in model_lift.columns]],
@@ -597,7 +589,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         base_config,
         extra_variables=extra_variables,
     )
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    scaled = _scaled_frame_for_secondary(secondary_config)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -631,10 +623,10 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     )
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
-    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    best_lags = _best_lags_for_secondary(ranked, scaled, secondary_config.target, variables, secondary_config.max_lag)
+    best_lags = _best_lags_from_ranked(ranked)
     best_lags = _merge_near_miss_lags(best_lags, near_miss)
+    scaled = _scaled_frame_for_secondary(secondary_config)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     importance, metrics = fit_explainable_model(
@@ -866,44 +858,6 @@ def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
     }
 
 
-def _best_lags_for_secondary(
-    ranked: pd.DataFrame,
-    frame: pd.DataFrame,
-    target: str,
-    variables: list[str],
-    max_lag: int,
-) -> dict[str, int]:
-    best_lags = _best_lags_from_ranked(ranked)
-    missing = [
-        variable
-        for variable in variables
-        if variable not in best_lags and variable in frame.columns and variable != target
-    ]
-    if not missing:
-        return best_lags
-
-    from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
-
-    for variable in missing:
-        pair = frame[[target, variable]].dropna()
-        if pair.empty:
-            continue
-        try:
-            best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
-        except Exception:
-            continue
-        if best.empty or "variable" not in best.columns or "lag" not in best.columns:
-            continue
-        variable_best = best[best["variable"].astype(str) == variable]
-        if variable_best.empty:
-            continue
-        try:
-            best_lags[variable] = int(variable_best.iloc[0]["lag"])
-        except (TypeError, ValueError):
-            continue
-    return best_lags
-
-
 def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:
     merged = dict(best_lags)
     if near_miss.empty or not {"variable", "lag"}.issubset(near_miss.columns):
@@ -919,15 +873,12 @@ def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) ->
     return merged
 
 
-def _scaled_frame_for_secondary(
-    config: AnalysisConfig, protected_columns: list[str] | None = None
-) -> pd.DataFrame:
+def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
     from chem_ts_corr.data import select_numeric_frame
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
     from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
 
-    extra_protected = tuple(c for c in (protected_columns or []) if c)
-    cache_key = _scaled_frame_cache_key(config, extra_protected)
+    cache_key = _scaled_frame_cache_key(config)
     with SCALED_FRAME_CACHE_LOCK:
         cached = SCALED_FRAME_CACHE.get(cache_key)
         if cached is not None:
@@ -950,7 +901,6 @@ def _scaled_frame_for_secondary(
         *(config.capacity_columns or []),
         *(config.residual_control_columns or []),
         *(config.force_include_variables or []),
-        *extra_protected,
     ]
     cleaned = preprocess_frame(
         segmented,
@@ -977,9 +927,7 @@ def _scaled_frame_for_secondary(
     return scaled.copy(deep=True)
 
 
-def _scaled_frame_cache_key(
-    config: AnalysisConfig, protected_columns: tuple[str, ...] = ()
-) -> tuple[Any, ...]:
+def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
     path = Path(config.input_path)
     stat = path.stat() if path.exists() else None
     roles_path = Path(config.roles_path).resolve() if config.roles_path else None
@@ -1001,7 +949,6 @@ def _scaled_frame_cache_key(
         tuple(config.capacity_columns or []),
         tuple(config.residual_control_columns or []),
         tuple(config.force_include_variables or []),
-        protected_columns,
         config.resample_rule,
         config.min_valid_ratio,
         config.max_interpolate_gap_points,
@@ -4069,9 +4016,6 @@ function reset() {
   el("secondaryIncludeOptions").innerHTML = "";
   el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
   el("secondaryIncludeDropdown").open = false;
-  el("secondaryResampleMode").value = "raw";
-  el("secondaryResampleRule").value = "";
-  el("secondaryMaxLag").value = "";
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

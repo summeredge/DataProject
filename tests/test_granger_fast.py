@@ -39,6 +39,46 @@ def test_fast_granger_matches_statsmodels_ssr_ftest():
         assert fast_p == pytest.approx(sm_p, rel=1e-6, abs=1e-8)
 
 
+def test_fast_granger_does_not_use_matrix_rank():
+    source = Path("chem_ts_corr/causality.py").read_text(encoding="utf-8")
+    assert "np.linalg.matrix_rank" not in source
+    assert "matrix_rank(" not in source
+
+
+def test_fast_granger_hot_loop_does_not_call_dataframe_lagged_design():
+    source = Path("chem_ts_corr/causality.py").read_text(encoding="utf-8")
+    start = source.index("def _fast_granger_ssr_ftests")
+    end = source.index("\ndef ", start + 1)
+    body = source[start:end]
+
+    assert "_lagged_design(" not in body
+    assert ".shift(" not in body
+    assert "pd.DataFrame(" not in body
+
+
+def test_lagged_arrays_preserve_target_and_candidate_lag_direction():
+    import numpy as np
+
+    from chem_ts_corr.causality import _lagged_arrays
+
+    y_values = np.array([10, 11, 12, 13, 14], dtype=float)
+    x_values = np.array([20, 21, 22, 23, 24], dtype=float)
+
+    y, y_lags, x_lags = _lagged_arrays(y_values, x_values, lag=2)
+
+    assert y.tolist() == [12.0, 13.0, 14.0]
+    assert y_lags.tolist() == [
+        [11.0, 10.0],
+        [12.0, 11.0],
+        [13.0, 12.0],
+    ]
+    assert x_lags.tolist() == [
+        [21.0, 20.0],
+        [22.0, 21.0],
+        [23.0, 22.0],
+    ]
+
+
 def test_run_granger_tests_preserves_variable_predicts_target_direction():
     import numpy as np
     import pandas as pd
@@ -183,13 +223,15 @@ def test_fast_granger_uses_effective_restrictions_for_rank_deficient_lags():
     ].to_numpy()
     restricted_matrix = np.column_stack([np.ones(len(restricted_x)), restricted_x])
     unrestricted_matrix = np.column_stack([np.ones(len(unrestricted_x)), unrestricted_x])
-    restricted_rank = np.linalg.matrix_rank(restricted_matrix)
-    unrestricted_rank = np.linalg.matrix_rank(unrestricted_matrix)
+    restricted_coef, _restricted_residuals, restricted_rank, _ = np.linalg.lstsq(
+        restricted_matrix, target_values, rcond=None
+    )
+    unrestricted_coef, _unrestricted_residuals, unrestricted_rank, _ = np.linalg.lstsq(
+        unrestricted_matrix, target_values, rcond=None
+    )
     df_num = unrestricted_rank - restricted_rank
     df_den = len(target_values) - unrestricted_rank
 
-    restricted_coef, *_ = np.linalg.lstsq(restricted_matrix, target_values, rcond=None)
-    unrestricted_coef, *_ = np.linalg.lstsq(unrestricted_matrix, target_values, rcond=None)
     restricted_residual = target_values - restricted_matrix @ restricted_coef
     unrestricted_residual = target_values - unrestricted_matrix @ unrestricted_coef
     ssr_r = float(np.dot(restricted_residual, restricted_residual))

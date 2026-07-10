@@ -1224,8 +1224,11 @@ def _scatter_matrix_response(params: dict[str, list[str]]) -> dict[str, Any]:
         raise ValueError("选择的散点矩阵变量不是有效数值列")
 
     values = [
-        [_finite_json_number(row[column]) for column in columns]
-        for _, row in transformed[columns].iterrows()
+        [_finite_json_number(value) for value in row]
+        for row in transformed[columns].itertuples(
+            index=False,
+            name=None,
+        )
     ]
     return {
         "x_variables": [column for column in x_variables if column in columns],
@@ -2862,6 +2865,19 @@ async function drawScatterMatrix() {
   }
 }
 
+function finiteScatterNumber(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
 function renderScatterMatrix(payload) {
   const container = el("scatterMatrixChart");
   const xVariables = payload.x_variables || [];
@@ -2893,6 +2909,10 @@ function renderScatterMatrix(payload) {
   canvas.width = Math.round(cssWidth * pixelRatio);
   canvas.height = Math.round(cssHeight * pixelRatio);
   const context = canvas.getContext("2d");
+  if (!context) {
+    clearScatterMatrix("当前浏览器无法创建 Canvas 绘图上下文。");
+    return;
+  }
   context.scale(pixelRatio, pixelRatio);
   context.font = "11px sans-serif";
   const columnIndex = new Map(columns.map((name, index) => [name, index]));
@@ -2904,20 +2924,44 @@ function renderScatterMatrix(payload) {
       const yName = yVariables[row];
       const xIndex = columnIndex.get(xName);
       const yIndex = columnIndex.get(yName);
-      const points = values.map((valueRow) => ({ x: Number(valueRow[xIndex]), y: Number(valueRow[yIndex]) })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
       const left = leftLabelWidth + col * panelWidth + 38;
       const top = topLabelHeight + row * panelHeight + 24;
       const width = panelWidth - 54;
       const height = panelHeight - 58;
       context.strokeStyle = "#d8dee8";
       context.strokeRect(left, top, width, height);
+      if (xIndex === undefined || yIndex === undefined) {
+        context.fillStyle = "#5f6b7a";
+        context.fillText("变量列不存在", left, top + 20);
+        continue;
+      }
+
+      let validCount = 0;
+      let xMin = Infinity;
+      let xMax = -Infinity;
+      let yMin = Infinity;
+      let yMax = -Infinity;
+
+      for (const valueRow of values) {
+        const x = finiteScatterNumber (valueRow[xIndex]);
+        const y = finiteScatterNumber (valueRow[yIndex]);
+        if (x === null || y === null) {
+          continue;
+        }
+        validCount += 1;
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+        if (y < yMin) yMin = y;
+        if (y > yMax) yMax = y;
+      }
+
       context.fillStyle = "#334155";
-      context.fillText(`${yName} vs ${xName}  n=${points.length}`, left, top - 8);
-      if (!points.length) continue;
-      let xMin = Math.min(...points.map((p) => p.x));
-      let xMax = Math.max(...points.map((p) => p.x));
-      let yMin = Math.min(...points.map((p) => p.y));
-      let yMax = Math.max(...points.map((p) => p.y));
+      context.fillText(`${yName} vs ${xName}  n=${validCount}`, left, top - 8);
+      if (validCount === 0) {
+        context.fillStyle = "#5f6b7a";
+        context.fillText("无有效配对数据", left + 12, top + 24);
+        continue;
+      }
       if (xMin === xMax) { xMin -= 0.5; xMax += 0.5; }
       if (yMin === yMax) { yMin -= 0.5; yMax += 0.5; }
       const xPadding = Math.max((xMax - xMin) * 0.05, Number.EPSILON);
@@ -2928,10 +2972,22 @@ function renderScatterMatrix(payload) {
       context.fillStyle = "#5f6b7a";
       axisTicks(xRange, 4).forEach((tick) => { const px = left + ((tick - xRange.min) / (xRange.max - xRange.min)) * width; context.beginPath(); context.moveTo(px, top); context.lineTo(px, top + height); context.stroke(); context.fillText(formatAxisValue(tick), px - 14, top + height + 14); });
       axisTicks(yRange, 4).forEach((tick) => { const py = top + height - ((tick - yRange.min) / (yRange.max - yRange.min)) * height; context.beginPath(); context.moveTo(left, py); context.lineTo(left + width, py); context.stroke(); context.fillText(formatAxisValue(tick), left - 36, py + 4); });
+      context.save();
       context.globalAlpha = 0.35;
       context.fillStyle = "#176b87";
-      points.forEach((point) => { const px = left + ((point.x - xRange.min) / (xRange.max - xRange.min)) * width; const py = top + height - ((point.y - yRange.min) / (yRange.max - yRange.min)) * height; context.beginPath(); context.arc(px, py, 1.7, 0, Math.PI * 2); context.fill(); });
-      context.globalAlpha = 1;
+      for (const valueRow of values) {
+        const x = finiteScatterNumber (valueRow[xIndex]);
+        const y = finiteScatterNumber (valueRow[yIndex]);
+        if (x === null || y === null) {
+          continue;
+        }
+        const px = left + ((x - xRange.min) / (xRange.max - xRange.min)) * width;
+        const py = top + height - ((y - yRange.min) / (yRange.max - yRange.min)) * height;
+        context.beginPath();
+        context.arc(px, py, 1.7, 0, Math.PI * 2);
+        context.fill();
+      }
+      context.restore();
       context.fillStyle = "#334155";
       context.fillText(xName, left + width / 2 - 20, top + height + 32);
       context.save();

@@ -158,6 +158,16 @@ def test_scatter_matrix_static_frontend_contract():
     assert "Number.isFinite(numeric)" in INDEX_HTML
     assert "finiteScatterNumber (valueRow[xIndex])" in body
     assert "finiteScatterNumber (valueRow[yIndex])" in body
+    assert "const panelWidth = 260;" not in body
+    assert "container.clientWidth" in body
+    assert "/ Math.max(columnCount, 1)" in body or "/ columnCount" in body
+    assert "vs ${xName}" not in body
+    assert "vs ${" not in body
+    assert "yName, xName" not in body
+    assert "rotate(-Math.PI / 2)" not in body
+    assert "n=${validCount}" in body or "`n=" in body
+    assert "yVariables.forEach" in body or "for (let row = 0;" in body
+    assert body.count("fillText(xName") <= 1
     assert "Math.min(...points" not in body
     assert "Math.max(...points" not in body
     assert "Math.min(...points.map" not in body

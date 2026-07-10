@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, replace
 import json
+import math
 import re
 import threading
 import time
@@ -120,6 +121,15 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 params = parse_qs(parsed.query)
                 self._send_json(_trend_response(params))
+            except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
+                self._send_json({"error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/scatter_matrix":
+            try:
+                params = parse_qs(parsed.query)
+                self._send_json(_scatter_matrix_response(params))
             except Exception as exc:
                 if _is_client_disconnect(exc):
                     return
@@ -290,6 +300,13 @@ def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
 
 def _read_data_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
     return read_timeseries_table(path, encoding=encoding, nrows=5000)
+
+
+def _resolve_encoding(path: Path, encoding: str) -> str:
+    if encoding and encoding != "auto":
+        return encoding
+    _, used_encoding = _read_data_sample(path, encoding or "utf-8-sig")
+    return used_encoding
 
 
 def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
@@ -1090,17 +1107,15 @@ def _clear_scaled_frame_cache() -> None:
         SCALED_FRAME_CACHE.clear()
 
 
-def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
+def _chart_frame_from_params(
+    params: dict[str, list[str]],
+    variables: list[str],
+) -> tuple[pd.DataFrame, int, int]:
     file_id = _single(params, "file_id")
     encoding = _single(params, "encoding", "utf-8-sig")
     input_path = _resolve_upload(file_id)
     resolved_encoding = _resolve_encoding(input_path, encoding)
     time_column = _single(params, "time_column")
-    variables = [value for value in _single(params, "variables").split(",") if value]
-    if not variables:
-        raise ValueError("请选择至少一个趋势变量")
-    if len(variables) > 4:
-        raise ValueError("最多选择 4 个趋势变量")
 
     from chem_ts_corr.data import load_timeseries_csv, select_numeric_frame
     from chem_ts_corr.preprocess import segment_by_load, transform_frame
@@ -1113,11 +1128,11 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
     if end_time:
         raw = raw.loc[raw.index <= pd.to_datetime(end_time)]
     if raw.empty:
-        raise ValueError("趋势图时间范围内没有数据")
+        raise ValueError("图表时间范围内没有数据")
     numeric = select_numeric_frame(raw, variables[0])
     columns = [column for column in variables if column in numeric.columns]
     if not columns:
-        raise ValueError("选择的趋势变量不是有效数值列")
+        raise ValueError("选择的变量不是有效数值列")
     frame_columns = list(dict.fromkeys(columns + [col for col in [_single(params, "segment_column")] if col and col in numeric.columns]))
     frame = numeric[frame_columns]
     segmented = segment_by_load(
@@ -1132,18 +1147,33 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
         _single(params, "preprocess_mode", "raw"),
         int(_single(params, "detrend_window", "24") or 24),
     )
-    max_points = max(100, int(_single(params, "trend_max_points", "10000") or 10000))
+    max_points = min(100000, max(100, int(_single(params, "trend_max_points", "10000") or 10000)))
     raw_rows = len(transformed)
     if len(transformed) > max_points:
-        step = max(1, len(transformed) // max_points)
-        transformed = transformed.iloc[::step]
+        positions = [int(index * (len(transformed) - 1) / (max_points - 1)) for index in range(max_points)]
+        positions = list(dict.fromkeys(positions))
+        transformed = transformed.iloc[positions]
+    return transformed, int(raw_rows), int(max_points)
+
+
+def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
+    variables = [value for value in _single(params, "variables").split(",") if value]
+    if not variables:
+        raise ValueError("请选择至少一个趋势变量")
+    if len(variables) > 4:
+        raise ValueError("最多选择 4 个趋势变量")
+
+    transformed, raw_rows, max_points = _chart_frame_from_params(params, variables)
+    columns = [column for column in variables if column in transformed.columns]
+    if not columns:
+        raise ValueError("选择的趋势变量不是有效数值列")
 
     return {
         "series": [
             {
                 "name": column,
                 "points": [
-                    {"x": str(index), "y": None if pd.isna(value) else float(value)}
+                    {"x": str(index), "y": _finite_json_number(value)}
                     for index, value in transformed[column].items()
                 ],
             }
@@ -1153,6 +1183,61 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
         "raw_rows": int(raw_rows),
         "max_points": int(max_points),
     }
+
+
+def _finite_json_number(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _scatter_matrix_response(params: dict[str, list[str]]) -> dict[str, Any]:
+    x_variables = list(
+        dict.fromkeys(
+            value.strip()
+            for value in _single(params, "x_variables").split(",")
+            if value.strip()
+        )
+    )
+    y_variables = list(
+        dict.fromkeys(
+            value.strip()
+            for value in _single(params, "y_variables").split(",")
+            if value.strip()
+        )
+    )
+    if not x_variables:
+        raise ValueError("请选择至少一个 X 轴变量")
+    if not y_variables:
+        raise ValueError("请选择至少一个 Y 轴变量")
+    if len(x_variables) > 3:
+        raise ValueError("X 轴变量最多选择 3 个")
+    if len(y_variables) > 3:
+        raise ValueError("Y 轴变量最多选择 3 个")
+
+    columns = list(dict.fromkeys(x_variables + y_variables))
+    transformed, raw_rows, max_points = _chart_frame_from_params(params, columns)
+    columns = [column for column in columns if column in transformed.columns]
+    if not columns:
+        raise ValueError("选择的散点矩阵变量不是有效数值列")
+
+    values = [
+        [_finite_json_number(row[column]) for column in columns]
+        for _, row in transformed[columns].iterrows()
+    ]
+    return {
+        "x_variables": [column for column in x_variables if column in columns],
+        "y_variables": [column for column in y_variables if column in columns],
+        "columns": columns,
+        "values": values,
+        "rows": int(len(values)),
+        "raw_rows": int(raw_rows),
+        "max_points": int(max_points),
+    }
+
+
 
 
 def _overview_payload(
@@ -1180,14 +1265,6 @@ def _summary_metrics(summary: str) -> dict[str, str]:
         key, value = line[2:].split(":", 1)
         metrics[key.strip()] = value.strip()
     return metrics
-
-
-def _resolve_encoding(path: Path, encoding: str) -> str:
-    if encoding != "auto":
-        return encoding
-    _, used_encoding = _read_data_sample(path, "auto")
-    return used_encoding
-
 
 def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     content_type = handler.headers.get("Content-Type", "")
@@ -1220,7 +1297,6 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         return form
     data = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
     return {k: (v[0] if v else "") for k, v in data.items()}
-
 
 def _resolve_upload(file_id: str) -> Path:
     file_id = _validate_file_id(file_id)
@@ -1507,6 +1583,11 @@ INDEX_HTML = r"""<!doctype html>
     .chart svg { width:100%; height:320px; display:block; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
+    .scatter-matrix-section { display:grid; gap:12px; margin-top:10px; }
+    .scatter-matrix-controls { display:grid; grid-template-columns:repeat(3, minmax(150px, 1fr)); gap:10px; align-items:end; }
+    .scatter-matrix-chart { min-height:280px; border:1px solid var(--line); border-radius:6px; background:var(--panel); overflow:auto; }
+    .scatter-matrix-chart.empty { display:grid; place-items:center; color:var(--muted); font-size:var(--font-sm); padding:16px; }
+    .scatter-matrix-chart canvas { display:block; }
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
     .trend-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:start; }
@@ -1593,8 +1674,8 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:var(--font-base); }
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
-    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } }
+    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -1750,6 +1831,21 @@ INDEX_HTML = r"""<!doctype html>
         <div id="trendChart" class="chart empty">选择 1 到 4 个数据后点击“显示趋势”。</div>
         <div id="trendLegend" class="legend"></div>
         <div id="trendStats" class="trend-stats empty">选择数据并点击“显示趋势”后显示统计摘要。</div>
+        <section class="scatter-matrix-section">
+          <h2>XY 散点矩阵</h2>
+          <div class="help">最多选择 3 个 X 轴变量和 3 个 Y 轴变量，按组合显示最多 9 个散点子图。散点关系用于人工观察变量关系、分群和异常点，不代表因果关系。</div>
+          <div class="scatter-matrix-controls">
+            <label>X 变量 1<select id="scatterX1"></select></label>
+            <label>X 变量 2<select id="scatterX2"></select></label>
+            <label>X 变量 3<select id="scatterX3"></select></label>
+            <label>Y 变量 1<select id="scatterY1"></select></label>
+            <label>Y 变量 2<select id="scatterY2"></select></label>
+            <label>Y 变量 3<select id="scatterY3"></select></label>
+            <button id="drawScatterMatrix" disabled>显示散点矩阵</button>
+          </div>
+          <div id="scatterMatrixMeta" class="help">选择 X 和 Y 变量后点击“显示散点矩阵”。</div>
+          <div id="scatterMatrixChart" class="scatter-matrix-chart empty">选择至少一个 X 变量和一个 Y 变量。</div>
+        </section>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
@@ -1933,12 +2029,15 @@ const llmPromptEndpoint = "/api/llm_prompt";
 let lastTrendSeries = [];
 let lastTrendAxisMode = "shared";
 let trendResizeTimer = null;
+let lastScatterMatrixPayload = null;
+let scatterMatrixResizeTimer = null;
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
   button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
 el("drawTrend").addEventListener("click", drawTrend);
+el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
@@ -1947,9 +2046,14 @@ el("detailModalClose").addEventListener("click", closeDetailModal);
 el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
 window.addEventListener("resize", () => {
-  if (!lastTrendSeries.length) return;
-  clearTimeout(trendResizeTimer);
-  trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+  if (lastTrendSeries.length) {
+    clearTimeout(trendResizeTimer);
+    trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+  }
+  if (lastScatterMatrixPayload) {
+    clearTimeout(scatterMatrixResizeTimer);
+    scatterMatrixResizeTimer = setTimeout(() => renderScatterMatrix(lastScatterMatrixPayload), 120);
+  }
 });
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
@@ -2087,6 +2191,14 @@ async function loadColumns() {
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar4"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX1"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX2"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX3"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY1"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY2"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY3"), data.numericColumns, true, "不选择");
+  lastScatterMatrixPayload = null;
+  clearScatterMatrix();
   const timeCandidate = data.columns.find((name) => /time|date|timestamp|时间|日期/i.test(name));
   if (data.timeColumn && data.columns.includes(data.timeColumn)) {
     el("timeColumn").value = data.timeColumn;
@@ -2102,6 +2214,7 @@ async function loadColumns() {
     }
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
+  el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
     setStatus(`列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
   } catch (error) {
     el("analyze").disabled = true;
@@ -2664,26 +2777,29 @@ function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段"
   }
 }
 
+function appendChartQueryParams(params) {
+  params.set("file_id", fileId);
+  params.set("encoding", el("encoding").value);
+  params.set("time_column", el("timeColumn").value);
+  params.set("trend_start", el("trendStart").value);
+  params.set("trend_end", el("trendEnd").value);
+  params.set("trend_max_points", el("trendMaxPoints").value || "10000");
+  params.set("segment_column", el("segmentColumn").value);
+  params.set("segment_mode", el("segmentMode").value);
+  params.set("segment_min", el("segmentMin").value);
+  params.set("segment_max", el("segmentMax").value);
+  params.set("preprocess_mode", el("preprocessMode").value);
+  params.set("detrend_window", el("detrendWindow").value);
+}
+
 async function drawTrend() {
   try {
     const variables = [el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value].filter(Boolean);
     if (!variables.length) return setStatus("请至少选择一个趋势变量。");
     if (new Set(variables).size !== variables.length) return setStatus("趋势变量不能重复选择。");
-    const params = new URLSearchParams({
-      file_id: fileId,
-      encoding: el("encoding").value,
-      time_column: el("timeColumn").value,
-      variables: variables.join(","),
-      preprocess_mode: el("preprocessMode").value,
-      detrend_window: el("detrendWindow").value,
-      segment_column: el("segmentColumn").value,
-      segment_mode: el("segmentMode").value,
-      segment_min: el("segmentMin").value,
-      segment_max: el("segmentMax").value,
-      trend_start: el("trendStart").value,
-      trend_end: el("trendEnd").value,
-      trend_max_points: el("trendMaxPoints").value,
-    });
+    const params = new URLSearchParams();
+    appendChartQueryParams(params);
+    params.set("variables", variables.join(","));
     setStatus("正在生成趋势图...", "loading");
     const response = await fetch(`/api/trend?${params.toString()}`);
     const data = await response.json();
@@ -2701,6 +2817,129 @@ async function drawTrend() {
     el("trendLegend").innerHTML = "";
     clearTrendStats();
     setStatus(error.message || String(error), "error");
+  }
+}
+
+function selectedScatterVariables(prefix) {
+  const ids = prefix === "x" ? ["scatterX1", "scatterX2", "scatterX3"] : ["scatterY1", "scatterY2", "scatterY3"];
+  return Array.from(new Set(ids.map((id) => el(id).value.trim()).filter(Boolean)));
+}
+
+function clearScatterMatrix(message = "选择至少一个 X 变量和一个 Y 变量。") {
+  const container = el("scatterMatrixChart");
+  container.className = "scatter-matrix-chart empty";
+  container.textContent = message;
+  el("scatterMatrixMeta").textContent = "选择 X 和 Y 变量后点击“显示散点矩阵”。";
+}
+
+async function drawScatterMatrix() {
+  if (!fileId) return setStatus("请先上传数据文件。", "warning");
+  const xVariables = selectedScatterVariables("x");
+  const yVariables = selectedScatterVariables("y");
+  if (!xVariables.length) return setStatus("请选择至少一个 X 轴变量。", "warning");
+  if (!yVariables.length) return setStatus("请选择至少一个 Y 轴变量。", "warning");
+  const startedAt = performance.now();
+  el("drawScatterMatrix").disabled = true;
+  setStatus("正在生成 XY 散点矩阵...", "loading");
+  try {
+    const params = new URLSearchParams();
+    appendChartQueryParams(params);
+    params.set("x_variables", xVariables.join(","));
+    params.set("y_variables", yVariables.join(","));
+    const response = await fetch(`/api/scatter_matrix?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "散点矩阵生成失败");
+    lastScatterMatrixPayload = data;
+    renderScatterMatrix(data);
+    el("scatterMatrixMeta").textContent = `实际绘图 ${data.rows || 0} 行；筛选后原始行数 ${data.raw_rows || 0}；${(data.x_variables || []).length} 个 X × ${(data.y_variables || []).length} 个 Y。`;
+    setStatus(appendElapsed("XY 散点矩阵生成完成。", startedAt), "success");
+  } catch (error) {
+    lastScatterMatrixPayload = null;
+    clearScatterMatrix(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
+  } finally {
+    el("drawScatterMatrix").disabled = !fileId;
+  }
+}
+
+function renderScatterMatrix(payload) {
+  const container = el("scatterMatrixChart");
+  const xVariables = payload.x_variables || [];
+  const yVariables = payload.y_variables || [];
+  const columns = payload.columns || [];
+  const values = payload.values || [];
+  if (!xVariables.length || !yVariables.length || !values.length) {
+    clearScatterMatrix("没有可绘制的散点数据。");
+    return;
+  }
+  container.className = "scatter-matrix-chart";
+  container.innerHTML = "";
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("aria-label", "XY 散点矩阵");
+  container.appendChild(canvas);
+  const columnCount = xVariables.length;
+  const rowCount = yVariables.length;
+  const panelWidth = 260;
+  const panelHeight = 220;
+  const leftLabelWidth = 60;
+  const topLabelHeight = 34;
+  const rightPadding = 20;
+  const bottomPadding = 44;
+  const cssWidth = Math.max(container.clientWidth || 720, leftLabelWidth + columnCount * panelWidth + rightPadding);
+  const cssHeight = topLabelHeight + rowCount * panelHeight + bottomPadding;
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = Math.round(cssWidth * pixelRatio);
+  canvas.height = Math.round(cssHeight * pixelRatio);
+  const context = canvas.getContext("2d");
+  context.scale(pixelRatio, pixelRatio);
+  context.font = "11px sans-serif";
+  const columnIndex = new Map(columns.map((name, index) => [name, index]));
+  xVariables.forEach((name, col) => context.fillText(name, leftLabelWidth + col * panelWidth + 8, 22));
+  yVariables.forEach((name, row) => context.fillText(name, 8, topLabelHeight + row * panelHeight + 18));
+  for (let row = 0; row < rowCount; row += 1) {
+    for (let col = 0; col < columnCount; col += 1) {
+      const xName = xVariables[col];
+      const yName = yVariables[row];
+      const xIndex = columnIndex.get(xName);
+      const yIndex = columnIndex.get(yName);
+      const points = values.map((valueRow) => ({ x: Number(valueRow[xIndex]), y: Number(valueRow[yIndex]) })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+      const left = leftLabelWidth + col * panelWidth + 38;
+      const top = topLabelHeight + row * panelHeight + 24;
+      const width = panelWidth - 54;
+      const height = panelHeight - 58;
+      context.strokeStyle = "#d8dee8";
+      context.strokeRect(left, top, width, height);
+      context.fillStyle = "#334155";
+      context.fillText(`${yName} vs ${xName}  n=${points.length}`, left, top - 8);
+      if (!points.length) continue;
+      let xMin = Math.min(...points.map((p) => p.x));
+      let xMax = Math.max(...points.map((p) => p.x));
+      let yMin = Math.min(...points.map((p) => p.y));
+      let yMax = Math.max(...points.map((p) => p.y));
+      if (xMin === xMax) { xMin -= 0.5; xMax += 0.5; }
+      if (yMin === yMax) { yMin -= 0.5; yMax += 0.5; }
+      const xPadding = Math.max((xMax - xMin) * 0.05, Number.EPSILON);
+      const yPadding = Math.max((yMax - yMin) * 0.05, Number.EPSILON);
+      const xRange = { min: xMin - xPadding, max: xMax + xPadding };
+      const yRange = { min: yMin - yPadding, max: yMax + yPadding };
+      context.strokeStyle = "#edf1f5";
+      context.fillStyle = "#5f6b7a";
+      axisTicks(xRange, 4).forEach((tick) => { const px = left + ((tick - xRange.min) / (xRange.max - xRange.min)) * width; context.beginPath(); context.moveTo(px, top); context.lineTo(px, top + height); context.stroke(); context.fillText(formatAxisValue(tick), px - 14, top + height + 14); });
+      axisTicks(yRange, 4).forEach((tick) => { const py = top + height - ((tick - yRange.min) / (yRange.max - yRange.min)) * height; context.beginPath(); context.moveTo(left, py); context.lineTo(left + width, py); context.stroke(); context.fillText(formatAxisValue(tick), left - 36, py + 4); });
+      context.globalAlpha = 0.35;
+      context.fillStyle = "#176b87";
+      points.forEach((point) => { const px = left + ((point.x - xRange.min) / (xRange.max - xRange.min)) * width; const py = top + height - ((point.y - yRange.min) / (yRange.max - yRange.min)) * height; context.beginPath(); context.arc(px, py, 1.7, 0, Math.PI * 2); context.fill(); });
+      context.globalAlpha = 1;
+      context.fillStyle = "#334155";
+      context.fillText(xName, left + width / 2 - 20, top + height + 32);
+      context.save();
+      context.translate(left - 48, top + height / 2 + 20);
+      context.rotate(-Math.PI / 2);
+      context.fillText(yName, 0, 0);
+      context.restore();
+    }
   }
 }
 
@@ -4131,6 +4370,7 @@ function reset() {
   lastFinalReviewSummaryRows = [];
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
+  lastScatterMatrixPayload = null;
   tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
@@ -4152,6 +4392,7 @@ function reset() {
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";
   el("trendVar4").innerHTML = "";
+  ["scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => { if (el(id)) el(id).value = ""; });
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
@@ -4161,6 +4402,7 @@ function reset() {
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
   el("drawTrend").disabled = true;
+  el("drawScatterMatrix").disabled = true;
   el("downloads").innerHTML = "";
   llmPromptText = "";
   el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
@@ -4181,6 +4423,7 @@ function reset() {
   el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";
   el("trendLegend").innerHTML = "";
   clearTrendStats();
+  clearScatterMatrix();
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("modelVariableImportanceTable").className = "empty";

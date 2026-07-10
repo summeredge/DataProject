@@ -1218,7 +1218,14 @@ def _scatter_matrix_response(params: dict[str, list[str]]) -> dict[str, Any]:
         raise ValueError("Y 轴变量最多选择 3 个")
 
     columns = list(dict.fromkeys(x_variables + y_variables))
-    transformed, raw_rows, max_points = _chart_frame_from_params(params, columns)
+    try:
+        transformed, raw_rows, max_points = _chart_frame_from_params(params, columns)
+    except ValueError as exc:
+        if "Not enough rows in selected operating segment" in str(exc):
+            raise ValueError("当前时间范围、工况和预处理条件下没有可绘制的散点数据") from exc
+        raise
+    if transformed.empty:
+        raise ValueError("当前时间范围、工况和预处理条件下没有可绘制的散点数据")
     columns = [column for column in columns if column in transformed.columns]
     if not columns:
         raise ValueError("选择的散点矩阵变量不是有效数值列")
@@ -2050,12 +2057,18 @@ el("detailModal").addEventListener("click", (event) => { if (event.target === el
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
 window.addEventListener("resize", () => {
   if (lastTrendSeries.length) {
-    clearTimeout(trendResizeTimer);
-    trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+    const trendContainer = el("trendChart");
+    if (isElementVisible(trendContainer)) {
+      clearTimeout(trendResizeTimer);
+      trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+    }
   }
   if (lastScatterMatrixPayload) {
-    clearTimeout(scatterMatrixResizeTimer);
-    scatterMatrixResizeTimer = setTimeout(() => renderScatterMatrix(lastScatterMatrixPayload), 120);
+    const scatterContainer = el("scatterMatrixChart");
+    if (isElementVisible(scatterContainer)) {
+      clearTimeout(scatterMatrixResizeTimer);
+      scatterMatrixResizeTimer = setTimeout(() => renderScatterMatrix(lastScatterMatrixPayload), 120);
+    }
   }
 });
 el("testLlmConnection").addEventListener("click", testLlmConnection);
@@ -2731,6 +2744,15 @@ function renderTermsHelpTab() {
 
 renderTermsHelpTab();
 
+function isElementVisible(node) {
+  return Boolean(
+    node &&
+    !node.hidden &&
+    node.offsetParent !== null &&
+    node.getClientRects().length
+  );
+}
+
 function activateTab(tabId) {
   for (const button of document.querySelectorAll(".tab-button")) {
     const isActive = button.dataset.tab === tabId;
@@ -2742,6 +2764,16 @@ function activateTab(tabId) {
     const isActive = panel.id === tabId;
     panel.classList.toggle("active", isActive);
     panel.hidden = !isActive;
+  }
+  if (tabId === "trendTab") {
+    requestAnimationFrame(() => {
+      if (lastTrendSeries.length && isElementVisible(el("trendChart"))) {
+        renderTrendChart(lastTrendSeries, lastTrendAxisMode);
+      }
+      if (lastScatterMatrixPayload && isElementVisible(el("scatterMatrixChart"))) {
+        renderScatterMatrix(lastScatterMatrixPayload);
+      }
+    });
   }
 }
 
@@ -2852,6 +2884,9 @@ async function drawScatterMatrix() {
     const response = await fetch(`/api/scatter_matrix?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "散点矩阵生成失败");
+    if (!Array.isArray(data.values) || data.values.length === 0) {
+      throw new Error("当前时间范围、工况和预处理条件下没有可绘制的散点数据");
+    }
     lastScatterMatrixPayload = data;
     renderScatterMatrix(data);
     el("scatterMatrixMeta").textContent = `实际绘图 ${data.rows || 0} 行；筛选后原始行数 ${data.raw_rows || 0}；${(data.x_variables || []).length} 个 X × ${(data.y_variables || []).length} 个 Y。`;
@@ -2863,6 +2898,25 @@ async function drawScatterMatrix() {
   } finally {
     el("drawScatterMatrix").disabled = !fileId;
   }
+}
+
+function fitCanvasText(context, text, maxWidth) {
+  const value = String(text ?? "");
+  if (context.measureText(value).width <= maxWidth) {
+    return value;
+  }
+
+  const suffix = "…";
+  let result = value;
+
+  while (
+    result.length > 1 &&
+    context.measureText(result + suffix).width > maxWidth
+  ) {
+    result = result.slice(0, -1);
+  }
+
+  return result + suffix;
 }
 
 function finiteScatterNumber(value) {
@@ -2896,13 +2950,23 @@ function renderScatterMatrix(payload) {
   const columnCount = xVariables.length;
   const rowCount = yVariables.length;
   const availableWidth = Math.max(container.clientWidth || 900, 720);
-  const leftLabelWidth = 96;
+  const measureContext = canvas.getContext("2d");
+  if (!measureContext) {
+    clearScatterMatrix("当前浏览器无法创建 Canvas 绘图上下文。");
+    return;
+  }
+  measureContext.font = "11px sans-serif";
+  let maxYLabelWidth = 0;
+  for (const yName of yVariables) {
+    maxYLabelWidth = Math.max(maxYLabelWidth, measureContext.measureText(yName).width);
+  }
+  const leftLabelWidth = Math.min(220, Math.max(96, Math.ceil(maxYLabelWidth) + 18));
   const topLabelHeight = 38;
   const rightPadding = 16;
   const bottomPadding = 26;
   const usableWidth = Math.max(300, availableWidth - leftLabelWidth - rightPadding);
   const panelWidth = Math.max(260, Math.floor(usableWidth / Math.max(columnCount, 1)));
-  const panelHeight = Math.max(220, Math.round(panelWidth * 0.72));
+  const panelHeight = Math.max(220, Math.min(360, Math.round(panelWidth * 0.62)));
   const cssWidth = Math.max(availableWidth, leftLabelWidth + columnCount * panelWidth + rightPadding);
   const cssHeight = topLabelHeight + rowCount * panelHeight + bottomPadding;
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
@@ -2919,10 +2983,15 @@ function renderScatterMatrix(payload) {
   context.font = "11px sans-serif";
   const columnIndex = new Map(columns.map((name, index) => [name, index]));
   xVariables.forEach((xName, col) => {
-    const textWidth = context.measureText(xName).width;
-    context.fillText(xName, leftLabelWidth + col * panelWidth + Math.max(8, (panelWidth - textWidth) / 2), 24);
+    const maxTextWidth = Math.max(40, panelWidth - 20);
+    const displayName = fitCanvasText(context, xName, maxTextWidth);
+    const textWidth = context.measureText(displayName).width;
+    context.fillText(displayName, leftLabelWidth + col * panelWidth + Math.max(8, (panelWidth - textWidth) / 2), 24);
   });
-  yVariables.forEach((yName, row) => context.fillText(yName, 8, topLabelHeight + row * panelHeight + 22));
+  yVariables.forEach((yName, row) => {
+    const displayName = fitCanvasText(context, yName, leftLabelWidth - 16);
+    context.fillText(displayName, 8, topLabelHeight + row * panelHeight + 22);
+  });
   for (let row = 0; row < rowCount; row += 1) {
     for (let col = 0; col < columnCount; col += 1) {
       const xName = xVariables[col];
@@ -2938,6 +3007,7 @@ function renderScatterMatrix(payload) {
       if (xIndex === undefined || yIndex === undefined) {
         context.fillStyle = "#5f6b7a";
         context.fillText("变量列不存在", left, top + 20);
+        drawCountLabel(left, top, 0);
         continue;
       }
 
@@ -2960,13 +3030,10 @@ function renderScatterMatrix(payload) {
         if (y > yMax) yMax = y;
       }
 
-      context.fillStyle = "#44546a";
-      context.font = "12px sans-serif";
-      context.fillText(`n=${validCount}`, left + 6, top + 14);
-      context.font = "11px sans-serif";
       if (validCount === 0) {
         context.fillStyle = "#5f6b7a";
         context.fillText("无有效配对数据", left + 12, top + 24);
+        drawCountLabel(left, top, validCount);
         continue;
       }
       if (xMin === xMax) { xMin -= 0.5; xMax += 0.5; }
@@ -2995,7 +3062,22 @@ function renderScatterMatrix(payload) {
         context.fill();
       }
       context.restore();
+      drawCountLabel(left, top, validCount);
     }
+  }
+
+  function drawCountLabel(left, top, validCount) {
+    const countText = `n=${validCount}`;
+    context.font = "12px sans-serif";
+    const countWidth = context.measureText(countText).width;
+    context.save();
+    context.globalAlpha = 0.82;
+    context.fillStyle = "#ffffff";
+    context.fillRect(left + 4, top + 3, countWidth + 8, 16);
+    context.restore();
+    context.fillStyle = "#44546a";
+    context.fillText(countText, left + 8, top + 15);
+    context.font = "11px sans-serif";
   }
 }
 

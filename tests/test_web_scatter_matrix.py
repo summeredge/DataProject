@@ -203,3 +203,81 @@ def test_scatter_matrix_response_uses_itertuples_instead_of_iterrows():
     assert ".itertuples(" in body
     assert "index=False" in body
     assert "name=None" in body
+
+
+def test_scatter_matrix_rejects_empty_segment_result(tmp_path, monkeypatch):
+    frame = _frame(20)
+    file_id = _write_upload(tmp_path, monkeypatch, frame)
+
+    with pytest.raises(ValueError, match="没有可绘制的散点数据"):
+        web._scatter_matrix_response(
+            _params(
+                file_id,
+                segment_column="load",
+                segment_mode="custom",
+                segment_min="1000",
+                segment_max="2000",
+            )
+        )
+
+
+def test_scatter_matrix_resize_and_tab_visibility_guards():
+    assert "function isElementVisible(node)" in INDEX_HTML
+    assert "node.offsetParent !== null" in INDEX_HTML
+    assert "node.getClientRects().length" in INDEX_HTML
+    assert "isElementVisible(scatterContainer)" in INDEX_HTML
+    assert "lastScatterMatrixPayload" in INDEX_HTML
+    assert "renderScatterMatrix(lastScatterMatrixPayload)" in INDEX_HTML
+
+    activate_body = (
+        INDEX_HTML
+        .split("function activateTab", 1)[1]
+        .split("function handleTabKeydown", 1)[0]
+    )
+    assert 'tabId === "trendTab"' in activate_body
+    assert "requestAnimationFrame" in activate_body
+    assert "lastScatterMatrixPayload" in activate_body
+    assert "renderScatterMatrix" in activate_body
+    assert "isElementVisible" in activate_body
+
+
+def test_scatter_matrix_frontend_empty_response_guard_before_success():
+    draw_body = (
+        INDEX_HTML
+        .split("async function drawScatterMatrix", 1)[1]
+        .split("function finiteScatterNumber", 1)[0]
+    )
+    assert "Array.isArray(data.values)" in draw_body
+    assert "data.values.length === 0" in draw_body
+    assert "throw new Error" in draw_body
+    assert draw_body.index("data.values.length === 0") < draw_body.index("lastScatterMatrixPayload = data")
+
+
+def test_scatter_matrix_canvas_layout_review_guards():
+    render_body = INDEX_HTML.split("function renderScatterMatrix", 1)[1].split("function renderTrendChart", 1)[0]
+    assert "Math.min(" in render_body
+    assert "360" in render_body or "380" in render_body
+    assert "const panelHeight = Math.max(220, Math.round(panelWidth * 0.72));" not in render_body
+    assert "maxYLabelWidth" in render_body
+    assert "measureText(yName)" in render_body
+    assert "220" in render_body
+    assert "96" in render_body
+    assert "const leftLabelWidth = 96;" not in render_body
+    assert "function fitCanvasText" in INDEX_HTML
+    assert "measureText" in INDEX_HTML
+    assert '"…"' in INDEX_HTML or "'…'" in INDEX_HTML
+    assert "fitCanvasText(" in render_body
+    scatter_loop_position = render_body.rindex("for (const valueRow of values)")
+    count_position = render_body.rindex("n=${validCount}")
+    assert count_position > scatter_loop_position
+    assert "fillRect(" in render_body
+    assert "measureText(countText)" in render_body
+    assert "vs ${xName}" not in render_body
+    assert "rotate(-Math.PI / 2)" not in render_body
+    assert render_body.count("fillText(xName") <= 1
+    assert "const points = values.map" not in render_body
+    assert "points.forEach" not in render_body
+    assert "Math.min(...points" not in render_body
+    assert "Math.max(...points" not in render_body
+    assert "Number(valueRow[xIndex])" not in render_body
+    assert "Number(valueRow[yIndex])" not in render_body

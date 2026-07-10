@@ -103,6 +103,14 @@ def test_scatter_matrix_converts_nan_and_infinity_to_null(tmp_path, monkeypatch)
     assert payload["values"][2][payload["columns"].index("C")] is None
 
 
+def test_scatter_matrix_preserves_real_zero_values(tmp_path, monkeypatch):
+    frame = _frame(12).astype({"A": "float64"})
+    frame.loc[0, "A"] = 0.0
+    file_id = _write_upload(tmp_path, monkeypatch, frame)
+    payload = web._scatter_matrix_response(_params(file_id, x_variables="A", y_variables="B"))
+    assert payload["values"][0][payload["columns"].index("A")] == 0.0
+
+
 def test_scatter_matrix_applies_time_segment_preprocess_and_max_points(tmp_path, monkeypatch):
     frame = _frame(150)
     file_id = _write_upload(tmp_path, monkeypatch, frame)
@@ -141,8 +149,47 @@ def test_scatter_matrix_static_frontend_contract():
     body = INDEX_HTML.split("function renderScatterMatrix", 1)[1].split("function renderTrendChart", 1)[0]
     assert "<circle" not in body
     assert "createElementNS" not in body
+    assert "Number(valueRow[xIndex])" not in body
+    assert "Number(valueRow[yIndex])" not in body
+    assert "function finiteScatterNumber(value)" in INDEX_HTML
+    assert "value === null" in INDEX_HTML
+    assert "value === undefined" in INDEX_HTML
+    assert 'value === ""' in INDEX_HTML
+    assert "Number.isFinite(numeric)" in INDEX_HTML
+    assert "finiteScatterNumber (valueRow[xIndex])" in body
+    assert "finiteScatterNumber (valueRow[yIndex])" in body
+    assert "Math.min(...points" not in body
+    assert "Math.max(...points" not in body
+    assert "Math.min(...points.map" not in body
+    assert "Math.max(...points.map" not in body
+    assert "Math.min(...values" not in body
+    assert "Math.max(...values" not in body
+    assert "const points = values.map" not in body
+    assert ".map((valueRow) => ({ x:" not in body
+    assert "points.forEach" not in body
+    assert "let validCount = 0" in body
+    assert "let xMin = Infinity" in body
+    assert "let xMax = -Infinity" in body
+    assert "let yMin = Infinity" in body
+    assert "let yMax = -Infinity" in body
+    assert body.count("for (const valueRow of values)") >= 2
+    assert 'const context = canvas.getContext("2d")' in body
+    assert "if (!context)" in body
+    assert "context.save()" in body
+    assert "context.restore()" in body
+    assert "xIndex === undefined" in body
+    assert "yIndex === undefined" in body
     assert "appendChartQueryParams(params)" in INDEX_HTML.split("async function drawTrend", 1)[1].split("async function drawScatterMatrix", 1)[0]
     assert "appendChartQueryParams(params)" in INDEX_HTML.split("async function drawScatterMatrix", 1)[1]
     assert "lastScatterMatrixPayload = null" in INDEX_HTML
     assert "clearScatterMatrix()" in INDEX_HTML
     assert 'el("drawScatterMatrix").disabled = true' in INDEX_HTML
+
+
+def test_scatter_matrix_response_uses_itertuples_instead_of_iterrows():
+    source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    body = source.split("def _scatter_matrix_response", 1)[1].split("\ndef ", 1)[0]
+    assert ".iterrows()" not in body
+    assert ".itertuples(" in body
+    assert "index=False" in body
+    assert "name=None" in body

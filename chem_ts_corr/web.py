@@ -2895,13 +2895,15 @@ function renderScatterMatrix(payload) {
   container.appendChild(canvas);
   const columnCount = xVariables.length;
   const rowCount = yVariables.length;
-  const panelWidth = 260;
-  const panelHeight = 220;
-  const leftLabelWidth = 60;
-  const topLabelHeight = 34;
-  const rightPadding = 20;
-  const bottomPadding = 44;
-  const cssWidth = Math.max(container.clientWidth || 720, leftLabelWidth + columnCount * panelWidth + rightPadding);
+  const availableWidth = Math.max(container.clientWidth || 900, 720);
+  const leftLabelWidth = 96;
+  const topLabelHeight = 38;
+  const rightPadding = 16;
+  const bottomPadding = 26;
+  const usableWidth = Math.max(300, availableWidth - leftLabelWidth - rightPadding);
+  const panelWidth = Math.max(260, Math.floor(usableWidth / Math.max(columnCount, 1)));
+  const panelHeight = Math.max(220, Math.round(panelWidth * 0.72));
+  const cssWidth = Math.max(availableWidth, leftLabelWidth + columnCount * panelWidth + rightPadding);
   const cssHeight = topLabelHeight + rowCount * panelHeight + bottomPadding;
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = `${cssWidth}px`;
@@ -2916,18 +2918,21 @@ function renderScatterMatrix(payload) {
   context.scale(pixelRatio, pixelRatio);
   context.font = "11px sans-serif";
   const columnIndex = new Map(columns.map((name, index) => [name, index]));
-  xVariables.forEach((name, col) => context.fillText(name, leftLabelWidth + col * panelWidth + 8, 22));
-  yVariables.forEach((name, row) => context.fillText(name, 8, topLabelHeight + row * panelHeight + 18));
+  xVariables.forEach((xName, col) => {
+    const textWidth = context.measureText(xName).width;
+    context.fillText(xName, leftLabelWidth + col * panelWidth + Math.max(8, (panelWidth - textWidth) / 2), 24);
+  });
+  yVariables.forEach((yName, row) => context.fillText(yName, 8, topLabelHeight + row * panelHeight + 22));
   for (let row = 0; row < rowCount; row += 1) {
     for (let col = 0; col < columnCount; col += 1) {
       const xName = xVariables[col];
       const yName = yVariables[row];
       const xIndex = columnIndex.get(xName);
       const yIndex = columnIndex.get(yName);
-      const left = leftLabelWidth + col * panelWidth + 38;
+      const left = leftLabelWidth + col * panelWidth + 42;
       const top = topLabelHeight + row * panelHeight + 24;
-      const width = panelWidth - 54;
-      const height = panelHeight - 58;
+      const width = panelWidth - 58;
+      const height = panelHeight - 46;
       context.strokeStyle = "#d8dee8";
       context.strokeRect(left, top, width, height);
       if (xIndex === undefined || yIndex === undefined) {
@@ -2955,8 +2960,10 @@ function renderScatterMatrix(payload) {
         if (y > yMax) yMax = y;
       }
 
-      context.fillStyle = "#334155";
-      context.fillText(`${yName} vs ${xName}  n=${validCount}`, left, top - 8);
+      context.fillStyle = "#44546a";
+      context.font = "12px sans-serif";
+      context.fillText(`n=${validCount}`, left + 6, top + 14);
+      context.font = "11px sans-serif";
       if (validCount === 0) {
         context.fillStyle = "#5f6b7a";
         context.fillText("无有效配对数据", left + 12, top + 24);
@@ -2987,13 +2994,6 @@ function renderScatterMatrix(payload) {
         context.arc(px, py, 1.7, 0, Math.PI * 2);
         context.fill();
       }
-      context.restore();
-      context.fillStyle = "#334155";
-      context.fillText(xName, left + width / 2 - 20, top + height + 32);
-      context.save();
-      context.translate(left - 48, top + height / 2 + 20);
-      context.rotate(-Math.PI / 2);
-      context.fillText(yName, 0, 0);
       context.restore();
     }
   }

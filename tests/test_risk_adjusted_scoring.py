@@ -262,9 +262,12 @@ def test_old_count_and_secondary_scaling_formulas_are_absent():
         "0.10 * final['risk_penalty']",
     ]:
         assert forbidden not in source
-    assert '"raw": (final["raw_corr_score"], 0.25)' in source
-    assert '"residual": (residual_score, 0.25)' in source
-    assert '"lagq": (final["lag_quality"], 0.10)' in source
+    assert '"raw": (final["raw_corr_score"], 0.25)' not in source
+    assert '"residual": (residual_score, 0.25)' not in source
+    parts_source = source.split("parts = {", 1)[1].split("}", 1)[0]
+    assert parts_source.count('"correlation":') == 1
+    assert 'final["raw_corr_score"]' not in parts_source
+    assert "residual_score" not in parts_source
 
 
 def test_risk_constants_match_audited_values():

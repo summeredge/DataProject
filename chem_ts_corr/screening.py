@@ -41,6 +41,17 @@ CLASS_PRIORITY_ADJUSTMENT = {
     "poor_quality": -0.40,
     "uncertain_candidate": -0.10,
 }
+CORRELATION_EVIDENCE_WEIGHTS = {
+    "association": 0.40,
+    "independent_signal": 0.60,
+}
+EVIDENCE_COMPONENT_WEIGHTS = {
+    "correlation": 0.50,
+    "regime": 0.15,
+    "rolling": 0.15,
+    "lag_quality": 0.10,
+    "model_lift": 0.10,
+}
 
 
 def load_roles(config: AnalysisConfig, columns: list[str]) -> dict[str, str]:
@@ -314,6 +325,27 @@ def classify_candidate(row: pd.Series) -> str:
     return "uncertain_candidate"
 
 
+def _combine_correlation_evidence(
+    association_score: pd.Series,
+    independent_signal_score: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
+    association = pd.to_numeric(association_score, errors="coerce").astype(float)
+    independent = pd.to_numeric(independent_signal_score, errors="coerce").astype(float)
+    verified = independent.notna()
+    verified_score = (
+        CORRELATION_EVIDENCE_WEIGHTS["association"] * association
+        + CORRELATION_EVIDENCE_WEIGHTS["independent_signal"]
+        * independent
+    )
+    combined = association.where(~verified, verified_score)
+    status = pd.Series(
+        np.where(verified, "independent_verified", "association_only"),
+        index=association_score.index,
+        dtype=object,
+    )
+    return combined.clip(0, 1), status
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
@@ -394,11 +426,14 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "association_score", "residual_corr", "residual_corr_score", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
-    final = final.merge(residual[[c for c in ["variable", "residual_corr"] if c in residual.columns]], on="variable", how="left")
+    residual_source = residual[[c for c in ["variable", "residual_corr"] if c in residual.columns]].copy()
+    if "variable" not in residual_source.columns:
+        residual_source = pd.DataFrame(columns=["variable"])
+    final = final.merge(residual_source, on="variable", how="left")
     final = final.merge(stability[[c for c in ["variable", "regime_stability_final"] if c in stability.columns]], on="variable", how="left")
     final = final.merge(model_lift[[c for c in ["variable", "model_lift", "status"] if c in model_lift.columns]], on="variable", how="left")
     risk_columns = ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
@@ -420,17 +455,30 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["model_lift_status"] = np.where(lift_raw.notna(), "ok", "not_computed")
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
     final["raw_corr_score"] = final["raw_corr"].fillna(0).clip(0, 1)
-    residual_score = residual_raw.clip(0,1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
     final["lag_quality"] = lagq_raw.clip(0,1)
     final["model_lift_score"] = lift_raw.clip(0,1)
+    final["association_score"] = final["raw_corr_score"].clip(0, 1)
+    final["independent_signal_score"] = residual_raw.clip(0, 1)
+    (
+        final["correlation_evidence_score"],
+        final["correlation_evidence_status"],
+    ) = _combine_correlation_evidence(
+        final["association_score"], final["independent_signal_score"]
+    )
     display_residual = residual_raw.fillna(final["raw_corr_score"]).clip(0,1)
     display_regime = regime_raw.fillna(0.5).clip(0,1)
     display_rolling = rolling_raw.fillna(0.5).clip(0,1)
     display_lagq = lagq_raw.fillna(0.5).clip(0,1)
     display_lift = lift_raw.fillna(0.0).clip(0,1)
-    parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (residual_score, 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
+    parts = {
+        "correlation": (final["correlation_evidence_score"], EVIDENCE_COMPONENT_WEIGHTS["correlation"]),
+        "regime": (final["regime_stability_final"], EVIDENCE_COMPONENT_WEIGHTS["regime"]),
+        "rolling": (final["rolling_stability"], EVIDENCE_COMPONENT_WEIGHTS["rolling"]),
+        "lagq": (final["lag_quality"], EVIDENCE_COMPONENT_WEIGHTS["lag_quality"]),
+        "lift": (final["model_lift_score"], EVIDENCE_COMPONENT_WEIGHTS["model_lift"]),
+    }
     num = 0
     den = 0
     for series, w in parts.values():

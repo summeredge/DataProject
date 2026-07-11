@@ -219,3 +219,26 @@ python -m chem_ts_corr.cli analyze `
 相关性初筛不能证明工艺因果。工业装置里常见的伪相关来源包括共同负荷变化、控制回路、物料停留时间、批次切换、牌号切换、开停车、仪表漂移和数据压缩策略。
 
 因此，初筛结果应作为“候选线索”，不是最终结论。
+
+## 筛选评分评价基线
+
+对已有运行目录生成当前排名的评价基线：
+
+```bash
+python -m chem_ts_corr.ranking_baseline \
+  --run-dir runs/<run_id>
+```
+
+带人工评价清单时：
+
+```bash
+python -m chem_ts_corr.ranking_baseline \
+  --run-dir runs/<run_id> \
+  --expectations ranking_expectations.csv
+```
+
+`expected_class` 可取值：
+
+- `reasonable_driver`：用户认为工艺上合理的驱动候选
+- `implausible_driver`：用户认为工艺上不合理的驱动候选
+- `neutral`：只记录、不参与合理/不合理指标

@@ -11,6 +11,26 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
+RISK_PENALTY_WEIGHTS = {
+    "formula_like": 0.00,
+    "strong_formula_leakage": 0.20,
+    "common_capacity_driver": 0.12,
+    "closed_loop_suspect": 0.12,
+    "target_leads_variable": 0.10,
+    "unstable_across_regimes": 0.04,
+    "unstable_over_time": 0.04,
+    "lag_boundary": 0.03,
+    "low_model_lift": 0.05,
+    "poor_data_quality": 0.15,
+    "residual_collinearity": 0.04,
+}
+RISK_SCORE_CAPS = {
+    "strong_formula_leakage": 0.25,
+    "poor_data_quality": 0.44,
+    "target_leads_variable": 0.59,
+    "closed_loop_suspect": 0.59,
+    "common_capacity_driver": 0.74,
+}
 
 
 def load_roles(config: AnalysisConfig, columns: list[str]) -> dict[str, str]:
@@ -233,6 +253,29 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return to_float(value, default)
 
 
+def _risk_token_set(value: object) -> set[str]:
+    if value is None:
+        return set()
+    try:
+        if pd.isna(value):
+            return set()
+    except (TypeError, ValueError):
+        return set()
+    return {token.strip() for token in str(value).split(";") if token.strip()}
+
+
+def _risk_adjustment(value: object) -> tuple[float, float, str]:
+    tokens = _risk_token_set(value)
+    penalty = min(0.60, sum(RISK_PENALTY_WEIGHTS.get(token, 0.0) for token in tokens))
+    cap = 1.0
+    reason = ""
+    for token, token_cap in RISK_SCORE_CAPS.items():
+        if token in tokens and token_cap < cap:
+            cap = token_cap
+            reason = token
+    return float(penalty), float(cap), reason
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
@@ -313,14 +356,18 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_penalty", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "final_score", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
     final = final.merge(residual[[c for c in ["variable", "residual_corr"] if c in residual.columns]], on="variable", how="left")
     final = final.merge(stability[[c for c in ["variable", "regime_stability_final"] if c in stability.columns]], on="variable", how="left")
     final = final.merge(model_lift[[c for c in ["variable", "model_lift", "status"] if c in model_lift.columns]], on="variable", how="left")
-    final = final.merge(risks[[c for c in ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"] if c in risks.columns]], on="variable", how="left")
+    risk_columns = ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
+    risk_source = risks[[c for c in risk_columns if c in risks.columns]].copy()
+    if "variable" not in risk_source.columns:
+        risk_source = pd.DataFrame(columns=["variable"])
+    final = final.merge(risk_source, on="variable", how="left")
     final = final.merge(lag_peak_quality[[c for c in ["variable", "lag_quality", "lag_boundary_flag"] if c in lag_peak_quality.columns]], on="variable", how="left")
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
 
@@ -345,9 +392,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     display_rolling = rolling_raw.fillna(0.5).clip(0,1)
     display_lagq = lagq_raw.fillna(0.5).clip(0,1)
     display_lift = lift_raw.fillna(0.0).clip(0,1)
-    strong = final.get("strong_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 10)
-    weak = final.get("weak_risk_count", pd.Series(index=final.index, dtype=float)).fillna(0).clip(0, 20)
-    final["risk_penalty"] = 0.12 * strong + 0.03 * weak
     parts = {"raw": (final["raw_corr_score"], 0.25), "residual": (residual_score, 0.25), "regime": (final["regime_stability_final"], 0.15), "rolling": (final["rolling_stability"], 0.15), "lagq": (final["lag_quality"], 0.10), "lift": (final["model_lift_score"], 0.10)}
     num = 0
     den = 0
@@ -355,8 +399,13 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         valid = series.notna()
         num = num + series.fillna(0) * w
         den = den + valid.astype(float) * w
-    final["final_score"] = (num / den.replace(0, np.nan)).fillna(0) - 0.10 * final["risk_penalty"]
-    final["final_score"] = final["final_score"].clip(lower=0, upper=1)
+    final["evidence_score"] = (num / den.replace(0, np.nan)).fillna(0).clip(0, 1)
+    risk_values = final.get("risk_flags", pd.Series("", index=final.index)).map(_risk_adjustment)
+    final[["risk_penalty", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
+        risk_values.tolist(), index=final.index
+    )
+    penalized_score = (final["evidence_score"] - final["risk_penalty"]).clip(0, 1)
+    final["final_score"] = np.minimum(penalized_score, final["risk_score_cap"]).clip(0, 1)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["residual_corr_score"] = display_residual
@@ -401,8 +450,7 @@ def _grade_candidate(row: pd.Series) -> str:
 
 
 def _recommend_use(row: pd.Series) -> str:
-    risk_value = row.get("risk_flags", "")
-    flags = "" if pd.isna(risk_value) else str(risk_value)
+    flags = _risk_token_set(row.get("risk_flags", ""))
     grade = str(row.get("candidate_grade", "E"))
     if "poor_data_quality" in flags:
         return "poor_quality_variable"

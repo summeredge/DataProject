@@ -6,6 +6,21 @@ import pandas as pd
 from chem_ts_corr.common import benjamini_hochberg
 
 
+LAG_PEAK_QUALITY_COLUMNS = [
+    "variable",
+    "best_lag",
+    "best_score",
+    "nearby_score_mean",
+    "peak_sharpness",
+    "second_peak_score",
+    "peak_prominence",
+    "local_sharpness",
+    "shape_quality",
+    "lag_boundary_flag",
+    "lag_quality",
+]
+
+
 def _safe_corr_stats(x: pd.Series, y: pd.Series, method: str) -> dict[str, float | int]:
     aligned = pd.concat([x, y], axis=1).dropna()
     if len(aligned) < 5:
@@ -95,21 +110,56 @@ def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
 
 def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFrame:
     if lag_scores.empty:
-        return pd.DataFrame(columns=["variable", "best_lag", "best_score", "nearby_score_mean", "peak_sharpness", "lag_boundary_flag", "lag_quality"])
+        return pd.DataFrame(columns=LAG_PEAK_QUALITY_COLUMNS)
     ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
     rows = []
-    for var, g in ranked.groupby("variable"):
+    epsilon = 1e-12
+    for var, g in ranked.groupby("variable", sort=False):
         g = g.dropna(subset=["score"])
         if g.empty:
             continue
-        best = g.sort_values("score", ascending=False).iloc[0]
+        best = g.loc[g["score"].idxmax()]
         bl = int(best["lag"])
-        nearby = g[g["lag"].between(bl - 1, bl + 1)]["score"].mean()
-        peak_sharpness = float(best["score"] - (nearby if pd.notna(nearby) else 0.0))
+        best_score = float(best["score"])
+
+        nearby_scores = g.loc[g["lag"].sub(bl).abs().eq(1), "score"]
+        nearby = float(nearby_scores.mean()) if not nearby_scores.empty else np.nan
+        peak_sharpness = max(0.0, best_score - nearby) if pd.notna(nearby) else 0.0
+        local_sharpness = float(np.clip(peak_sharpness / max(best_score, epsilon), 0.0, 1.0))
+
+        competing_scores = g.loc[g["lag"].sub(bl).abs().gt(1), "score"]
+        second_peak_score = float(competing_scores.max()) if not competing_scores.empty else np.nan
+        peak_prominence = (
+            float(np.clip((best_score - second_peak_score) / max(best_score, epsilon), 0.0, 1.0))
+            if pd.notna(second_peak_score)
+            else 0.0
+        )
+        shape_quality = float(
+            np.clip(
+                0.70 * peak_prominence
+                + 0.30 * min(peak_prominence, local_sharpness),
+                0.0,
+                1.0,
+            )
+        )
         boundary = abs(bl) == max_lag
-        lag_quality = max(0.0, min(1.0, float(best["score"]) - max(0.0, -peak_sharpness) - (0.15 if boundary else 0.0)))
-        rows.append({"variable": var, "best_lag": bl, "best_score": float(best["score"]), "nearby_score_mean": float(nearby if pd.notna(nearby) else 0.0), "peak_sharpness": peak_sharpness, "lag_boundary_flag": boundary, "lag_quality": lag_quality})
-    return pd.DataFrame(rows)
+        lag_quality = float(np.clip(shape_quality - (0.25 if boundary else 0.0), 0.0, 1.0))
+        rows.append(
+            {
+                "variable": var,
+                "best_lag": bl,
+                "best_score": best_score,
+                "nearby_score_mean": nearby,
+                "peak_sharpness": peak_sharpness,
+                "second_peak_score": second_peak_score,
+                "peak_prominence": peak_prominence,
+                "local_sharpness": local_sharpness,
+                "shape_quality": shape_quality,
+                "lag_boundary_flag": boundary,
+                "lag_quality": lag_quality,
+            }
+        )
+    return pd.DataFrame(rows, columns=LAG_PEAK_QUALITY_COLUMNS)
 
 
 def describe_lag_direction(lag: int) -> str:

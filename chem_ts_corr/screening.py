@@ -31,6 +31,16 @@ RISK_SCORE_CAPS = {
     "closed_loop_suspect": 0.59,
     "common_capacity_driver": 0.74,
 }
+CLASS_PRIORITY_ADJUSTMENT = {
+    "upstream_driver_candidate": 0.00,
+    "synchronous_association": -0.05,
+    "downstream_response": -0.30,
+    "closed_loop_related": -0.25,
+    "capacity_driven": -0.15,
+    "formula_or_derived": -0.50,
+    "poor_quality": -0.40,
+    "uncertain_candidate": -0.10,
+}
 
 
 def load_roles(config: AnalysisConfig, columns: list[str]) -> dict[str, str]:
@@ -276,6 +286,34 @@ def _risk_adjustment(value: object) -> tuple[float, float, str]:
     return float(penalty), float(cap), reason
 
 
+def classify_candidate(row: pd.Series) -> str:
+    flags = _risk_token_set(row.get("risk_flags", ""))
+    for token, candidate_class in [
+        ("strong_formula_leakage", "formula_or_derived"),
+        ("poor_data_quality", "poor_quality"),
+        ("target_leads_variable", "downstream_response"),
+        ("closed_loop_suspect", "closed_loop_related"),
+        ("common_capacity_driver", "capacity_driven"),
+    ]:
+        if token in flags:
+            return candidate_class
+
+    lag_value = row.get("best_lag", row.get("lag", pd.NA))
+    try:
+        if pd.isna(lag_value):
+            return "uncertain_candidate"
+    except (TypeError, ValueError):
+        return "uncertain_candidate"
+    lag = _safe_float(lag_value, default=np.nan)
+    if np.isnan(lag):
+        return "uncertain_candidate"
+    if lag > 0:
+        return "upstream_driver_candidate"
+    if lag == 0:
+        return "synchronous_association"
+    return "uncertain_candidate"
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
@@ -356,7 +394,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "residual_corr", "residual_corr_score", "residual_status", "regime_stability_final", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -406,6 +444,15 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     )
     penalized_score = (final["evidence_score"] - final["risk_penalty"]).clip(0, 1)
     final["final_score"] = np.minimum(penalized_score, final["risk_score_cap"]).clip(0, 1)
+    final["association_rank"] = final["evidence_score"].rank(
+        method="first", ascending=False
+    ).astype(int)
+    final["candidate_class"] = final.apply(classify_candidate, axis=1)
+    class_adjustment = final["candidate_class"].map(CLASS_PRIORITY_ADJUSTMENT).fillna(0.0)
+    final["driver_priority_score"] = (final["final_score"] + class_adjustment).clip(0, 1)
+    final["driver_rank"] = final["driver_priority_score"].rank(
+        method="first", ascending=False
+    ).astype(int)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["residual_corr_score"] = display_residual

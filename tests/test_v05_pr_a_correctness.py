@@ -57,6 +57,7 @@ def test_final_ranked_features_does_not_compute_residual_score_twice():
         rolling_corr_scores=empty,
         top_k=10,
     )
-    # Missing residual evidence should be displayed using raw score exactly once.
-    assert result.loc[0, "residual_corr_score"] == pytest.approx(0.5)
+    assert pd.isna(result.loc[0, "independent_signal_score"])
+    assert result.loc[0, "correlation_evidence_score"] == pytest.approx(0.5)
+    assert result.loc[0, "correlation_evidence_status"] == "association_only"
     assert result.loc[0, "residual_status"] == "not_computed"

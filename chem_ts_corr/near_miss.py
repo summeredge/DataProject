@@ -14,6 +14,7 @@ OUT_COLS = [
     "direction",
     "raw_score",
     "residual_corr",
+    "independent_signal_score",
     "lag_quality",
     "ranked_feature_rank",
     "ranked_final_score",
@@ -49,7 +50,7 @@ def build_near_miss_candidates(
     base = _merge_optional(base, _lag_quality_metadata(lag_peak_quality))
     base = _merge_optional(base, _risk_metadata(risk_flags), fill_existing=True)
 
-    for col in ["ranked_feature_rank", "ranked_final_score", "residual_corr", "lag_quality", "risk_flags", "recommended_use", "recommended_action"]:
+    for col in ["ranked_feature_rank", "ranked_final_score", "residual_corr", "independent_signal_score", "lag_quality", "risk_flags", "recommended_use", "recommended_action"]:
         if col not in base.columns:
             base[col] = pd.NA
 
@@ -118,8 +119,12 @@ def _residual_metadata(residual_corr_scores: pd.DataFrame | None) -> pd.DataFram
     if "residual_corr" not in frame.columns:
         return pd.DataFrame(columns=["variable"])
     frame["residual_corr"] = pd.to_numeric(frame["residual_corr"], errors="coerce").abs()
+    frame["independent_signal_score"] = frame["residual_corr"].clip(0, 1)
+    frame = frame.dropna(subset=["residual_corr"])
+    if frame.empty:
+        return pd.DataFrame(columns=["variable", "residual_corr", "independent_signal_score"])
     idx = frame.groupby("variable")["residual_corr"].idxmax()
-    return frame.loc[idx, ["variable", "residual_corr"]]
+    return frame.loc[idx, ["variable", "residual_corr", "independent_signal_score"]]
 
 
 def _lag_quality_metadata(lag_peak_quality: pd.DataFrame | None) -> pd.DataFrame:
@@ -160,7 +165,8 @@ def _is_obvious_control_reference(row: pd.Series) -> bool:
 
 def _near_miss_score(row: pd.Series) -> float:
     raw = _number(row.get("raw_score"), 0.0)
-    residual = _number(row.get("residual_corr"), 0.0)
+    independent = row.get("independent_signal_score")
+    residual = _number(independent, 0.0) if pd.notna(independent) else 0.0
     lag_quality = _number(row.get("lag_quality"), 0.0)
     score = raw + 0.3 * abs(residual) + 0.2 * lag_quality
     risks = _text(row.get("risk_flags", ""))
@@ -172,12 +178,13 @@ def _near_miss_score(row: pd.Series) -> float:
 def _near_miss_reason(row: pd.Series) -> str:
     reasons: list[str] = []
     raw = _number(row.get("raw_score"), 0.0)
-    residual = abs(_number(row.get("residual_corr"), 0.0))
+    independent = row.get("independent_signal_score")
+    residual = _number(independent, 0.0) if pd.notna(independent) else None
     lag_quality = _number(row.get("lag_quality"), 0.0)
     risks = _text(row.get("risk_flags", ""))
     if raw >= 0.3:
         reasons.append("raw_lag_signal")
-    if residual >= 0.2:
+    if residual is not None and residual >= 0.2:
         reasons.append("residual_signal")
     if lag_quality >= 0.5:
         reasons.append("clear_lag_peak")

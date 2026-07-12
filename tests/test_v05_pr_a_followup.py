@@ -29,11 +29,11 @@ def test_preprocess_keeps_minimum_row_guard_after_recording_drop_metadata():
 
 def test_final_ranked_features_removes_redundant_residual_score_assignment():
     source = inspect.getsource(final_ranked_features)
-    assert source.count('final["residual_corr_score"]') == 1
-    assert "display_residual" in source
+    assert "residual_corr_score" not in source
+    assert "display_residual" not in source
 
 
-def test_final_ranked_features_residual_display_semantics_unchanged():
+def test_final_ranked_features_missing_residual_uses_association_only():
     ranked = pd.DataFrame({"variable": ["x"], "lag": [1], "score": [0.5], "direction": ["变量领先目标"]})
     empty = pd.DataFrame(columns=["variable"])
     result = final_ranked_features(
@@ -46,5 +46,7 @@ def test_final_ranked_features_residual_display_semantics_unchanged():
         rolling_corr_scores=empty,
         top_k=10,
     )
-    assert result.loc[0, "residual_corr_score"] == pytest.approx(0.5)
+    assert pd.isna(result.loc[0, "independent_signal_score"])
+    assert result.loc[0, "correlation_evidence_score"] == pytest.approx(0.5)
+    assert result.loc[0, "correlation_evidence_status"] == "association_only"
     assert result.loc[0, "residual_status"] == "not_computed"

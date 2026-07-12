@@ -220,11 +220,11 @@ def test_force_include_keeps_adjusted_low_rank_variable():
     assert result.loc["forced", "risk_score_cap"] == pytest.approx(0.59)
 
 
-def test_output_keeps_legacy_and_new_fields():
+def test_output_uses_formal_correlation_evidence_fields():
     result = _evaluate([_ranked("x", 0.8)])
     required = {
-        "variable", "raw_corr", "raw_corr_score", "association_score", "residual_corr",
-        "residual_corr_score", "independent_signal_score", "residual_status",
+        "variable", "raw_corr", "association_score", "residual_corr",
+        "independent_signal_score", "residual_status",
         "correlation_evidence_score", "correlation_evidence_status", "evidence_score",
         "risk_penalty", "risk_score_cap", "final_score", "candidate_grade",
         "recommended_use", "candidate_class", "association_rank", "driver_rank",
@@ -282,9 +282,9 @@ def test_old_double_counting_source_pattern_is_absent():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
     parts_source = source.split("parts = {", 1)[1].split("}", 1)[0]
 
-    assert '"raw": (final["raw_corr_score"], 0.25)' not in source
+    assert '"raw_corr_score"' not in source
     assert '"residual": (residual_score, 0.25)' not in source
     assert "residual_score =" not in source
     assert parts_source.count('"correlation":') == 1
-    assert 'final["raw_corr_score"]' not in parts_source
+    assert 'final["association_score"]' not in parts_source
     assert "residual_score" not in parts_source

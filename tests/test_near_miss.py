@@ -42,9 +42,45 @@ def test_near_miss_merges_risk_flags_and_residuals():
     reason = out.iloc[0]["near_miss_reason"]
 
     assert out.iloc[0]["risk_flags"] == "lag_boundary;target_leads_variable"
+    assert out.iloc[0]["independent_signal_score"] == 0.35
     assert "residual_signal" in reason
     assert "lag_boundary_risk" in reason
     assert "target_lead_risk" in reason
+
+
+def test_near_miss_missing_residual_does_not_fabricate_independent_signal():
+    lag_scores = pd.DataFrame(
+        [{"variable": "x", "lag": 1, "abs_pearson": 0.9, "abs_spearman": 0.8}]
+    )
+
+    out = build_near_miss_candidates(lag_scores, pd.DataFrame())
+
+    assert pd.isna(out.loc[0, "independent_signal_score"])
+    assert "residual_signal" not in out.loc[0, "near_miss_reason"]
+
+
+def test_near_miss_nan_residual_does_not_fabricate_independent_signal():
+    lag_scores = pd.DataFrame(
+        [{"variable": "x", "lag": 1, "abs_pearson": 0.9, "abs_spearman": 0.8}]
+    )
+    residual = pd.DataFrame([{"variable": "x", "residual_corr": float("nan")}])
+
+    out = build_near_miss_candidates(lag_scores, pd.DataFrame(), residual_corr_scores=residual)
+
+    assert pd.isna(out.loc[0, "independent_signal_score"])
+    assert "residual_signal" not in out.loc[0, "near_miss_reason"]
+
+
+def test_near_miss_zero_residual_is_valid_but_not_strong_signal():
+    lag_scores = pd.DataFrame(
+        [{"variable": "x", "lag": 1, "abs_pearson": 0.9, "abs_spearman": 0.8}]
+    )
+    residual = pd.DataFrame([{"variable": "x", "residual_corr": 0.0}])
+
+    out = build_near_miss_candidates(lag_scores, pd.DataFrame(), residual_corr_scores=residual)
+
+    assert out.loc[0, "independent_signal_score"] == 0.0
+    assert "residual_signal" not in out.loc[0, "near_miss_reason"]
 
 
 def test_near_miss_quality_and_formula_risk_affect_score_and_reason():

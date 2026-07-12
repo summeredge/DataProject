@@ -500,7 +500,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "raw_corr_score", "association_score", "residual_corr", "residual_corr_score", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "association_score", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -535,23 +535,18 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["rolling_status"] = np.where(rolling_raw.notna(), "ok", "not_computed")
     final["model_lift_status"] = np.where(lift_raw.notna(), "ok", "not_computed")
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
-    final["raw_corr_score"] = final["raw_corr"].fillna(0).clip(0, 1)
+    final["association_score"] = pd.to_numeric(final["raw_corr"], errors="coerce").fillna(0.0).clip(0, 1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
     final["lag_quality"] = lagq_raw.clip(0,1)
     final["model_lift_score"] = lift_raw.clip(0,1)
-    final["association_score"] = final["raw_corr_score"].clip(0, 1)
-    final["independent_signal_score"] = residual_raw.clip(0, 1)
+    final["independent_signal_score"] = pd.to_numeric(residual_raw, errors="coerce").clip(0, 1)
     (
         final["correlation_evidence_score"],
         final["correlation_evidence_status"],
     ) = _combine_correlation_evidence(
         final["association_score"], final["independent_signal_score"]
     )
-    display_residual = residual_raw.fillna(final["raw_corr_score"]).clip(0,1)
-    display_rolling = rolling_raw.fillna(0.5).clip(0,1)
-    display_lagq = lagq_raw.fillna(0.5).clip(0,1)
-    display_lift = lift_raw.fillna(0.0).clip(0,1)
     parts = {
         "correlation": (final["correlation_evidence_score"], EVIDENCE_COMPONENT_WEIGHTS["correlation"]),
         "regime": (final["regime_stability_final"], EVIDENCE_COMPONENT_WEIGHTS["regime"]),
@@ -583,10 +578,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     ).astype(int)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
-    final["residual_corr_score"] = display_residual
-    final["rolling_stability"] = display_rolling
-    final["lag_quality"] = display_lagq
-    final["model_lift_score"] = display_lift
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
     final["recommended_use"] = final.apply(_recommend_use, axis=1)
     control_set = set(control_columns or [])

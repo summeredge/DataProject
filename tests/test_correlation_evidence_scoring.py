@@ -190,7 +190,7 @@ def test_shadow_ranking_fields_remain_positive_integers():
     assert {"candidate_class", "driver_priority_score"}.issubset(result.columns)
 
 
-def test_main_sort_and_topk_still_use_final_score():
+def test_main_sort_and_topk_use_driver_rank():
     rows = [_ranked("a", 0.95), _ranked("b", 0.80), _ranked("c", 0.70)]
     residual = pd.DataFrame(
         [
@@ -202,7 +202,7 @@ def test_main_sort_and_topk_still_use_final_score():
     full = _evaluate(rows, residual=residual)
     top = _evaluate(rows, residual=residual, top_k=1)
 
-    assert full["final_score"].is_monotonic_decreasing
+    assert full["driver_rank"].is_monotonic_increasing
     assert top.loc[0, "variable"] == full.loc[0, "variable"]
 
 

@@ -260,7 +260,7 @@ def test_pr3_risk_penalty_and_cap_remain_active():
     assert bool(row["force_included"]) is True
 
 
-def test_pr4_direction_and_main_sort_remain_unchanged():
+def test_pr4_direction_and_driver_rank_sort_remain_active():
     variable_only = pd.DataFrame(columns=["variable"])
     ranked = pd.DataFrame([
         {"variable": "up", "score": 0.7, "lag": 1},
@@ -274,7 +274,7 @@ def test_pr4_direction_and_main_sort_remain_unchanged():
 
     assert indexed.loc["up", "candidate_class"] == "upstream_driver_candidate"
     assert indexed.loc["down", "candidate_class"] == "downstream_response"
-    assert result["final_score"].is_monotonic_decreasing
+    assert result["driver_rank"].is_monotonic_increasing
 
 
 def test_pr5_parts_keep_single_correlation_entry():

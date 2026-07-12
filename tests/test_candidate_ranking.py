@@ -181,7 +181,7 @@ def test_output_contains_legacy_and_shadow_fields_in_order():
     assert result.columns[final_index + 1 : final_index + 5].tolist() == shadow
 
 
-def test_main_output_order_and_topk_still_use_final_score():
+def test_main_output_order_and_topk_use_driver_rank():
     result = _evaluate(
         [_row("a", 0.9), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
@@ -189,7 +189,7 @@ def test_main_output_order_and_topk_still_use_final_score():
     )
 
     assert result["variable"].tolist() == ["b"]
-    assert result.loc[0, "final_score"] == pytest.approx(0.8)
+    assert result.loc[0, "driver_rank"] == 1
 
 
 def test_equal_scores_keep_original_order_for_both_shadow_ranks():
@@ -228,4 +228,5 @@ def test_shadow_output_static_guardrails():
     assert "final_score =\ndriver_priority_score" not in source
     assert 'sort_values("driver_rank")' not in source
     assert 'sort_values("driver_priority_score")' not in source
-    assert 'sort_values("final_score", ascending=False)' in source
+    assert "PRIMARY_RANK_COLUMN" in source
+    assert "ascending=True" in source

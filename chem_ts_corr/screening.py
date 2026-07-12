@@ -71,6 +71,8 @@ REGIME_STABILITY_COLUMNS = [
     "regime_count",
     "regime_evidence_status",
 ]
+PRIMARY_RANK_COLUMN = "driver_rank"
+PRIMARY_SCORE_COLUMN = "driver_priority_score"
 
 
 def load_roles(config: AnalysisConfig, columns: list[str]) -> dict[str, str]:
@@ -596,11 +598,10 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         rank_base = final
         if control_set:
             rank_base = final[~final["variable"].astype(str).isin(control_set)]
-        top = rank_base.sort_values("final_score", ascending=False).head(top_k)
+        top = rank_base.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable").head(top_k)
         forced_rows = final[final["force_included"]]
         final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
-    else:
-        final = final.sort_values("final_score", ascending=False)
+    final = final.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable")
 
     for c in cols:
         if c not in final.columns:

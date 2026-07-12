@@ -33,6 +33,15 @@ DEFAULT_XGB_PARAMS = {
     "random_state": 42,
 }
 DEFAULT_EARLY_STOPPING_ROUNDS = 50
+XGB_VALIDATION_STATUS = frozenset(
+    {
+        "validated_incremental_signal",
+        "weak_incremental_value",
+        "redundant_with_baseline",
+        "unstable_out_of_time",
+        "insufficient_features",
+    }
+)
 
 AUTO_ALLOWED_RECOMMENDATIONS = frozenset(
     {
@@ -112,6 +121,42 @@ class XGBValidationResult:
     fold_metrics: pd.DataFrame
     summary: pd.DataFrame
     predictions: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class CandidateUpliftMetric:
+    variable: str
+    fold: int
+    train_rows: int
+    validation_rows: int
+    test_rows: int
+    rmse: float
+    mae: float
+    r2: float
+    baseline_rmse: float
+    baseline_mae: float
+    rmse_improvement_pct: float
+    mae_improvement_pct: float
+    best_iteration: int | None
+
+
+@dataclass(frozen=True)
+class CandidateUpliftSummary:
+    variable: str
+    fold_count: int
+    positive_rmse_fold_count: int
+    positive_mae_fold_count: int
+    positive_rmse_fold_ratio: float
+    median_rmse_improvement_pct: float
+    median_mae_improvement_pct: float
+    mean_rmse_improvement_pct: float
+    mean_mae_improvement_pct: float
+    worst_fold_rmse_improvement_pct: float
+    validation_status: str
+
+    def __post_init__(self) -> None:
+        if self.validation_status not in XGB_VALIDATION_STATUS:
+            raise ValueError("unknown candidate uplift validation_status")
 
 
 def build_xgb_candidate_pool(
@@ -521,6 +566,241 @@ def run_xgb_time_validation(
         :, ["fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction"]
     ]
     return XGBValidationResult(fold_metrics=fold_metrics, summary=summary, predictions=predictions)
+
+
+def run_candidate_uplift_validation(
+    feature_sets: XGBFeatureSets,
+    splits: list[XGBTimeSplit],
+    candidate_pool: pd.DataFrame,
+    *,
+    params: dict[str, object] | None = None,
+    early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    _require_xgb_dependency()
+    if not splits:
+        raise ValueError("No time splits provided")
+    if feature_sets.features.empty or not feature_sets.m1_features:
+        raise ValueError("No valid XGB features available")
+    if not feature_sets.features.index.equals(feature_sets.target.index):
+        raise ValueError("XGB features and target must use the same index")
+
+    pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
+    candidates = _ordered_uplift_candidates(pool)[:DEFAULT_XGB_TOP_N]
+    available = set(feature_sets.features.columns)
+    m1_features = tuple(feature_sets.m1_features)
+    if not set(m1_features).issubset(available):
+        raise ValueError("No valid XGB features available")
+
+    valid_features: dict[str, tuple[str, ...]] = {}
+    invalid_variables: list[str] = []
+    for variable in candidates:
+        mapped = feature_sets.candidate_feature_map.get(variable, ())
+        added = tuple(
+            feature for feature in _stable_unique(mapped) if feature in available and feature not in m1_features
+        )
+        if added:
+            valid_features[variable] = added
+        else:
+            invalid_variables.append(variable)
+
+    metric_rows: list[dict[str, object]] = []
+    baseline_cache: dict[int, XGBFoldMetric] = {}
+    for split in splits:
+        if not valid_features:
+            break
+        X_m1 = feature_sets.features.loc[:, m1_features]
+        y_train = feature_sets.target.iloc[split.train_slice]
+        y_valid = feature_sets.target.iloc[split.validation_slice]
+        y_test = feature_sets.target.iloc[split.test_slice]
+        baseline_metric, _ = train_xgb_fold(
+            X_m1.iloc[split.train_slice],
+            y_train,
+            X_m1.iloc[split.validation_slice],
+            y_valid,
+            X_m1.iloc[split.test_slice],
+            y_test,
+            fold=split.fold,
+            model_name="M1",
+            params=params,
+            early_stopping_rounds=early_stopping_rounds,
+        )
+        baseline_cache[split.fold] = baseline_metric
+
+        for variable, added in valid_features.items():
+            candidate_columns = (*m1_features, *added)
+            candidate_frame = feature_sets.features.loc[:, candidate_columns]
+            candidate_metric, _ = train_xgb_fold(
+                candidate_frame.iloc[split.train_slice],
+                y_train,
+                candidate_frame.iloc[split.validation_slice],
+                y_valid,
+                candidate_frame.iloc[split.test_slice],
+                y_test,
+                fold=split.fold,
+                model_name="M2",
+                params=params,
+                early_stopping_rounds=early_stopping_rounds,
+            )
+            baseline = baseline_cache[split.fold]
+            metric_rows.append(
+                asdict(
+                    CandidateUpliftMetric(
+                        variable=variable,
+                        fold=split.fold,
+                        train_rows=candidate_metric.train_rows,
+                        validation_rows=candidate_metric.validation_rows,
+                        test_rows=candidate_metric.test_rows,
+                        rmse=candidate_metric.rmse,
+                        mae=candidate_metric.mae,
+                        r2=candidate_metric.r2,
+                        baseline_rmse=baseline.rmse,
+                        baseline_mae=baseline.mae,
+                        rmse_improvement_pct=_improvement_pct(baseline.rmse, candidate_metric.rmse),
+                        mae_improvement_pct=_improvement_pct(baseline.mae, candidate_metric.mae),
+                        best_iteration=candidate_metric.best_iteration,
+                    )
+                )
+            )
+
+    metric_columns = list(CandidateUpliftMetric.__dataclass_fields__)
+    metrics = pd.DataFrame(metric_rows, columns=metric_columns)
+    summary = summarize_candidate_uplift(metrics)
+    if invalid_variables:
+        summary = pd.DataFrame(
+            [
+                *summary.to_dict("records"),
+                *(asdict(_insufficient_uplift_summary(variable)) for variable in invalid_variables),
+            ],
+            columns=CandidateUpliftSummary.__dataclass_fields__,
+        )
+    if not summary.empty:
+        summary["_candidate_order"] = summary["variable"].map(
+            {variable: order for order, variable in enumerate(candidates)}
+        )
+        summary = summary.sort_values(
+            ["median_rmse_improvement_pct", "_candidate_order"],
+            ascending=[False, True],
+            kind="mergesort",
+            na_position="last",
+        ).drop(columns="_candidate_order").reset_index(drop=True)
+    return metrics, summary
+
+
+def summarize_candidate_uplift(metrics: pd.DataFrame) -> pd.DataFrame:
+    columns = list(CandidateUpliftSummary.__dataclass_fields__)
+    if metrics is None or metrics.empty:
+        return pd.DataFrame(columns=columns)
+    required = {
+        "variable", "rmse_improvement_pct", "mae_improvement_pct",
+    }
+    missing = required.difference(metrics.columns)
+    if missing:
+        raise ValueError(f"candidate uplift metrics missing columns: {', '.join(sorted(missing))}")
+
+    source = metrics.copy(deep=True)
+    rows: list[dict[str, object]] = []
+    for variable in _stable_unique(source["variable"].astype(str).tolist()):
+        group = source[source["variable"].astype(str).eq(variable)]
+        rmse_values = pd.to_numeric(group["rmse_improvement_pct"], errors="coerce").dropna()
+        mae_values = pd.to_numeric(group["mae_improvement_pct"], errors="coerce").dropna()
+        fold_count = int(len(group))
+        positive_rmse = int((rmse_values > 0).sum())
+        negative_rmse = int((rmse_values < 0).sum())
+        positive_mae = int((mae_values > 0).sum())
+        ratio = positive_rmse / fold_count if fold_count else 0.0
+        median_rmse = float(rmse_values.median())
+        median_mae = float(mae_values.median())
+        mean_rmse = float(rmse_values.mean())
+        mean_mae = float(mae_values.mean())
+        worst_rmse = float(rmse_values.min())
+        status = _candidate_validation_status(
+            fold_count=fold_count,
+            positive_rmse_fold_count=positive_rmse,
+            negative_rmse_fold_count=negative_rmse,
+            positive_rmse_fold_ratio=ratio,
+            median_rmse_improvement_pct=median_rmse,
+            median_mae_improvement_pct=median_mae,
+            worst_fold_rmse_improvement_pct=worst_rmse,
+        )
+        rows.append(
+            asdict(
+                CandidateUpliftSummary(
+                    variable=variable,
+                    fold_count=fold_count,
+                    positive_rmse_fold_count=positive_rmse,
+                    positive_mae_fold_count=positive_mae,
+                    positive_rmse_fold_ratio=ratio,
+                    median_rmse_improvement_pct=median_rmse,
+                    median_mae_improvement_pct=median_mae,
+                    mean_rmse_improvement_pct=mean_rmse,
+                    mean_mae_improvement_pct=mean_mae,
+                    worst_fold_rmse_improvement_pct=worst_rmse,
+                    validation_status=status,
+                )
+            )
+        )
+    result = pd.DataFrame(rows, columns=columns)
+    return result.sort_values(
+        "median_rmse_improvement_pct", ascending=False, kind="mergesort", na_position="last"
+    ).reset_index(drop=True)
+
+
+def _candidate_validation_status(
+    *,
+    fold_count: int,
+    positive_rmse_fold_count: int,
+    negative_rmse_fold_count: int,
+    positive_rmse_fold_ratio: float,
+    median_rmse_improvement_pct: float,
+    median_mae_improvement_pct: float,
+    worst_fold_rmse_improvement_pct: float,
+) -> str:
+    if (
+        positive_rmse_fold_count > 0
+        and negative_rmse_fold_count > 0
+        and worst_fold_rmse_improvement_pct < 0
+    ):
+        return "unstable_out_of_time"
+    if (
+        fold_count >= 2
+        and positive_rmse_fold_ratio >= 0.67
+        and median_rmse_improvement_pct > 0
+        and median_mae_improvement_pct >= 0
+    ):
+        return "validated_incremental_signal"
+    if median_rmse_improvement_pct > 0:
+        return "weak_incremental_value"
+    return "redundant_with_baseline"
+
+
+def _insufficient_uplift_summary(variable: str) -> CandidateUpliftSummary:
+    return CandidateUpliftSummary(
+        variable=variable,
+        fold_count=0,
+        positive_rmse_fold_count=0,
+        positive_mae_fold_count=0,
+        positive_rmse_fold_ratio=0.0,
+        median_rmse_improvement_pct=float("nan"),
+        median_mae_improvement_pct=float("nan"),
+        mean_rmse_improvement_pct=float("nan"),
+        mean_mae_improvement_pct=float("nan"),
+        worst_fold_rmse_improvement_pct=float("nan"),
+        validation_status="insufficient_features",
+    )
+
+
+def _ordered_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
+    if candidate_pool.empty or "variable" not in candidate_pool.columns:
+        return []
+    source = candidate_pool.copy(deep=True)
+    source["_source_order"] = range(len(source))
+    source["_candidate_order"] = pd.to_numeric(
+        source.get("candidate_order", pd.Series(index=source.index, dtype=float)), errors="coerce"
+    )
+    source = source.sort_values(
+        ["_candidate_order", "_source_order"], kind="mergesort", na_position="last"
+    )
+    return _stable_unique(_text(variable) for variable in source["variable"] if _text(variable))
 
 
 def _summarize_xgb_metrics(fold_metrics: pd.DataFrame) -> pd.DataFrame:

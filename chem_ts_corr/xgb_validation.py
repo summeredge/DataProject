@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import asdict, dataclass
 from numbers import Integral
 from typing import Sequence
@@ -33,6 +34,7 @@ DEFAULT_XGB_PARAMS = {
     "random_state": 42,
 }
 DEFAULT_EARLY_STOPPING_ROUNDS = 50
+XGB_TRAIN_MODEL_NAMES = frozenset({"M0", "M1", "M2", "CANDIDATE"})
 XGB_VALIDATION_STATUS = frozenset(
     {
         "validated_incremental_signal",
@@ -112,8 +114,8 @@ class XGBFoldMetric:
     r2: float
 
     def __post_init__(self) -> None:
-        if self.model_name not in {"M0", "M1", "M2"}:
-            raise ValueError("model_name must be one of M0, M1, M2")
+        if self.model_name not in XGB_TRAIN_MODEL_NAMES:
+            raise ValueError("model_name must be one of M0, M1, M2, CANDIDATE")
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,16 @@ class XGBValidationResult:
     fold_metrics: pd.DataFrame
     summary: pd.DataFrame
     predictions: pd.DataFrame
+    provenance: XGBValidationProvenance | None = None
+
+
+@dataclass(frozen=True)
+class XGBValidationProvenance:
+    m1_features: tuple[str, ...]
+    split_signature: tuple[tuple[object, ...], ...]
+    parameter_signature: tuple[tuple[str, str], ...]
+    early_stopping_rounds: int
+    data_fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -459,8 +471,8 @@ def train_xgb_fold(
     early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
 ) -> tuple[XGBFoldMetric, np.ndarray]:
     _require_xgb_dependency()
-    if model_name not in {"M0", "M1", "M2"}:
-        raise ValueError("model_name must be one of M0, M1, M2")
+    if model_name not in XGB_TRAIN_MODEL_NAMES:
+        raise ValueError("model_name must be one of M0, M1, M2, CANDIDATE")
     _require_non_empty_partition(X_train, y_train, fold, "train")
     _require_non_empty_partition(X_valid, y_valid, fold, "validation")
     _require_non_empty_partition(X_test, y_test, fold, "test")
@@ -565,7 +577,15 @@ def run_xgb_time_validation(
     predictions = predictions.loc[
         :, ["fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction"]
     ]
-    return XGBValidationResult(fold_metrics=fold_metrics, summary=summary, predictions=predictions)
+    provenance = _xgb_validation_provenance(
+        feature_sets, splits, params, early_stopping_rounds
+    )
+    return XGBValidationResult(
+        fold_metrics=fold_metrics,
+        summary=summary,
+        predictions=predictions,
+        provenance=provenance,
+    )
 
 
 def run_candidate_uplift_validation(
@@ -573,6 +593,7 @@ def run_candidate_uplift_validation(
     splits: list[XGBTimeSplit],
     candidate_pool: pd.DataFrame,
     *,
+    baseline_result: XGBValidationResult | None = None,
     params: dict[str, object] | None = None,
     early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -604,7 +625,17 @@ def run_candidate_uplift_validation(
             invalid_variables.append(variable)
 
     metric_rows: list[dict[str, object]] = []
-    baseline_cache: dict[int, XGBFoldMetric] = {}
+    baseline_cache = (
+        _baseline_metrics_from_result(
+            baseline_result,
+            feature_sets,
+            splits,
+            params,
+            early_stopping_rounds,
+        )
+        if valid_features
+        else {}
+    )
     for split in splits:
         if not valid_features:
             break
@@ -612,19 +643,20 @@ def run_candidate_uplift_validation(
         y_train = feature_sets.target.iloc[split.train_slice]
         y_valid = feature_sets.target.iloc[split.validation_slice]
         y_test = feature_sets.target.iloc[split.test_slice]
-        baseline_metric, _ = train_xgb_fold(
-            X_m1.iloc[split.train_slice],
-            y_train,
-            X_m1.iloc[split.validation_slice],
-            y_valid,
-            X_m1.iloc[split.test_slice],
-            y_test,
-            fold=split.fold,
-            model_name="M1",
-            params=params,
-            early_stopping_rounds=early_stopping_rounds,
-        )
-        baseline_cache[split.fold] = baseline_metric
+        if split.fold not in baseline_cache:
+            baseline_metric, _ = train_xgb_fold(
+                X_m1.iloc[split.train_slice],
+                y_train,
+                X_m1.iloc[split.validation_slice],
+                y_valid,
+                X_m1.iloc[split.test_slice],
+                y_test,
+                fold=split.fold,
+                model_name="M1",
+                params=params,
+                early_stopping_rounds=early_stopping_rounds,
+            )
+            baseline_cache[split.fold] = baseline_metric
 
         for variable, added in valid_features.items():
             candidate_columns = (*m1_features, *added)
@@ -637,7 +669,7 @@ def run_candidate_uplift_validation(
                 candidate_frame.iloc[split.test_slice],
                 y_test,
                 fold=split.fold,
-                model_name="M2",
+                model_name="CANDIDATE",
                 params=params,
                 early_stopping_rounds=early_stopping_rounds,
             )
@@ -684,6 +716,159 @@ def run_candidate_uplift_validation(
             na_position="last",
         ).drop(columns="_candidate_order").reset_index(drop=True)
     return metrics, summary
+
+
+def _xgb_validation_provenance(
+    feature_sets: XGBFeatureSets,
+    splits: list[XGBTimeSplit],
+    params: dict[str, object] | None,
+    early_stopping_rounds: int,
+) -> XGBValidationProvenance:
+    m1_features = tuple(feature_sets.m1_features)
+    available = set(feature_sets.features.columns)
+    if not m1_features or not set(m1_features).issubset(available):
+        raise ValueError("No valid XGB features available")
+    effective_params = {**DEFAULT_XGB_PARAMS, **(params or {})}
+    parameter_signature = tuple(
+        sorted((str(key), _parameter_value_signature(value)) for key, value in effective_params.items())
+    )
+    split_signature = tuple(
+        (
+            split.fold,
+            split.gap,
+            split.train_slice.start,
+            split.train_slice.stop,
+            split.train_slice.step,
+            split.validation_slice.start,
+            split.validation_slice.stop,
+            split.validation_slice.step,
+            split.test_slice.start,
+            split.test_slice.stop,
+            split.test_slice.step,
+        )
+        for split in splits
+    )
+    fingerprint = _xgb_data_fingerprint(
+        feature_sets.features.loc[:, m1_features], feature_sets.target
+    )
+    return XGBValidationProvenance(
+        m1_features=m1_features,
+        split_signature=split_signature,
+        parameter_signature=parameter_signature,
+        early_stopping_rounds=early_stopping_rounds,
+        data_fingerprint=fingerprint,
+    )
+
+
+def _xgb_data_fingerprint(features: pd.DataFrame, target: pd.Series) -> str:
+    digest = hashlib.sha256()
+    digest.update(repr(tuple((str(column), str(features[column].dtype)) for column in features)).encode())
+    digest.update(pd.util.hash_pandas_object(features, index=True).to_numpy().tobytes())
+    digest.update(repr((str(target.name), str(target.dtype))).encode())
+    digest.update(pd.util.hash_pandas_object(target, index=True).to_numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _parameter_value_signature(value: object) -> str:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, dict):
+        items = sorted((str(key), _parameter_value_signature(item)) for key, item in value.items())
+        return repr(tuple(items))
+    if isinstance(value, (list, tuple)):
+        return repr(tuple(_parameter_value_signature(item) for item in value))
+    return f"{type(value).__name__}:{value!r}"
+
+
+def _baseline_metrics_from_result(
+    baseline_result: XGBValidationResult | None,
+    feature_sets: XGBFeatureSets,
+    splits: list[XGBTimeSplit],
+    params: dict[str, object] | None,
+    early_stopping_rounds: int,
+) -> dict[int, XGBFoldMetric]:
+    if baseline_result is None:
+        return {}
+    expected_provenance = _xgb_validation_provenance(
+        feature_sets, splits, params, early_stopping_rounds
+    )
+    if baseline_result.provenance != expected_provenance:
+        raise ValueError("baseline_result provenance does not match current XGB validation inputs")
+    frame = baseline_result.fold_metrics.copy(deep=True)
+    required = {
+        "fold", "model_name", "train_rows", "validation_rows", "test_rows",
+        "best_iteration", "rmse", "mae", "r2",
+    }
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"baseline_result fold_metrics missing columns: {', '.join(sorted(missing))}")
+    predictions = baseline_result.predictions.copy(deep=True)
+    prediction_columns = {"fold", "timestamp_index", "y_true", "M1_prediction"}
+    missing_predictions = prediction_columns.difference(predictions.columns)
+    if missing_predictions:
+        raise ValueError(
+            "baseline_result predictions missing columns: "
+            + ", ".join(sorted(missing_predictions))
+        )
+
+    cache: dict[int, XGBFoldMetric] = {}
+    fold_values = pd.to_numeric(frame["fold"], errors="coerce")
+    prediction_folds = pd.to_numeric(predictions["fold"], errors="coerce")
+    for split in splits:
+        rows = frame[frame["model_name"].astype(str).eq("M1") & fold_values.eq(split.fold)]
+        if len(rows) != 1:
+            raise ValueError(f"baseline_result requires exactly one M1 metric for fold {split.fold}")
+        row = rows.iloc[0]
+        expected_rows = (
+            len(feature_sets.target.iloc[split.train_slice]),
+            len(feature_sets.target.iloc[split.validation_slice]),
+            len(feature_sets.target.iloc[split.test_slice]),
+        )
+        actual_rows = (
+            _required_int(row.get("train_rows"), "train_rows", split.fold),
+            _required_int(row.get("validation_rows"), "validation_rows", split.fold),
+            _required_int(row.get("test_rows"), "test_rows", split.fold),
+        )
+        if actual_rows != expected_rows:
+            raise ValueError(f"baseline_result row counts do not match fold {split.fold} slices")
+        fold_predictions = predictions[prediction_folds.eq(split.fold)]
+        expected_target = feature_sets.target.iloc[split.test_slice]
+        if fold_predictions["timestamp_index"].tolist() != expected_target.index.tolist():
+            raise ValueError(f"baseline_result test index does not match fold {split.fold}")
+        baseline_truth = pd.to_numeric(fold_predictions["y_true"], errors="coerce").to_numpy()
+        current_truth = pd.to_numeric(expected_target, errors="coerce").to_numpy()
+        if not np.array_equal(baseline_truth, current_truth, equal_nan=True):
+            raise ValueError(f"baseline_result y_true does not match fold {split.fold}")
+        baseline_prediction = pd.to_numeric(
+            fold_predictions["M1_prediction"], errors="coerce"
+        ).to_numpy()
+        recomputed_rmse = float(np.sqrt(np.mean((baseline_truth - baseline_prediction) ** 2)))
+        recomputed_mae = float(np.mean(np.abs(baseline_truth - baseline_prediction)))
+        recomputed_r2 = _r2_score(baseline_truth, baseline_prediction)
+        metric_rmse = _required_float(row.get("rmse"), "rmse", split.fold)
+        metric_mae = _required_float(row.get("mae"), "mae", split.fold)
+        metric_r2 = _required_float(row.get("r2"), "r2", split.fold)
+        for field, metric_value, recomputed_value in [
+            ("rmse", metric_rmse, recomputed_rmse),
+            ("mae", metric_mae, recomputed_mae),
+            ("r2", metric_r2, recomputed_r2),
+        ]:
+            if not np.isclose(metric_value, recomputed_value, rtol=1e-12, atol=1e-12):
+                raise ValueError(
+                    f"baseline_result {field} does not match M1_prediction for fold {split.fold}"
+                )
+        cache[split.fold] = XGBFoldMetric(
+            fold=split.fold,
+            model_name="M1",
+            train_rows=actual_rows[0],
+            validation_rows=actual_rows[1],
+            test_rows=actual_rows[2],
+            best_iteration=_integer(row.get("best_iteration")),
+            rmse=metric_rmse,
+            mae=metric_mae,
+            r2=metric_r2,
+        )
+    return cache
 
 
 def summarize_candidate_uplift(metrics: pd.DataFrame) -> pd.DataFrame:
@@ -943,3 +1128,17 @@ def _integer(value: object) -> int | None:
     if number is None or not number.is_integer():
         return None
     return int(number)
+
+
+def _required_int(value: object, field: str, fold: int) -> int:
+    number = _integer(value)
+    if number is None:
+        raise ValueError(f"baseline_result {field} is invalid for fold {fold}")
+    return number
+
+
+def _required_float(value: object, field: str, fold: int) -> float:
+    number = _number(value)
+    if number is None:
+        raise ValueError(f"baseline_result {field} is invalid for fold {fold}")
+    return number

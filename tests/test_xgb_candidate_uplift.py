@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -14,8 +15,10 @@ from chem_ts_corr.xgb_validation import (
     XGBFeatureSets,
     XGBFoldMetric,
     XGBTimeSplit,
+    XGBValidationResult,
     XGB_VALIDATION_STATUS,
     run_candidate_uplift_validation,
+    run_xgb_time_validation,
     summarize_candidate_uplift,
 )
 
@@ -59,6 +62,54 @@ def _splits() -> list[XGBTimeSplit]:
     ]
 
 
+def _baseline_result(
+    feature_sets: XGBFeatureSets | None = None,
+    splits: list[XGBTimeSplit] | None = None,
+    *,
+    params: dict[str, object] | None = None,
+    early_stopping_rounds: int = 50,
+) -> XGBValidationResult:
+    feature_sets = feature_sets or _feature_sets()
+    splits = splits or _splits()
+    fold_metrics = []
+    prediction_rows = []
+    baseline_values = {0: (12.0, 5), 1: (11.0, 6)}
+    for split in splits:
+        error, best_iteration = baseline_values[split.fold]
+        test_target = feature_sets.target.iloc[split.test_slice]
+        prediction = test_target.to_numpy() + error
+        fold_metrics.append(
+            {
+                "fold": split.fold,
+                "model_name": "M1",
+                "train_rows": len(feature_sets.target.iloc[split.train_slice]),
+                "validation_rows": len(feature_sets.target.iloc[split.validation_slice]),
+                "test_rows": len(feature_sets.target.iloc[split.test_slice]),
+                "best_iteration": best_iteration,
+                "rmse": error,
+                "mae": error,
+                "r2": xgb_module._r2_score(test_target.to_numpy(), prediction),
+            }
+        )
+        prediction_rows.extend(
+            {
+                "fold": split.fold,
+                "timestamp_index": timestamp,
+                "y_true": value,
+                "M1_prediction": predicted,
+            }
+            for (timestamp, value), predicted in zip(test_target.items(), prediction)
+        )
+    return XGBValidationResult(
+        fold_metrics=pd.DataFrame(fold_metrics),
+        summary=pd.DataFrame(),
+        predictions=pd.DataFrame(prediction_rows),
+        provenance=xgb_module._xgb_validation_provenance(
+            feature_sets, splits, params, early_stopping_rounds
+        ),
+    )
+
+
 def _fake_trainer(
     calls: list[dict[str, object]],
     candidate_errors: dict[tuple[str, int], tuple[float, float]] | None = None,
@@ -94,10 +145,14 @@ def _fake_trainer(
             }
         )
         if model_name == "M1":
-            rmse, mae = 10.0, 8.0
+            rmse, mae = 10.0, 10.0
+            prediction = y_test.to_numpy(dtype=float) + 10.0
+            r2 = xgb_module._r2_score(y_test.to_numpy(dtype=float), prediction)
         else:
             variable = X_train.columns[-1].split("__lag_", 1)[0]
             rmse, mae = errors.get((variable, fold), (8.0, 6.0))
+            prediction = np.zeros(len(X_test))
+            r2 = 0.5
         metric = XGBFoldMetric(
             fold=fold,
             model_name=model_name,
@@ -107,9 +162,9 @@ def _fake_trainer(
             best_iteration=4,
             rmse=rmse,
             mae=mae,
-            r2=0.5,
+            r2=r2,
         )
-        return metric, np.zeros(len(X_test))
+        return metric, prediction
 
     return train
 
@@ -130,7 +185,7 @@ def test_each_candidate_gets_an_independent_m1_plus_candidate_model(
     assert metrics[["fold", "variable"]].to_records(index=False).tolist() == [
         (0, "c0"), (0, "c1"), (1, "c0"), (1, "c1")
     ]
-    candidate_calls = [call for call in calls if call["model_name"] == "M2"]
+    candidate_calls = [call for call in calls if call["model_name"] == "CANDIDATE"]
     assert [call["columns"] for call in candidate_calls] == [
         ("y__lag_1", "control__lag_1", "c0__lag_2"),
         ("y__lag_1", "control__lag_1", "c1__lag_2"),
@@ -153,6 +208,187 @@ def test_m1_baseline_is_trained_once_per_fold_not_once_per_candidate(
         (1, ("y__lag_1", "control__lag_1")),
     ]
     assert len(calls) == len(_splits()) * 3
+
+
+def test_xgb2_baseline_result_is_reused_without_retraining_m1(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+
+    metrics, _ = run_candidate_uplift_validation(
+        _feature_sets(),
+        _splits(),
+        _pool(["c0", "c1"]),
+        baseline_result=_baseline_result(),
+    )
+
+    assert all(call["model_name"] == "CANDIDATE" for call in calls)
+    assert len(calls) == len(_splits()) * 2
+    assert metrics["baseline_rmse"].tolist() == [12.0, 12.0, 11.0, 11.0]
+    assert metrics["baseline_mae"].tolist() == [12.0, 12.0, 11.0, 11.0]
+
+
+def test_formal_xgb2_result_provenance_is_reused_without_m1_training(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    feature_sets = _feature_sets()
+    splits = _splits()
+    baseline = run_xgb_time_validation(feature_sets, splits)
+    assert baseline.provenance is not None
+    calls.clear()
+
+    run_candidate_uplift_validation(
+        feature_sets, splits, _pool(["c0", "c1"]), baseline_result=baseline
+    )
+
+    assert calls
+    assert all(call["model_name"] == "CANDIDATE" for call in calls)
+
+
+def test_external_baseline_without_provenance_is_rejected(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    valid = _baseline_result()
+    baseline = XGBValidationResult(
+        valid.fold_metrics, valid.summary, valid.predictions
+    )
+
+    with pytest.raises(ValueError, match="provenance"):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(("defect", "match"), [("index", "test index"), ("truth", "y_true")])
+def test_external_baseline_predictions_must_match_current_test_data(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch, defect: str, match: str
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    baseline = _baseline_result()
+    if defect == "index":
+        baseline.predictions.loc[0, "timestamp_index"] = "different_timestamp"
+    else:
+        baseline.predictions.loc[0, "y_true"] += 1.0
+
+    with pytest.raises(ValueError, match=match):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("field", ["rmse", "mae"])
+def test_external_baseline_metrics_must_match_m1_predictions(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch, field: str
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    baseline = _baseline_result()
+    baseline.fold_metrics.loc[0, field] += 1.0
+
+    with pytest.raises(ValueError, match=f"{field} does not match M1_prediction"):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
+
+
+def test_external_baseline_requires_m1_prediction(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    baseline = _baseline_result()
+    baseline.predictions.drop(columns="M1_prediction", inplace=True)
+
+    with pytest.raises(ValueError, match="M1_prediction"):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
+
+
+def test_external_baseline_m1_prediction_must_match_metrics(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    baseline = _baseline_result()
+    baseline.predictions.loc[0, "M1_prediction"] += 1.0
+
+    with pytest.raises(ValueError, match="does not match M1_prediction"):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("defect", ["params", "early_stopping", "m1_features", "m1_values"])
+def test_external_baseline_training_provenance_must_match(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch, defect: str
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    current = _feature_sets()
+    kwargs: dict[str, object] = {}
+    if defect == "params":
+        kwargs["params"] = {"max_depth": 4}
+        baseline = _baseline_result(current)
+    elif defect == "early_stopping":
+        kwargs["early_stopping_rounds"] = 49
+        baseline = _baseline_result(current)
+    elif defect == "m1_features":
+        baseline_features = _feature_sets()
+        baseline_features = replace(
+            baseline_features,
+            m1_features=tuple(reversed(baseline_features.m1_features)),
+        )
+        baseline = _baseline_result(baseline_features)
+    else:
+        baseline_features = _feature_sets()
+        baseline_features.features.loc[:, "control__lag_1"] += 1.0
+        baseline = _baseline_result(baseline_features)
+
+    with pytest.raises(ValueError, match="provenance"):
+        run_candidate_uplift_validation(
+            current, _splits(), _pool(["c0"]), baseline_result=baseline, **kwargs
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("defect", ["missing_fold", "duplicate_fold", "row_count_mismatch"])
+def test_invalid_xgb2_baseline_result_is_rejected(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch, defect: str
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    baseline = _baseline_result()
+    if defect == "missing_fold":
+        baseline.fold_metrics.drop(index=1, inplace=True)
+    elif defect == "duplicate_fold":
+        baseline = XGBValidationResult(
+            fold_metrics=pd.concat(
+                [baseline.fold_metrics, baseline.fold_metrics.iloc[[0]]], ignore_index=True
+            ),
+            summary=pd.DataFrame(),
+            predictions=baseline.predictions,
+            provenance=baseline.provenance,
+        )
+    else:
+        baseline.fold_metrics.loc[0, "test_rows"] = 4
+
+    with pytest.raises(ValueError, match="baseline_result"):
+        run_candidate_uplift_validation(
+            _feature_sets(), _splits(), _pool(["c0"]), baseline_result=baseline
+        )
+    assert calls == []
 
 
 def test_candidate_and_baseline_use_identical_fold_indexes(
@@ -202,11 +438,32 @@ def test_invalid_candidate_features_are_preserved_without_training(
     assert summary.loc[0, "fold_count"] == 0
 
 
+def test_all_invalid_candidates_ignore_unused_stale_baseline(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    feature_sets = _feature_sets(1)
+    feature_sets.candidate_feature_map.clear()
+    stale_baseline = XGBValidationResult(pd.DataFrame(), pd.DataFrame(), pd.DataFrame())
+
+    metrics, summary = run_candidate_uplift_validation(
+        feature_sets,
+        _splits(),
+        _pool(["c0"]),
+        baseline_result=stale_baseline,
+    )
+
+    assert metrics.empty
+    assert calls == []
+    assert summary.loc[0, "validation_status"] == "insufficient_features"
+
+
 def test_improvement_formulas_use_baseline_minus_candidate_direction(
     fake_dependency, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[dict[str, object]] = []
-    errors = {("c0", 0): (8.0, 6.0), ("c0", 1): (12.0, 10.0)}
+    errors = {("c0", 0): (8.0, 7.5), ("c0", 1): (12.0, 12.5)}
     monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls, errors))
 
     metrics, _ = run_candidate_uplift_validation(_feature_sets(1), _splits(), _pool(["c0"]))
@@ -214,7 +471,7 @@ def test_improvement_formulas_use_baseline_minus_candidate_direction(
     assert metrics["rmse_improvement_pct"].tolist() == pytest.approx([20.0, -20.0])
     assert metrics["mae_improvement_pct"].tolist() == pytest.approx([25.0, -25.0])
     assert metrics["baseline_rmse"].tolist() == [10.0, 10.0]
-    assert metrics["baseline_mae"].tolist() == [8.0, 8.0]
+    assert metrics["baseline_mae"].tolist() == [10.0, 10.0]
 
 
 def _summary_metrics(variable: str, rmse: list[float], mae: list[float]) -> pd.DataFrame:
@@ -301,7 +558,7 @@ def test_candidate_limit_uses_first_eight_in_candidate_order(
     assert metrics["variable"].tolist() == variables[:8]
     assert set(summary["variable"]) == set(variables[:8])
     assert len([call for call in calls if call["model_name"] == "M1"]) == 1
-    assert len([call for call in calls if call["model_name"] == "M2"]) == 8
+    assert len([call for call in calls if call["model_name"] == "CANDIDATE"]) == 8
 
 
 def test_repeated_inputs_produce_identical_results(
@@ -327,13 +584,18 @@ def test_inputs_are_not_modified(fake_dependency, monkeypatch: pytest.MonkeyPatc
     before_target = feature_sets.target.copy(deep=True)
     before_map = feature_sets.candidate_feature_map.copy()
     before_pool = pool.copy(deep=True)
+    baseline = _baseline_result()
+    before_baseline = baseline.fold_metrics.copy(deep=True)
 
-    run_candidate_uplift_validation(feature_sets, _splits(), pool)
+    run_candidate_uplift_validation(
+        feature_sets, _splits(), pool, baseline_result=baseline
+    )
 
     pd.testing.assert_frame_equal(feature_sets.features, before_features)
     pd.testing.assert_series_equal(feature_sets.target, before_target)
     assert feature_sets.candidate_feature_map == before_map
     pd.testing.assert_frame_equal(pool, before_pool)
+    pd.testing.assert_frame_equal(baseline.fold_metrics, before_baseline)
 
 
 def test_output_columns_match_metric_and_summary_contracts(

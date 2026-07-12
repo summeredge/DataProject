@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from numbers import Integral
 from typing import Sequence
 
 import numpy as np
 import pandas as pd
+
+try:
+    from xgboost import XGBRegressor
+except ImportError:
+    XGBRegressor = None
 
 
 DEFAULT_XGB_TOP_N = 8
@@ -13,6 +18,21 @@ DEFAULT_BASELINE_LAGS = (1, 2, 5, 10, 30, 60)
 DEFAULT_CANDIDATE_LAG_RADIUS = 2
 DEFAULT_OUTER_SPLITS = 3
 DEFAULT_VALIDATION_FRACTION = 0.15
+DEFAULT_XGB_PARAMS = {
+    "objective": "reg:squarederror",
+    "tree_method": "hist",
+    "n_estimators": 1500,
+    "learning_rate": 0.03,
+    "max_depth": 5,
+    "min_child_weight": 20,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 0.1,
+    "reg_lambda": 10.0,
+    "n_jobs": -1,
+    "random_state": 42,
+}
+DEFAULT_EARLY_STOPPING_ROUNDS = 50
 
 AUTO_ALLOWED_RECOMMENDATIONS = frozenset(
     {
@@ -68,6 +88,30 @@ class XGBTimeSplit:
     validation_slice: slice
     test_slice: slice
     gap: int
+
+
+@dataclass(frozen=True)
+class XGBFoldMetric:
+    fold: int
+    model_name: str
+    train_rows: int
+    validation_rows: int
+    test_rows: int
+    best_iteration: int | None
+    rmse: float
+    mae: float
+    r2: float
+
+    def __post_init__(self) -> None:
+        if self.model_name not in {"M0", "M1", "M2"}:
+            raise ValueError("model_name must be one of M0, M1, M2")
+
+
+@dataclass(frozen=True)
+class XGBValidationResult:
+    fold_metrics: pd.DataFrame
+    summary: pd.DataFrame
+    predictions: pd.DataFrame
 
 
 def build_xgb_candidate_pool(
@@ -354,6 +398,188 @@ def build_expanding_time_splits(
             )
         )
     return splits
+
+
+def train_xgb_fold(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_valid: pd.DataFrame,
+    y_valid: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    *,
+    fold: int,
+    model_name: str,
+    params: dict[str, object] | None = None,
+    early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
+) -> tuple[XGBFoldMetric, np.ndarray]:
+    _require_xgb_dependency()
+    if model_name not in {"M0", "M1", "M2"}:
+        raise ValueError("model_name must be one of M0, M1, M2")
+    _require_non_empty_partition(X_train, y_train, fold, "train")
+    _require_non_empty_partition(X_valid, y_valid, fold, "validation")
+    _require_non_empty_partition(X_test, y_test, fold, "test")
+    if early_stopping_rounds < 1:
+        raise ValueError("early_stopping_rounds must be at least 1")
+
+    model_params = {**DEFAULT_XGB_PARAMS, **(params or {})}
+    model_params["early_stopping_rounds"] = early_stopping_rounds
+    model = XGBRegressor(**model_params)
+    model.fit(
+        X_train,
+        y_train,
+        eval_set=[(X_valid, y_valid)],
+        verbose=False,
+    )
+    prediction = np.asarray(model.predict(X_test), dtype=float)
+    truth = np.asarray(y_test, dtype=float)
+    if prediction.shape != truth.shape:
+        raise ValueError("XGB prediction length does not match test labels")
+
+    best_iteration = getattr(model, "best_iteration", None)
+    metric = XGBFoldMetric(
+        fold=fold,
+        model_name=model_name,
+        train_rows=len(X_train),
+        validation_rows=len(X_valid),
+        test_rows=len(X_test),
+        best_iteration=int(best_iteration) if best_iteration is not None else None,
+        rmse=float(np.sqrt(np.mean((truth - prediction) ** 2))),
+        mae=float(np.mean(np.abs(truth - prediction))),
+        r2=_r2_score(truth, prediction),
+    )
+    return metric, prediction
+
+
+def run_xgb_time_validation(
+    feature_sets: XGBFeatureSets,
+    splits: list[XGBTimeSplit],
+    *,
+    params: dict[str, object] | None = None,
+    early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
+) -> XGBValidationResult:
+    _require_xgb_dependency()
+    if not splits:
+        raise ValueError("No time splits provided")
+    if feature_sets.features.empty or not feature_sets.m2_features:
+        raise ValueError("No valid XGB features available")
+    if not feature_sets.features.index.equals(feature_sets.target.index):
+        raise ValueError("XGB features and target must use the same index")
+
+    model_features = {
+        "M0": feature_sets.m0_features,
+        "M1": feature_sets.m1_features,
+        "M2": feature_sets.m2_features,
+    }
+    available = set(feature_sets.features.columns)
+    if any(not columns or not set(columns).issubset(available) for columns in model_features.values()):
+        raise ValueError("No valid XGB features available")
+
+    metric_rows: list[dict[str, object]] = []
+    prediction_frames: list[pd.DataFrame] = []
+    for split in splits:
+        target_train = feature_sets.target.iloc[split.train_slice]
+        target_valid = feature_sets.target.iloc[split.validation_slice]
+        target_test = feature_sets.target.iloc[split.test_slice]
+        fold_predictions = pd.DataFrame(
+            {
+                "fold": split.fold,
+                "timestamp_index": target_test.index,
+                "y_true": target_test.to_numpy(),
+            }
+        )
+        for model_name in ("M0", "M1", "M2"):
+            columns = list(model_features[model_name])
+            model_frame = feature_sets.features.loc[:, columns]
+            metric, prediction = train_xgb_fold(
+                model_frame.iloc[split.train_slice],
+                target_train,
+                model_frame.iloc[split.validation_slice],
+                target_valid,
+                model_frame.iloc[split.test_slice],
+                target_test,
+                fold=split.fold,
+                model_name=model_name,
+                params=params,
+                early_stopping_rounds=early_stopping_rounds,
+            )
+            metric_rows.append(asdict(metric))
+            fold_predictions[f"{model_name}_prediction"] = prediction
+        prediction_frames.append(fold_predictions)
+
+    metric_columns = [
+        "fold", "model_name", "train_rows", "validation_rows", "test_rows",
+        "best_iteration", "rmse", "mae", "r2",
+    ]
+    fold_metrics = pd.DataFrame(metric_rows, columns=metric_columns)
+    fold_metrics["_model_order"] = fold_metrics["model_name"].map({"M0": 0, "M1": 1, "M2": 2})
+    fold_metrics = fold_metrics.sort_values(["fold", "_model_order"], kind="mergesort")
+    fold_metrics = fold_metrics.drop(columns="_model_order").reset_index(drop=True)
+    summary = _summarize_xgb_metrics(fold_metrics)
+    predictions = pd.concat(prediction_frames, ignore_index=True)
+    predictions = predictions.loc[
+        :, ["fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction"]
+    ]
+    return XGBValidationResult(fold_metrics=fold_metrics, summary=summary, predictions=predictions)
+
+
+def _summarize_xgb_metrics(fold_metrics: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for model_name in ("M0", "M1", "M2"):
+        metrics = fold_metrics[fold_metrics["model_name"].eq(model_name)]
+        rows.append(
+            {
+                "model_name": model_name,
+                "mean_rmse": float(metrics["rmse"].mean()),
+                "median_rmse": float(metrics["rmse"].median()),
+                "mean_mae": float(metrics["mae"].mean()),
+                "median_mae": float(metrics["mae"].median()),
+                "mean_r2": float(metrics["r2"].mean()),
+                "fold_count": int(len(metrics)),
+            }
+        )
+    summary = pd.DataFrame(rows)
+    summary["M2_vs_M1_rmse_improvement_pct"] = np.nan
+    summary["M2_vs_M1_mae_improvement_pct"] = np.nan
+    indexed = summary.set_index("model_name")
+    m1_rmse = float(indexed.loc["M1", "mean_rmse"])
+    m2_rmse = float(indexed.loc["M2", "mean_rmse"])
+    m1_mae = float(indexed.loc["M1", "mean_mae"])
+    m2_mae = float(indexed.loc["M2", "mean_mae"])
+    m2_mask = summary["model_name"].eq("M2")
+    summary.loc[m2_mask, "M2_vs_M1_rmse_improvement_pct"] = _improvement_pct(m1_rmse, m2_rmse)
+    summary.loc[m2_mask, "M2_vs_M1_mae_improvement_pct"] = _improvement_pct(m1_mae, m2_mae)
+    return summary
+
+
+def _require_xgb_dependency() -> None:
+    if XGBRegressor is None:
+        raise RuntimeError(
+            'xgboost is not installed.\nInstall optional dependency:\npip install -e ".[xgb]"'
+        )
+
+
+def _require_non_empty_partition(
+    features: pd.DataFrame, target: pd.Series, fold: int, partition: str
+) -> None:
+    if len(features) == 0 or len(target) == 0:
+        raise ValueError(f"fold {fold} has no {partition} rows")
+    if len(features) != len(target):
+        raise ValueError(f"fold {fold} {partition} features and target row counts differ")
+
+
+def _r2_score(truth: np.ndarray, prediction: np.ndarray) -> float:
+    residual_sum = float(np.sum((truth - prediction) ** 2))
+    total_sum = float(np.sum((truth - np.mean(truth)) ** 2))
+    if total_sum == 0:
+        return 1.0 if residual_sum == 0 else 0.0
+    return 1.0 - residual_sum / total_sum
+
+
+def _improvement_pct(baseline: float, candidate: float) -> float:
+    if baseline == 0 or not np.isfinite(baseline) or not np.isfinite(candidate):
+        return float("nan")
+    return (baseline - candidate) / baseline * 100.0
 
 
 def _candidate_metadata(

@@ -616,10 +616,6 @@ def test_time_split_reports_specific_data_shortage(kwargs: dict[str, object], ma
 @pytest.mark.parametrize(
     "forbidden",
     [
-        "XGBRegressor",
-        "xgboost",
-        ".fit(",
-        ".predict(",
         "train_test_split",
         "KFold",
         "ShuffleSplit",
@@ -633,11 +629,28 @@ def test_time_split_reports_specific_data_shortage(kwargs: dict[str, object], ma
         "StandardScaler",
         "MinMaxScaler",
         "zscore",
+        "final_score",
+        "driver_rank",
     ],
 )
 def test_xgb_contract_source_avoids_training_leakage_and_scaling(forbidden: str):
     source = Path("chem_ts_corr/xgb_validation.py").read_text(encoding="utf-8")
     assert forbidden not in source
+
+
+def test_xgb_model_import_is_optional_and_isolated_to_validation_module():
+    source = Path("chem_ts_corr/xgb_validation.py").read_text(encoding="utf-8")
+    production_sources = {
+        path: path.read_text(encoding="utf-8")
+        for path in Path("chem_ts_corr").glob("*.py")
+    }
+
+    assert "try:\n    from xgboost import XGBRegressor" in source
+    assert "except ImportError:\n    XGBRegressor = None" in source
+    assert "\nimport xgboost" not in source
+    assert [
+        path for path, text in production_sources.items() if "from xgboost import XGBRegressor" in text
+    ] == [Path("chem_ts_corr/xgb_validation.py")]
 
 
 def test_xgb_extra_is_independent_and_preserves_existing_extras():

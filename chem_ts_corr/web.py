@@ -2032,7 +2032,7 @@ let lastFinalReviewSummaryRows = [];
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
-let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+let tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 const llmPromptEndpoint = "/api/llm_prompt";
@@ -2316,6 +2316,7 @@ function renderAnalysisResult(data) {
   closeDetailModal();
   renderOverview(data.overview || {});
   renderScreeningQualityHints(lastRows);
+  tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
@@ -4509,7 +4510,7 @@ function reset() {
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
   lastScatterMatrixPayload = null;
-  tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+  tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";

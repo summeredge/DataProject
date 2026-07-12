@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -268,3 +269,58 @@ def test_old_final_score_primary_sort_is_absent():
     assert source.count("PRIMARY_RANK_COLUMN") >= 2
     assert "ascending=True" in source
     assert ".head(top_k)" in source
+
+
+def _web_source() -> str:
+    return Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+
+
+def _javascript_function(source: str, name: str, next_name: str) -> str:
+    return source.split(f"function {name}", 1)[1].split(f"function {next_name}", 1)[0]
+
+
+def test_web_primary_table_default_sort_is_driver_rank_ascending():
+    source = _web_source()
+
+    assert 'table: { column: "driver_rank", direction: "asc" }' in source
+
+
+def test_web_old_final_score_default_sort_is_absent():
+    source = _web_source()
+
+    assert 'table: { column: "final_score", direction: "desc" }' not in source
+    assert 'tableSortStates["table"] = { column: "final_score", direction: "desc" }' not in source
+
+
+def test_new_analysis_resets_primary_sort_before_rendering_rows():
+    body = _javascript_function(_web_source(), "renderAnalysisResult(data) {", "sleep")
+    reset_sort = 'tableSortStates["table"] = { column: "driver_rank", direction: "asc" };'
+
+    assert reset_sort in body
+    assert body.index(reset_sort) < body.index("renderTable(lastRows);")
+
+
+def test_web_reset_restores_driver_rank_primary_sort():
+    body = _web_source().split("function reset() {", 1)[1].split("\n}", 1)[0]
+
+    assert 'table: { column: "driver_rank", direction: "asc" }' in body
+    assert 'table: { column: "final_score", direction: "desc" }' not in body
+
+
+def test_final_review_summary_default_sort_is_unchanged():
+    source = _web_source()
+
+    assert 'finalReviewSummaryTable: { column: "final_rank", direction: "asc" }' in source
+
+
+def test_web_sortable_header_interactions_are_preserved():
+    source = _web_source()
+
+    for expected in [
+        'class="sortable"',
+        'header.addEventListener("click", sort)',
+        "updateTableSortState(targetId, header.dataset.column)",
+        'state.direction = state.direction === "asc" ? "desc" : "asc"',
+        "tableSortStates[targetId]",
+    ]:
+        assert expected in source

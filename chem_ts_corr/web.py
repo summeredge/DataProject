@@ -26,6 +26,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
@@ -74,6 +75,9 @@ DOWNLOAD_FILES = {
     "enhanced_validation_summary.csv",
     "llm_prompt.md",
     "llm_report.md",
+    "xgb_validation/xgb_model_summary.csv",
+    "xgb_validation/xgb_candidate_uplift.csv",
+    "xgb_validation/xgb_validation_summary.json",
 }
 MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
 TASK_TTL_SECONDS = 6 * 60 * 60
@@ -184,6 +188,9 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path in {"/run_causal_review", "/api/run_causal_review"}:
                 self._send_json(_run_causal_review_response(self))
                 return
+            if self.path == "/api/run_xgb_validation":
+                self._send_json(_run_xgb_validation_response(self))
+                return
             if self.path == "/api/llm_prompt":
                 self._send_json(_llm_prompt_response(self))
                 return
@@ -233,12 +240,16 @@ class _Handler(BaseHTTPRequestHandler):
         if RUNS_DIR.resolve() not in path.parents or not path.exists():
             raise FileNotFoundError("Download file was not found")
 
-        content_type = "text/csv; charset=utf-8" if path.suffix == ".csv" else "text/markdown; charset=utf-8"
+        content_types = {
+            ".csv": "text/csv; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+        }
+        content_type = content_types.get(path.suffix, "text/markdown; charset=utf-8")
         body = path.read_bytes()
         try:
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Disposition", f'attachment; filename="{file_name}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -778,6 +789,137 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    if not _bool_field(form, "enable_xgb_validation"):
+        return {
+            "status": "skipped",
+            "error_message": None,
+            "xgbModelSummary": [],
+            "xgbCandidateUplift": [],
+            "xgbValidationSummary": {},
+            "downloads": [],
+            "message": "XGB 四级验证未启用。",
+        }
+
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    top_n_raw = _field(form, "top_n", str(config.xgb_top_n)).strip()
+    try:
+        top_n = int(top_n_raw)
+    except ValueError:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="top_n must be an integer between 1 and 8",
+        )
+    if not 1 <= top_n <= 8:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="top_n must be an integer between 1 and 8",
+        )
+
+    max_lag_raw = _field(form, "max_lag").strip()
+    if max_lag_raw:
+        try:
+            max_lag = int(max_lag_raw)
+        except ValueError:
+            return _xgb_response_payload(
+                run_id,
+                output_dir,
+                status="invalid_input",
+                error_message="max_lag must be a positive integer or empty",
+            )
+        if max_lag <= 0:
+            return _xgb_response_payload(
+                run_id,
+                output_dir,
+                status="invalid_input",
+                error_message="max_lag must be a positive integer or empty",
+            )
+    else:
+        max_lag = config.xgb_max_lag
+
+    final_summary = _safe_read_result_csv(output_dir / "final_review_summary.csv")
+    if final_summary.empty:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="missing final_review_summary; run the third-level review first",
+        )
+
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    data = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    result = run_xgb_analysis(
+        run_dir=output_dir,
+        data=data,
+        target=config.target,
+        final_review_summary=final_summary,
+        ranked_features=ranked,
+        control_columns=(
+            _list_field(form, "control_columns")
+            or config.residual_control_columns
+            or config.capacity_columns
+        ),
+        whitelist=_list_field(form, "whitelist"),
+        top_n=top_n,
+        max_lag=max_lag,
+    )
+    return _xgb_response_payload(
+        run_id,
+        output_dir,
+        status=result.status,
+        error_message=result.error_message,
+    )
+
+
+def _xgb_response_payload(
+    run_id: str,
+    output_dir: Path,
+    *,
+    status: str,
+    error_message: str | None,
+) -> dict[str, Any]:
+    model_summary = pd.DataFrame()
+    candidate_uplift = pd.DataFrame()
+    validation_summary: dict[str, Any] = {}
+    downloads: list[dict[str, str]] = []
+    if status == "success":
+        model_summary = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_model_summary.csv"
+        )
+        candidate_uplift = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_candidate_uplift.csv"
+        )
+        summary_path = output_dir / "xgb_validation" / "xgb_validation_summary.json"
+        validation_summary = (
+            json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary_path.exists()
+            else {}
+        )
+        downloads = _download_links(run_id, output_dir)
+    messages = {
+        "success": "XGB 四级验证完成。",
+        "missing_dependency": "XGB 四级验证缺少可选依赖。",
+        "invalid_input": "XGB 四级验证输入无效。",
+        "failed": "XGB 四级验证失败。",
+    }
+    return {
+        "status": status,
+        "error_message": error_message,
+        "xgbModelSummary": _records(model_summary),
+        "xgbCandidateUplift": _records(candidate_uplift),
+        "xgbValidationSummary": validation_summary,
+        "downloads": downloads,
+        "message": messages.get(status, "XGB 四级验证未运行。"),
     }
 
 
@@ -1519,6 +1661,8 @@ INDEX_HTML = r"""<!doctype html>
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    label.checkbox-row { display:flex; align-items:center; align-self:end; gap:8px; min-height:31px; }
+    label.checkbox-row input[type="checkbox"] { width:auto; margin:0; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
     .check input { width:auto; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; }
@@ -1788,6 +1932,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">XGB 四级验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
@@ -1954,6 +2099,28 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
 
+      <div id="xgbValidationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-xgbValidationTab" hidden>
+        <h2>XGB 四级验证</h2>
+        <div class="row">
+          <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
+          <label>候选数量<input id="xgbTopN" type="number" min="1" max="8" value="8"></label>
+          <label>最大滞后<input id="xgbMaxLag" type="number" min="1" placeholder="自动"></label>
+          <label>白名单<input id="xgbWhitelist" placeholder="变量名以逗号分隔"></label>
+        </div>
+        <div class="actions">
+          <button id="runXgbValidation" disabled>运行 XGB 四级验证</button>
+        </div>
+        <div id="xgbStatus" class="help" aria-live="polite">XGB 四级验证未启用。</div>
+        <h2>模型时间外验证摘要</h2>
+        <div class="download-buttons" id="xgbModelSummaryDownload"></div>
+        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 四级验证。</div>
+        <h2>候选变量增量验证</h2>
+        <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
+        <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 四级验证。</div>
+        <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
+      </div>
+
+
       <div id="llmReportTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-llmReportTab" hidden>
         <h2>AI 综合解读</h2>
         <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
@@ -2029,6 +2196,8 @@ let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
+let lastXgbModelSummaryRows = [];
+let lastXgbCandidateUpliftRows = [];
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
@@ -2052,6 +2221,8 @@ el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
+el("runXgbValidation").addEventListener("click", runXgbValidation);
+el("enableXgbValidation").addEventListener("change", updateXgbRunAvailability);
 el("detailModalClose").addEventListener("click", closeDetailModal);
 el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
@@ -2313,6 +2484,8 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastXgbModelSummaryRows = [];
+  lastXgbCandidateUpliftRows = [];
   closeDetailModal();
   renderOverview(data.overview || {});
   renderScreeningQualityHints(lastRows);
@@ -2331,12 +2504,15 @@ function renderAnalysisResult(data) {
   renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
   renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
+  renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+  renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
+  updateXgbRunAvailability();
 }
 
 function sleep(ms) {
@@ -2473,12 +2649,60 @@ async function runCausalReview() {
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
+    updateXgbRunAvailability();
     setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt), "success");
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
+  }
+}
+
+
+function updateXgbRunAvailability() {
+  const enabled = el("enableXgbValidation").checked;
+  el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length);
+  if (!enabled) el("xgbStatus").textContent = "XGB 四级验证未启用。";
+}
+
+async function runXgbValidation() {
+  if (!el("enableXgbValidation").checked) {
+    el("xgbStatus").textContent = "请先启用 XGB 四级验证。";
+    return;
+  }
+  if (!currentRunId || !lastFinalReviewSummaryRows.length) {
+    el("xgbStatus").textContent = "请先完成三层复核。";
+    return;
+  }
+  const startedAt = performance.now();
+  el("runXgbValidation").disabled = true;
+  el("xgbStatus").textContent = "正在运行 XGB 四级验证...";
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("enable_xgb_validation", "true");
+    form.append("top_n", el("xgbTopN").value || "8");
+    form.append("max_lag", el("xgbMaxLag").value);
+    form.append("whitelist", el("xgbWhitelist").value.trim());
+    form.append("control_columns", getCapacitySelection().join(","));
+    const data = await postForm("/api/run_xgb_validation", form);
+    lastXgbModelSummaryRows = data.xgbModelSummary || [];
+    lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
+    renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+    renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+    renderXgbDownloads(data.downloads || []);
+    renderDownloads(data.downloads || []);
+    const message = data.error_message || data.message || "XGB 四级验证失败。";
+    const success = data.status === "success";
+    el("xgbStatus").textContent = appendElapsed(message, startedAt);
+    setStatus(appendElapsed(message, startedAt), success ? "success" : "error");
+  } catch (error) {
+    const message = appendElapsed(error.message || String(error), startedAt);
+    el("xgbStatus").textContent = message;
+    setStatus(message, "error");
+  } finally {
+    updateXgbRunAvailability();
   }
 }
 
@@ -3479,7 +3703,9 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
   enhancedLiftTable: ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
-  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"]
+  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
+  xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
+  xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"]
 };
 
 function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
@@ -3843,6 +4069,8 @@ function missingText(targetId) {
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
+  if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
+  if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -3886,6 +4114,14 @@ function rollingCorrColumns() {
 
 function conditionalGrangerColumns() {
   return ["variable", "status", "best_lag", "tested_lags", "lag_mode", "lag_window", "fallback_maxlag", "baseline_maxlag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+}
+
+function xgbModelSummaryColumns() {
+  return ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"];
+}
+
+function xgbCandidateUpliftColumns() {
+  return ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];
 }
 
 function causalReviewColumns() {
@@ -4086,6 +4322,12 @@ function renderReviewDownloads(downloads) {
   renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
   renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
+}
+
+function renderXgbDownloads(downloads) {
+  renderDownloadTarget("xgbModelSummaryDownload", downloads, "xgb_validation/xgb_model_summary.csv");
+  renderDownloadTarget("xgbCandidateUpliftDownload", downloads, "xgb_validation/xgb_candidate_uplift.csv");
+  renderDownloadTarget("xgbValidationSummaryDownload", downloads, "xgb_validation/xgb_validation_summary.json");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {
@@ -4409,6 +4651,15 @@ function columnLabel(column) {
     fallback_maxlag: "回退最大滞后",
     baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
+    model_name: "模型",
+    mean_rmse: "平均RMSE",
+    mean_mae: "平均MAE",
+    mean_r2: "平均R²",
+    M2_vs_M1_rmse_improvement_pct: "M2相对M1 RMSE改善(%)",
+    median_rmse_improvement_pct: "RMSE改善中位数(%)",
+    median_mae_improvement_pct: "MAE改善中位数(%)",
+    positive_rmse_fold_ratio: "RMSE改善折占比",
+    validation_status: "验证状态",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
     review_priority: "复核优先级",
@@ -4509,6 +4760,8 @@ function reset() {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastXgbModelSummaryRows = [];
+  lastXgbCandidateUpliftRows = [];
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
   lastScatterMatrixPayload = null;
@@ -4542,6 +4795,8 @@ function reset() {
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
+  el("enableXgbValidation").checked = false;
+  el("runXgbValidation").disabled = true;
   el("drawTrend").disabled = true;
   el("drawScatterMatrix").disabled = true;
   el("downloads").innerHTML = "";
@@ -4585,6 +4840,15 @@ function reset() {
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
   closeDetailModal();
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
+  resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
+  resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
+  clearOptionalElement("xgbModelSummaryDownload");
+  clearOptionalElement("xgbCandidateUpliftDownload");
+  clearOptionalElement("xgbValidationSummaryDownload");
+  el("xgbStatus").textContent = "XGB 四级验证未启用。";
+  el("xgbTopN").value = "8";
+  el("xgbMaxLag").value = "";
+  el("xgbWhitelist").value = "";
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");
   clearOptionalElement("causalEvidenceDownload");

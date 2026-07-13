@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -36,6 +36,10 @@ class AnalysisConfig:
     max_upload_size_mb: int = 100
     skip_model_lift: bool = False
     skip_rolling_corr: bool = False
+    enable_xgb_validation: bool = False
+    xgb_top_n: int = 8
+    xgb_max_lag: int | None = None
+    xgb_whitelist: list[str] = field(default_factory=list)
 
     def resolved_granger_maxlag(self) -> int:
         if self.granger_maxlag is not None:

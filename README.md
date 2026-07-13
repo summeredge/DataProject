@@ -198,6 +198,14 @@ python -m chem_ts_corr.cli analyze `
 - `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
 - `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
+完成三层复核后，可在 Web 的“XGB 四级验证”页签中显式启用并运行时间外增量验证。该步骤默认关闭，结果独立写入 `xgb_validation/`：
+
+- `xgb_model_summary.csv`：M0、M1、M2 的跨时间折模型指标摘要
+- `xgb_candidate_uplift.csv`：逐候选变量相对 M1 的增量验证结果
+- `xgb_validation_summary.json`：本次四级验证的状态、候选数和输出文件清单
+
+XGB 四级验证不会回写主筛查得分或排名；缺少 `xgboost` 时页面会返回依赖提示，已有三层分析结果仍保持可用。
+
 ## 推荐工作流
 
 1. 在界面上传 CSV。

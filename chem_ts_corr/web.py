@@ -857,7 +857,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         )
 
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    data = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    data = _prepared_frame_for_validation(config)
     result = run_xgb_analysis(
         run_dir=output_dir,
         data=data,
@@ -891,7 +891,7 @@ def _xgb_response_payload(
     model_summary = pd.DataFrame()
     candidate_uplift = pd.DataFrame()
     validation_summary: dict[str, Any] = {}
-    downloads: list[dict[str, str]] = []
+    downloads = _download_links(run_id, output_dir)
     if status == "success":
         model_summary = _safe_read_result_csv(
             output_dir / "xgb_validation" / "xgb_model_summary.csv"
@@ -905,7 +905,6 @@ def _xgb_response_payload(
             if summary_path.exists()
             else {}
         )
-        downloads = _download_links(run_id, output_dir)
     messages = {
         "success": "XGB 四级验证完成。",
         "missing_dependency": "XGB 四级验证缺少可选依赖。",
@@ -1155,9 +1154,7 @@ def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) ->
 def _scaled_frame_for_secondary(
     config: AnalysisConfig, protected_columns: list[str] | None = None
 ) -> pd.DataFrame:
-    from chem_ts_corr.data import select_numeric_frame
-    from chem_ts_corr.screening import apply_ignore_roles, load_roles
-    from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
+    from chem_ts_corr.preprocess import standardize_frame
 
     extra_protected = tuple(c for c in (protected_columns or []) if c)
     cache_key = _scaled_frame_cache_key(config, extra_protected)
@@ -1165,6 +1162,23 @@ def _scaled_frame_for_secondary(
         cached = SCALED_FRAME_CACHE.get(cache_key)
         if cached is not None:
             return cached.copy(deep=True)
+
+    transformed = _prepared_frame_for_validation(config, protected_columns)
+    scaled = standardize_frame(transformed)
+    with SCALED_FRAME_CACHE_LOCK:
+        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
+            oldest_key = next(iter(SCALED_FRAME_CACHE))
+            SCALED_FRAME_CACHE.pop(oldest_key, None)
+    return scaled.copy(deep=True)
+
+
+def _prepared_frame_for_validation(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.data import select_numeric_frame
+    from chem_ts_corr.screening import apply_ignore_roles, load_roles
+    from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, transform_frame
 
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
     numeric = select_numeric_frame(raw, config.target)
@@ -1183,7 +1197,7 @@ def _scaled_frame_for_secondary(
         *(config.capacity_columns or []),
         *(config.residual_control_columns or []),
         *(config.force_include_variables or []),
-        *extra_protected,
+        *(protected_columns or []),
     ]
     cleaned = preprocess_frame(
         segmented,
@@ -1194,20 +1208,13 @@ def _scaled_frame_for_secondary(
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    transformed = transform_frame(
+    return transform_frame(
         cleaned,
         config.preprocess_mode,
         config.detrend_window,
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    scaled = standardize_frame(transformed)
-    with SCALED_FRAME_CACHE_LOCK:
-        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
-        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
-            oldest_key = next(iter(SCALED_FRAME_CACHE))
-            SCALED_FRAME_CACHE.pop(oldest_key, None)
-    return scaled.copy(deep=True)
 
 
 def _scaled_frame_cache_key(
@@ -2101,6 +2108,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="xgbValidationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-xgbValidationTab" hidden>
         <h2>XGB 四级验证</h2>
+        <div class="help">XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。</div>
         <div class="row">
           <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
           <label>候选数量<input id="xgbTopN" type="number" min="1" max="8" value="8"></label>
@@ -2691,7 +2699,7 @@ async function runXgbValidation() {
     lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
     renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
     renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
-    renderXgbDownloads(data.downloads || []);
+    renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
     renderDownloads(data.downloads || []);
     const message = data.error_message || data.message || "XGB 四级验证失败。";
     const success = data.status === "success";

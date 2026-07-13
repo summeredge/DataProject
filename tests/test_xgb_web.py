@@ -4,6 +4,7 @@ import inspect
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -97,7 +98,7 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
         )
 
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
-    monkeypatch.setattr(web, "load_timeseries_csv", lambda *args, **kwargs: data)
+    monkeypatch.setattr(web, "_prepared_frame_for_validation", lambda config: data)
     monkeypatch.setattr(web, "run_xgb_analysis", fake_service)
     _handler_form(
         monkeypatch,
@@ -140,7 +141,9 @@ def test_missing_final_review_is_rejected_before_loading_or_service_call(
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
     monkeypatch.setattr(
-        web, "load_timeseries_csv", lambda *args, **kwargs: pytest.fail("data must not load")
+        web,
+        "_prepared_frame_for_validation",
+        lambda *args, **kwargs: pytest.fail("data must not be prepared"),
     )
 
     payload = web._run_xgb_validation_response(object())
@@ -172,7 +175,9 @@ def test_invalid_xgb_parameters_are_rejected_before_data_or_service_call(
         {"run_id": run_dir.name, "enable_xgb_validation": "true", field: value},
     )
     monkeypatch.setattr(
-        web, "load_timeseries_csv", lambda *args, **kwargs: pytest.fail("data must not load")
+        web,
+        "_prepared_frame_for_validation",
+        lambda *args, **kwargs: pytest.fail("data must not be prepared"),
     )
     monkeypatch.setattr(
         web, "run_xgb_analysis", lambda **kwargs: pytest.fail("service must not be called")
@@ -189,9 +194,10 @@ def test_xgb_service_errors_remain_isolated_results(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ):
     run_dir, _, _, _ = _write_run(tmp_path)
+    (run_dir / "summary.md").write_text("existing analysis", encoding="utf-8")
     data = pd.DataFrame({"target": [1.0], "x": [2.0]})
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
-    monkeypatch.setattr(web, "load_timeseries_csv", lambda *args, **kwargs: data)
+    monkeypatch.setattr(web, "_prepared_frame_for_validation", lambda config: data)
     monkeypatch.setattr(
         web,
         "run_xgb_analysis",
@@ -205,6 +211,125 @@ def test_xgb_service_errors_remain_isolated_results(
     assert payload["error_message"] == "xgb error"
     assert (run_dir / "ranked_features.csv").exists()
     assert (run_dir / "final_review_summary.csv").exists()
+    assert "summary.md" in {item["name"] for item in payload["downloads"]}
+
+
+def _validation_config(
+    tmp_path: Path, frame: pd.DataFrame, **kwargs
+) -> AnalysisConfig:
+    input_path = tmp_path / "validation.csv"
+    frame.to_csv(input_path, index=False)
+    return AnalysisConfig(
+        input_path=input_path,
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path / "out",
+        min_valid_ratio=0.0,
+        **kwargs,
+    )
+
+
+def test_xgb_prepared_frame_preserves_resampled_lag_units_without_standardizing(
+    tmp_path: Path,
+):
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=60, freq="min"),
+            "target": 100.0 + np.arange(60) * 2.0,
+            "x": 1000.0 + np.arange(60) * 10.0,
+        }
+    )
+    config = _validation_config(tmp_path, frame, resample_rule="5min")
+
+    prepared = web._prepared_frame_for_validation(config)
+
+    assert len(prepared) == 12
+    assert prepared.index.to_series().diff().dropna().eq(pd.Timedelta(minutes=5)).all()
+    assert prepared.index[2] - prepared.index[0] == pd.Timedelta(minutes=10)
+    assert prepared.iloc[0]["target"] == 104.0
+    assert not np.isclose(prepared["target"].mean(), 0.0)
+    assert "standardize_frame" not in inspect.getsource(web._prepared_frame_for_validation)
+
+
+def test_xgb_prepared_frame_applies_operating_segment(tmp_path: Path):
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=30, freq="min"),
+            "target": np.arange(30, dtype=float),
+            "load": np.arange(30, dtype=float),
+            "x": np.arange(30, dtype=float) * 3,
+        }
+    )
+    config = _validation_config(
+        tmp_path,
+        frame,
+        segment_column="load",
+        segment_mode="custom",
+        segment_min=10,
+        segment_max=20,
+    )
+
+    prepared = web._prepared_frame_for_validation(config)
+
+    assert prepared["load"].min() == 10
+    assert prepared["load"].max() == 20
+    assert len(prepared) == 11
+
+
+def test_xgb_prepared_frame_applies_ignore_roles(tmp_path: Path):
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=30, freq="min"),
+            "target": np.arange(30, dtype=float),
+            "ignored": np.arange(30, dtype=float) * 2,
+            "kept": np.arange(30, dtype=float) * 3,
+        }
+    )
+    roles_path = tmp_path / "roles.csv"
+    roles_path.write_text("variable,role\nignored,IGNORE\nkept,PV\n", encoding="utf-8")
+    config = _validation_config(tmp_path, frame, roles_path=roles_path)
+
+    prepared = web._prepared_frame_for_validation(config)
+
+    assert "ignored" not in prepared.columns
+    assert "kept" in prepared.columns
+
+
+@pytest.mark.parametrize("mode", ["diff", "detrend"])
+def test_xgb_prepared_frame_applies_configured_transform(tmp_path: Path, mode: str):
+    values = np.arange(40, dtype=float)
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=40, freq="min"),
+            "target": values**2 + 100,
+            "x": values**3 + 1000,
+        }
+    )
+    config = _validation_config(
+        tmp_path,
+        frame,
+        preprocess_mode=mode,
+        detrend_window=7,
+    )
+
+    prepared = web._prepared_frame_for_validation(config)
+
+    if mode == "diff":
+        assert len(prepared) == len(frame) - 1
+        assert prepared.index[0] > pd.Timestamp(frame.iloc[0]["timestamp"])
+        assert prepared.iloc[0]["target"] == 1.0
+    else:
+        assert len(prepared) == len(frame)
+        assert not prepared["target"].equals(
+            pd.Series(frame["target"].to_numpy(), index=pd.to_datetime(frame["timestamp"]))
+        )
+
+
+def test_xgb_api_uses_shared_prepared_frame_instead_of_raw_loader():
+    source = inspect.getsource(web._run_xgb_validation_response)
+
+    assert "_prepared_frame_for_validation(config)" in source
+    assert "load_timeseries_csv" not in source
 
 
 def test_xgb_web_surface_and_architecture_guards():
@@ -225,3 +350,5 @@ def test_xgb_web_surface_and_architecture_guards():
     assert "from chem_ts_corr.xgb_runner" not in source
     assert "run_xgb_analysis" in source
     assert service.run_xgb_analysis is not None
+    assert "XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。" in web.INDEX_HTML
+    assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML

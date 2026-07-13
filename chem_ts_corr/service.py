@@ -10,6 +10,7 @@ from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
+from chem_ts_corr.xgb_runner import XGBRunResult, run_xgb_validation
 
 
 @dataclass(frozen=True)

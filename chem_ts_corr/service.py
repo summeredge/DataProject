@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -27,6 +28,31 @@ class AnalysisTables:
     lag_peak_quality: pd.DataFrame
     rolling_corr_scores: pd.DataFrame
     metrics: dict[str, float | str]
+
+
+def run_xgb_analysis(
+    *,
+    run_dir: str | Path,
+    data: pd.DataFrame,
+    target: str,
+    final_review_summary: pd.DataFrame,
+    ranked_features: pd.DataFrame | None = None,
+    control_columns: list[str] | None = None,
+    whitelist: list[str] | None = None,
+    top_n: int = 8,
+    max_lag: int | None = None,
+) -> XGBRunResult:
+    return run_xgb_validation(
+        run_dir=run_dir,
+        data=data,
+        target=target,
+        final_review_summary=final_review_summary,
+        ranked_features=ranked_features,
+        control_columns=control_columns,
+        whitelist=whitelist,
+        top_n=top_n,
+        max_lag=max_lag,
+    )
 
 
 def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str], excluded: set[str] | None = None) -> tuple[list[str], list[str]]:

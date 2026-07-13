@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -543,7 +544,92 @@ def test_real_xgb1_setup_is_reused_while_training_is_mocked(
 def test_service_exports_unified_runner_without_pipeline_side_effects():
     assert service.run_xgb_validation is runner.run_xgb_validation
     assert service.XGBRunResult is runner.XGBRunResult
+    assert callable(service.run_xgb_analysis)
     assert not hasattr(pipeline, "run_xgb_validation")
+
+
+def test_service_hook_forwards_all_parameters_and_returns_xgb_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data, final, ranked = _inputs()
+    expected = XGBRunResult("success", (), None, None, None, None)
+    captured: dict[str, object] = {}
+
+    def fake_runner(**kwargs):
+        captured.update(kwargs)
+        return expected
+
+    monkeypatch.setattr(service, "run_xgb_validation", fake_runner)
+    result = service.run_xgb_analysis(
+        run_dir=tmp_path,
+        data=data,
+        target="target",
+        final_review_summary=final,
+        ranked_features=ranked,
+        control_columns=["control"],
+        whitelist=["manual"],
+        top_n=4,
+        max_lag=9,
+    )
+
+    assert result is expected
+    assert captured["run_dir"] == tmp_path
+    assert captured["data"] is data
+    assert captured["target"] == "target"
+    assert captured["final_review_summary"] is final
+    assert captured["ranked_features"] is ranked
+    assert captured["control_columns"] == ["control"]
+    assert captured["whitelist"] == ["manual"]
+    assert captured["top_n"] == 4
+    assert captured["max_lag"] == 9
+
+
+def test_service_hook_missing_final_review_returns_xgb_error(tmp_path: Path):
+    data, _, ranked = _inputs()
+
+    result = service.run_xgb_analysis(
+        run_dir=tmp_path,
+        data=data,
+        target="target",
+        final_review_summary=None,
+        ranked_features=ranked,
+    )
+
+    assert isinstance(result, XGBRunResult)
+    assert result.status == "invalid_input"
+    assert "final_review_summary" in result.error_message
+
+
+def test_service_hook_failure_does_not_modify_analysis_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data, final, ranked = _inputs()
+    before_data = data.copy(deep=True)
+    before_final = final.copy(deep=True)
+    before_ranked = ranked.copy(deep=True)
+    failed = XGBRunResult("failed", (), None, None, None, "training failed")
+    monkeypatch.setattr(service, "run_xgb_validation", lambda **kwargs: failed)
+
+    result = service.run_xgb_analysis(
+        run_dir=tmp_path,
+        data=data,
+        target="target",
+        final_review_summary=final,
+        ranked_features=ranked,
+    )
+
+    assert result is failed
+    pd.testing.assert_frame_equal(data, before_data)
+    pd.testing.assert_frame_equal(final, before_final)
+    pd.testing.assert_frame_equal(ranked, before_ranked)
+
+
+def test_service_hook_is_not_called_by_existing_analysis_or_pipeline():
+    service_source = inspect.getsource(service.analyze_numeric_frame)
+    pipeline_source = Path("chem_ts_corr/pipeline.py").read_text(encoding="utf-8")
+
+    assert "run_xgb_analysis" not in service_source
+    assert "run_xgb_analysis" not in pipeline_source
 
 
 def test_service_and_pipeline_have_no_xgb_ranking_writeback_patterns():

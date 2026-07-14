@@ -1668,6 +1668,7 @@ INDEX_HTML = r"""<!doctype html>
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .causal-review-params { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; }
     label.checkbox-row { display:flex; align-items:center; align-self:end; gap:8px; min-height:31px; }
     label.checkbox-row input[type="checkbox"] { width:auto; margin:0; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
@@ -1850,7 +1851,6 @@ INDEX_HTML = r"""<!doctype html>
         <div class="control-group-title">数据输入</div>
       <div class="actions">
         <button id="upload">上传并识别列</button>
-        <button id="analyze" disabled>开始分析</button>
         <button id="reset" class="secondary">清空</button>
       </div>
       <label>数据文件（CSV / Excel / TXT）
@@ -1939,7 +1939,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">XGB 四级验证</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">四级验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
@@ -1947,6 +1947,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
         <h2>初步分析</h2>
+        <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="overview" class="overview-grid"></div>
         <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
@@ -2070,7 +2071,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
         <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</div>
         <div class="help">高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</div>
-        <div class="row">
+        <div class="causal-review-params">
           <label>条件Granger滞后模式
             <select id="conditionalLagMode">
               <option value="ranked_window">围绕主筛查最佳滞后</option>

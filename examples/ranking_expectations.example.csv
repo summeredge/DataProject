@@ -1,0 +1,4 @@
+variable,expected_class,reason
+EXAMPLE_UPSTREAM_MV,reasonable_driver,known upstream operation variable
+EXAMPLE_DOWNSTREAM_PV,implausible_driver,known downstream response variable
+EXAMPLE_REFERENCE,neutral,reference only

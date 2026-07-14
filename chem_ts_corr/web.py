@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
+import math
 import re
 import threading
 import time
@@ -25,6 +26,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
@@ -73,6 +75,9 @@ DOWNLOAD_FILES = {
     "enhanced_validation_summary.csv",
     "llm_prompt.md",
     "llm_report.md",
+    "xgb_validation/xgb_model_summary.csv",
+    "xgb_validation/xgb_candidate_uplift.csv",
+    "xgb_validation/xgb_validation_summary.json",
 }
 MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
 TASK_TTL_SECONDS = 6 * 60 * 60
@@ -120,6 +125,15 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 params = parse_qs(parsed.query)
                 self._send_json(_trend_response(params))
+            except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
+                self._send_json({"error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/scatter_matrix":
+            try:
+                params = parse_qs(parsed.query)
+                self._send_json(_scatter_matrix_response(params))
             except Exception as exc:
                 if _is_client_disconnect(exc):
                     return
@@ -174,6 +188,9 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path in {"/run_causal_review", "/api/run_causal_review"}:
                 self._send_json(_run_causal_review_response(self))
                 return
+            if self.path == "/api/run_xgb_validation":
+                self._send_json(_run_xgb_validation_response(self))
+                return
             if self.path == "/api/llm_prompt":
                 self._send_json(_llm_prompt_response(self))
                 return
@@ -223,12 +240,16 @@ class _Handler(BaseHTTPRequestHandler):
         if RUNS_DIR.resolve() not in path.parents or not path.exists():
             raise FileNotFoundError("Download file was not found")
 
-        content_type = "text/csv; charset=utf-8" if path.suffix == ".csv" else "text/markdown; charset=utf-8"
+        content_types = {
+            ".csv": "text/csv; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+        }
+        content_type = content_types.get(path.suffix, "text/markdown; charset=utf-8")
         body = path.read_bytes()
         try:
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Disposition", f'attachment; filename="{file_name}"')
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -290,6 +311,13 @@ def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
 
 def _read_data_sample(path: Path, encoding: str) -> tuple[pd.DataFrame, str]:
     return read_timeseries_table(path, encoding=encoding, nrows=5000)
+
+
+def _resolve_encoding(path: Path, encoding: str) -> str:
+    if encoding and encoding != "auto":
+        return encoding
+    _, used_encoding = _read_data_sample(path, encoding or "utf-8-sig")
+    return used_encoding
 
 
 def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
@@ -509,23 +537,38 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查并生成 ranked_features.csv")
 
-    variables = [variable for variable in _secondary_variables_from_ranked(ranked, config) if variable != config.target]
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
-    scaled = _scaled_frame_for_secondary(config)
-    variables = [variable for variable in variables if variable in scaled.columns]
+    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
-        raise ValueError("候选变量在预处理后的数据中不存在，请检查上传数据和配置")
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
-    best_lags = _best_lags_from_ranked(ranked)
-    lift = model_lift_scores(scaled, config.target, variables, config.max_lag, best_lags=best_lags)
-    rolling = rolling_corr_scores(scaled, config.target, variables, config.max_lag)
+    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
+    best_lags = {} if lag_search_changed else _best_lags_from_ranked(ranked)
+    best_lags = _secondary_best_lags_for_missing_variables(
+        scaled,
+        secondary_config.target,
+        variables,
+        best_lags,
+        secondary_config.max_lag,
+        recompute_limit=None if lag_search_changed else 20,
+    )
+    lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
+    rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
     enhanced = _enhanced_validation_summary(ranked, lift, rolling)
 
     lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
@@ -544,26 +587,60 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
 def _enhanced_validation_summary(
     ranked: pd.DataFrame, model_lift: pd.DataFrame, rolling: pd.DataFrame
 ) -> pd.DataFrame:
-    if ranked.empty or "variable" not in ranked.columns:
-        return pd.DataFrame()
-    columns = [
+    base_columns = [
         column
         for column in ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"]
         if column in ranked.columns
     ]
-    summary = ranked[columns].copy(deep=True)
-    if not model_lift.empty:
-        summary = summary.merge(
-            model_lift[[c for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"] if c in model_lift.columns]],
-            on="variable",
-            how="left",
-        )
-    if not rolling.empty:
-        summary = summary.merge(
-            rolling[[c for c in ["variable", "rolling_stability", "rolling_corr_median", "rolling_sign_consistency", "valid_window_count"] if c in rolling.columns]],
-            on="variable",
-            how="left",
-        )
+
+    variable_sources: list[str] = []
+    for frame in [ranked, model_lift, rolling]:
+        if not frame.empty and "variable" in frame.columns:
+            variable_sources.extend(frame["variable"].dropna().astype(str).tolist())
+
+    variables = list(dict.fromkeys([v for v in variable_sources if v]))
+    if not variables:
+        return pd.DataFrame()
+
+    summary = pd.DataFrame({"variable": variables})
+
+    if base_columns and "variable" in base_columns:
+        ranked_meta = ranked[base_columns].copy(deep=True)
+        ranked_meta["variable"] = ranked_meta["variable"].astype(str)
+        ranked_meta = ranked_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(ranked_meta, on="variable", how="left")
+    else:
+        for column in ["final_score", "lag", "direction", "risk_flags", "recommended_use"]:
+            summary[column] = pd.NA
+
+    if not model_lift.empty and "variable" in model_lift.columns:
+        lift_columns = [
+            c
+            for c in ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"]
+            if c in model_lift.columns
+        ]
+        lift_meta = model_lift[lift_columns].copy(deep=True)
+        lift_meta["variable"] = lift_meta["variable"].astype(str)
+        lift_meta = lift_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(lift_meta, on="variable", how="left")
+
+    if not rolling.empty and "variable" in rolling.columns:
+        rolling_columns = [
+            c
+            for c in [
+                "variable",
+                "rolling_stability",
+                "rolling_corr_median",
+                "rolling_sign_consistency",
+                "valid_window_count",
+            ]
+            if c in rolling.columns
+        ]
+        rolling_meta = rolling[rolling_columns].copy(deep=True)
+        rolling_meta["variable"] = rolling_meta["variable"].astype(str)
+        rolling_meta = rolling_meta.drop_duplicates(subset=["variable"], keep="first")
+        summary = summary.merge(rolling_meta, on="variable", how="left")
+
     summary["interpretation"] = "enhanced screening only; not a causal conclusion"
     return summary
 
@@ -572,17 +649,26 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(ranked, config)
-    scaled = _scaled_frame_for_secondary(config)
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
+    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
+    if not variables:
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     granger = run_granger_tests(
         scaled,
-        target=config.target,
+        target=secondary_config.target,
         variables=variables,
-        maxlag=config.resolved_granger_maxlag(),
+        maxlag=max(1, secondary_config.max_lag),
     )
     granger.to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
     return {
@@ -595,24 +681,44 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    config = _read_run_config(output_dir)
+    base_config = _read_run_config(output_dir)
+    secondary_config = _secondary_config_from_form(base_config, form)
+    extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(ranked, config)
+    variables = _secondary_variables_from_ranked(
+        ranked,
+        base_config,
+        extra_variables=extra_variables,
+    )
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
-    best_lags = _best_lags_from_ranked(ranked)
-    best_lags = _merge_near_miss_lags(best_lags, near_miss)
-    scaled = _scaled_frame_for_secondary(config)
-    variables = [variable for variable in variables if variable in scaled.columns]
+    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
+    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
+    if lag_search_changed:
+        best_lags = {}
+    else:
+        best_lags = _best_lags_from_ranked(ranked)
+        best_lags = _merge_near_miss_lags(best_lags, near_miss)
+    best_lags = _secondary_best_lags_for_missing_variables(
+        scaled,
+        secondary_config.target,
+        variables,
+        best_lags,
+        secondary_config.max_lag,
+        recompute_limit=None if lag_search_changed else 20,
+    )
+    if not variables:
+        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
     importance, metrics = fit_explainable_model(
         scaled,
-        target=config.target,
-        max_lag=config.max_lag,
+        target=secondary_config.target,
+        max_lag=secondary_config.max_lag,
         candidate_variables=variables,
-        max_features=config.max_model_features,
-        random_state=config.random_state,
+        max_features=secondary_config.max_model_features,
+        random_state=secondary_config.random_state,
         best_lags=best_lags,
         lag_mode="best_only",
     )
@@ -622,8 +728,8 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         importance,
         ranked,
         risk_flags=risk,
-        screening_top_n=config.top_k,
-        max_lag=config.max_lag,
+        screening_top_n=base_config.top_k,
+        max_lag=secondary_config.max_lag,
     )
     importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
     model_variable_importance.to_csv(output_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig")
@@ -683,6 +789,136 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+    }
+
+
+def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    if not _bool_field(form, "enable_xgb_validation"):
+        return {
+            "status": "skipped",
+            "error_message": None,
+            "xgbModelSummary": [],
+            "xgbCandidateUplift": [],
+            "xgbValidationSummary": {},
+            "downloads": [],
+            "message": "XGB 四级验证未启用。",
+        }
+
+    run_id = _field(form, "run_id")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    top_n_raw = _field(form, "top_n", str(config.xgb_top_n)).strip()
+    try:
+        top_n = int(top_n_raw)
+    except ValueError:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="top_n must be an integer between 1 and 8",
+        )
+    if not 1 <= top_n <= 8:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="top_n must be an integer between 1 and 8",
+        )
+
+    max_lag_raw = _field(form, "max_lag").strip()
+    if max_lag_raw:
+        try:
+            max_lag = int(max_lag_raw)
+        except ValueError:
+            return _xgb_response_payload(
+                run_id,
+                output_dir,
+                status="invalid_input",
+                error_message="max_lag must be an integer between 1 and 5000",
+            )
+        if not 1 <= max_lag <= 5000:
+            return _xgb_response_payload(
+                run_id,
+                output_dir,
+                status="invalid_input",
+                error_message="max_lag must be an integer between 1 and 5000",
+            )
+    else:
+        max_lag = config.xgb_max_lag
+
+    final_summary = _safe_read_result_csv(output_dir / "final_review_summary.csv")
+    if final_summary.empty:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="missing final_review_summary; run the third-level review first",
+        )
+
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    data = _prepared_frame_for_validation(config)
+    result = run_xgb_analysis(
+        run_dir=output_dir,
+        data=data,
+        target=config.target,
+        final_review_summary=final_summary,
+        ranked_features=ranked,
+        control_columns=(
+            _list_field(form, "control_columns")
+            or config.residual_control_columns
+            or config.capacity_columns
+        ),
+        whitelist=_list_field(form, "whitelist"),
+        top_n=top_n,
+        max_lag=max_lag,
+    )
+    return _xgb_response_payload(
+        run_id,
+        output_dir,
+        status=result.status,
+        error_message=result.error_message,
+    )
+
+
+def _xgb_response_payload(
+    run_id: str,
+    output_dir: Path,
+    *,
+    status: str,
+    error_message: str | None,
+) -> dict[str, Any]:
+    model_summary = pd.DataFrame()
+    candidate_uplift = pd.DataFrame()
+    validation_summary: dict[str, Any] = {}
+    downloads = _download_links(run_id, output_dir)
+    if status == "success":
+        model_summary = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_model_summary.csv"
+        )
+        candidate_uplift = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_candidate_uplift.csv"
+        )
+        summary_path = output_dir / "xgb_validation" / "xgb_validation_summary.json"
+        validation_summary = (
+            json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary_path.exists()
+            else {}
+        )
+    messages = {
+        "success": "XGB 四级验证完成。",
+        "missing_dependency": "XGB 四级验证缺少可选依赖。",
+        "invalid_input": "XGB 四级验证输入无效。",
+        "failed": "XGB 四级验证失败。",
+    }
+    return {
+        "status": status,
+        "error_message": error_message,
+        "xgbModelSummary": _records(model_summary),
+        "xgbCandidateUplift": _records(candidate_uplift),
+        "xgbValidationSummary": validation_summary,
+        "downloads": downloads,
+        "message": messages.get(status, "XGB 四级验证未运行。"),
     }
 
 
@@ -780,15 +1016,69 @@ def _filter_candidates_by_risk_flags(
     return candidates[candidates["variable"].astype(str).isin(variables)].copy(deep=True)
 
 
-def _secondary_variables_from_ranked(ranked: pd.DataFrame, config: AnalysisConfig) -> list[str]:
+def _secondary_variables_from_ranked(
+    ranked: pd.DataFrame,
+    config: AnalysisConfig,
+    extra_variables: list[str] | None = None,
+) -> list[str]:
     if ranked.empty or "variable" not in ranked.columns:
-        return []
+        return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
     top = ranked.head(config.top_k)["variable"].astype(str).tolist()
     if "force_included" in ranked.columns:
         forced = ranked[ranked["force_included"].astype(bool)]["variable"].astype(str).tolist()
     else:
         forced = [v for v in (config.force_include_variables or []) if v]
-    return list(dict.fromkeys(top + forced))
+    extra = [v for v in (extra_variables or []) if v]
+    return list(dict.fromkeys(top + forced + extra))
+
+
+def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) -> AnalysisConfig:
+    mode = _field(form, "secondary_resample_mode", "raw").strip().lower()
+    custom_rule = _field(form, "secondary_resample_rule", "").strip()
+    secondary_max_lag = _int_field(form, "secondary_max_lag", config.max_lag)
+    secondary_max_lag = min(5000, max(0, secondary_max_lag))
+
+    if mode == "inherit":
+        resample_rule = config.resample_rule
+    elif mode == "custom":
+        resample_rule = custom_rule or None
+    else:
+        resample_rule = None
+
+    extra_variables = _secondary_extra_variables_from_form(form)
+    force_include_variables = list(
+        dict.fromkeys(
+            [v for v in (config.force_include_variables or []) if v]
+            + [v for v in extra_variables if v]
+        )
+    )
+
+    return replace(
+        config,
+        resample_rule=resample_rule,
+        max_lag=secondary_max_lag,
+        force_include_variables=force_include_variables,
+    )
+
+
+def _normalized_resample_rule(rule: str | None) -> str:
+    return "" if rule is None else str(rule).strip().lower()
+
+
+def _secondary_lag_search_changed(
+    base_config: AnalysisConfig,
+    secondary_config: AnalysisConfig,
+) -> bool:
+    return (
+        _normalized_resample_rule(base_config.resample_rule)
+        != _normalized_resample_rule(secondary_config.resample_rule)
+        or int(base_config.max_lag) != int(secondary_config.max_lag)
+    )
+
+
+def _secondary_extra_variables_from_form(form: dict[str, Any]) -> list[str]:
+    return _list_field(form, "secondary_include_variables")
+
 
 def _near_miss_variables(near_miss: pd.DataFrame, limit: int = 10) -> list[str]:
     if near_miss.empty or "variable" not in near_miss.columns:
@@ -803,6 +1093,47 @@ def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
         str(row["variable"]): int(row["lag"])
         for _, row in ranked[["variable", "lag"]].dropna().iterrows()
     }
+
+
+def _secondary_best_lags_for_missing_variables(
+    frame: pd.DataFrame,
+    target: str,
+    variables: list[str],
+    existing_best_lags: dict[str, int],
+    max_lag: int,
+    recompute_limit: int | None = 20,
+) -> dict[str, int]:
+    from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+
+    merged = dict(existing_best_lags or {})
+    if target not in frame.columns or max_lag <= 0:
+        return merged
+
+    missing_lag_variables = [
+        variable
+        for variable in variables
+        if variable not in merged and variable != target and variable in frame.columns
+    ]
+
+    if recompute_limit is not None:
+        limit = max(0, int(recompute_limit))
+        missing_lag_variables = missing_lag_variables[:limit]
+
+    for variable in missing_lag_variables:
+        pair = frame[[target, variable]].dropna()
+        if len(pair) < max(10, max_lag + 5):
+            continue
+
+        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        if best.empty or "lag" not in best.columns:
+            continue
+
+        try:
+            merged[variable] = int(best.iloc[0]["lag"])
+        except (TypeError, ValueError):
+            continue
+
+    return merged
 
 
 def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:
@@ -820,16 +1151,34 @@ def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) ->
     return merged
 
 
-def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
-    from chem_ts_corr.data import select_numeric_frame
-    from chem_ts_corr.screening import apply_ignore_roles, load_roles
-    from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
+def _scaled_frame_for_secondary(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.preprocess import standardize_frame
 
-    cache_key = _scaled_frame_cache_key(config)
+    extra_protected = tuple(c for c in (protected_columns or []) if c)
+    cache_key = _scaled_frame_cache_key(config, extra_protected)
     with SCALED_FRAME_CACHE_LOCK:
         cached = SCALED_FRAME_CACHE.get(cache_key)
         if cached is not None:
             return cached.copy(deep=True)
+
+    transformed = _prepared_frame_for_validation(config, protected_columns)
+    scaled = standardize_frame(transformed)
+    with SCALED_FRAME_CACHE_LOCK:
+        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
+            oldest_key = next(iter(SCALED_FRAME_CACHE))
+            SCALED_FRAME_CACHE.pop(oldest_key, None)
+    return scaled.copy(deep=True)
+
+
+def _prepared_frame_for_validation(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.data import select_numeric_frame
+    from chem_ts_corr.screening import apply_ignore_roles, load_roles
+    from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, transform_frame
 
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
     numeric = select_numeric_frame(raw, config.target)
@@ -848,6 +1197,7 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         *(config.capacity_columns or []),
         *(config.residual_control_columns or []),
         *(config.force_include_variables or []),
+        *(protected_columns or []),
     ]
     cleaned = preprocess_frame(
         segmented,
@@ -858,23 +1208,18 @@ def _scaled_frame_for_secondary(config: AnalysisConfig) -> pd.DataFrame:
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    transformed = transform_frame(
+    return transform_frame(
         cleaned,
         config.preprocess_mode,
         config.detrend_window,
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    scaled = standardize_frame(transformed)
-    with SCALED_FRAME_CACHE_LOCK:
-        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
-        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
-            oldest_key = next(iter(SCALED_FRAME_CACHE))
-            SCALED_FRAME_CACHE.pop(oldest_key, None)
-    return scaled.copy(deep=True)
 
 
-def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
+def _scaled_frame_cache_key(
+    config: AnalysisConfig, protected_columns: tuple[str, ...] = ()
+) -> tuple[Any, ...]:
     path = Path(config.input_path)
     stat = path.stat() if path.exists() else None
     roles_path = Path(config.roles_path).resolve() if config.roles_path else None
@@ -896,6 +1241,7 @@ def _scaled_frame_cache_key(config: AnalysisConfig) -> tuple[Any, ...]:
         tuple(config.capacity_columns or []),
         tuple(config.residual_control_columns or []),
         tuple(config.force_include_variables or []),
+        protected_columns,
         config.resample_rule,
         config.min_valid_ratio,
         config.max_interpolate_gap_points,
@@ -910,17 +1256,15 @@ def _clear_scaled_frame_cache() -> None:
         SCALED_FRAME_CACHE.clear()
 
 
-def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
+def _chart_frame_from_params(
+    params: dict[str, list[str]],
+    variables: list[str],
+) -> tuple[pd.DataFrame, int, int]:
     file_id = _single(params, "file_id")
     encoding = _single(params, "encoding", "utf-8-sig")
     input_path = _resolve_upload(file_id)
     resolved_encoding = _resolve_encoding(input_path, encoding)
     time_column = _single(params, "time_column")
-    variables = [value for value in _single(params, "variables").split(",") if value]
-    if not variables:
-        raise ValueError("请选择至少一个趋势变量")
-    if len(variables) > 4:
-        raise ValueError("最多选择 4 个趋势变量")
 
     from chem_ts_corr.data import load_timeseries_csv, select_numeric_frame
     from chem_ts_corr.preprocess import segment_by_load, transform_frame
@@ -933,11 +1277,11 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
     if end_time:
         raw = raw.loc[raw.index <= pd.to_datetime(end_time)]
     if raw.empty:
-        raise ValueError("趋势图时间范围内没有数据")
+        raise ValueError("图表时间范围内没有数据")
     numeric = select_numeric_frame(raw, variables[0])
     columns = [column for column in variables if column in numeric.columns]
     if not columns:
-        raise ValueError("选择的趋势变量不是有效数值列")
+        raise ValueError("选择的变量不是有效数值列")
     frame_columns = list(dict.fromkeys(columns + [col for col in [_single(params, "segment_column")] if col and col in numeric.columns]))
     frame = numeric[frame_columns]
     segmented = segment_by_load(
@@ -952,18 +1296,33 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
         _single(params, "preprocess_mode", "raw"),
         int(_single(params, "detrend_window", "24") or 24),
     )
-    max_points = max(100, int(_single(params, "trend_max_points", "10000") or 10000))
+    max_points = min(100000, max(100, int(_single(params, "trend_max_points", "10000") or 10000)))
     raw_rows = len(transformed)
     if len(transformed) > max_points:
-        step = max(1, len(transformed) // max_points)
-        transformed = transformed.iloc[::step]
+        positions = [int(index * (len(transformed) - 1) / (max_points - 1)) for index in range(max_points)]
+        positions = list(dict.fromkeys(positions))
+        transformed = transformed.iloc[positions]
+    return transformed, int(raw_rows), int(max_points)
+
+
+def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
+    variables = [value for value in _single(params, "variables").split(",") if value]
+    if not variables:
+        raise ValueError("请选择至少一个趋势变量")
+    if len(variables) > 4:
+        raise ValueError("最多选择 4 个趋势变量")
+
+    transformed, raw_rows, max_points = _chart_frame_from_params(params, variables)
+    columns = [column for column in variables if column in transformed.columns]
+    if not columns:
+        raise ValueError("选择的趋势变量不是有效数值列")
 
     return {
         "series": [
             {
                 "name": column,
                 "points": [
-                    {"x": str(index), "y": None if pd.isna(value) else float(value)}
+                    {"x": str(index), "y": _finite_json_number(value)}
                     for index, value in transformed[column].items()
                 ],
             }
@@ -973,6 +1332,71 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
         "raw_rows": int(raw_rows),
         "max_points": int(max_points),
     }
+
+
+def _finite_json_number(value: Any) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
+def _scatter_matrix_response(params: dict[str, list[str]]) -> dict[str, Any]:
+    x_variables = list(
+        dict.fromkeys(
+            value.strip()
+            for value in _single(params, "x_variables").split(",")
+            if value.strip()
+        )
+    )
+    y_variables = list(
+        dict.fromkeys(
+            value.strip()
+            for value in _single(params, "y_variables").split(",")
+            if value.strip()
+        )
+    )
+    if not x_variables:
+        raise ValueError("请选择至少一个 X 轴变量")
+    if not y_variables:
+        raise ValueError("请选择至少一个 Y 轴变量")
+    if len(x_variables) > 3:
+        raise ValueError("X 轴变量最多选择 3 个")
+    if len(y_variables) > 3:
+        raise ValueError("Y 轴变量最多选择 3 个")
+
+    columns = list(dict.fromkeys(x_variables + y_variables))
+    try:
+        transformed, raw_rows, max_points = _chart_frame_from_params(params, columns)
+    except ValueError as exc:
+        if "Not enough rows in selected operating segment" in str(exc):
+            raise ValueError("当前时间范围、工况和预处理条件下没有可绘制的散点数据") from exc
+        raise
+    if transformed.empty:
+        raise ValueError("当前时间范围、工况和预处理条件下没有可绘制的散点数据")
+    columns = [column for column in columns if column in transformed.columns]
+    if not columns:
+        raise ValueError("选择的散点矩阵变量不是有效数值列")
+
+    values = [
+        [_finite_json_number(value) for value in row]
+        for row in transformed[columns].itertuples(
+            index=False,
+            name=None,
+        )
+    ]
+    return {
+        "x_variables": [column for column in x_variables if column in columns],
+        "y_variables": [column for column in y_variables if column in columns],
+        "columns": columns,
+        "values": values,
+        "rows": int(len(values)),
+        "raw_rows": int(raw_rows),
+        "max_points": int(max_points),
+    }
+
+
 
 
 def _overview_payload(
@@ -1000,14 +1424,6 @@ def _summary_metrics(summary: str) -> dict[str, str]:
         key, value = line[2:].split(":", 1)
         metrics[key.strip()] = value.strip()
     return metrics
-
-
-def _resolve_encoding(path: Path, encoding: str) -> str:
-    if encoding != "auto":
-        return encoding
-    _, used_encoding = _read_data_sample(path, "auto")
-    return used_encoding
-
 
 def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     content_type = handler.headers.get("Content-Type", "")
@@ -1040,7 +1456,6 @@ def _multipart_form(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         return form
     data = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
     return {k: (v[0] if v else "") for k, v in data.items()}
-
 
 def _resolve_upload(file_id: str) -> Path:
     file_id = _validate_file_id(file_id)
@@ -1247,10 +1662,14 @@ INDEX_HTML = r"""<!doctype html>
     section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
     .controls { display:grid; gap:10px; align-content:start; font-size:80%; }
     .control-group { display:grid; gap:8px; padding:10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
+    .card { display:grid; gap:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface-muted); }
+    .grid { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:10px; align-items:end; }
     .control-group-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    label.checkbox-row { display:flex; align-items:center; align-self:end; gap:8px; min-height:31px; }
+    label.checkbox-row input[type="checkbox"] { width:auto; margin:0; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
     .check input { width:auto; }
     .actions { display:flex; gap:10px; flex-wrap:wrap; }
@@ -1325,9 +1744,14 @@ INDEX_HTML = r"""<!doctype html>
     .chart svg { width:100%; height:320px; display:block; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
+    .scatter-matrix-section { display:grid; gap:12px; margin-top:10px; }
+    .scatter-matrix-controls { display:grid; grid-template-columns:repeat(3, minmax(150px, 1fr)); gap:10px; align-items:end; }
+    .scatter-matrix-chart { min-height:280px; border:1px solid var(--line); border-radius:6px; background:var(--panel); overflow:auto; }
+    .scatter-matrix-chart.empty { display:grid; place-items:center; color:var(--muted); font-size:var(--font-sm); padding:16px; }
+    .scatter-matrix-chart canvas { display:block; }
     .llm-config-grid { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:end; }
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
-    .trend-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+    .trend-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:start; }
     .trend-stats.empty { display:block; color:var(--muted); font-size:var(--font-sm); }
     .trend-stat-card { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:10px; }
     .trend-stat-card h3 { margin:0 0 8px; font-size:var(--font-sm); overflow-wrap:anywhere; }
@@ -1411,8 +1835,8 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:var(--font-base); }
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
-    @media (max-width:560px) { .llm-config-grid { grid-template-columns:1fr; } }
+    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -1515,6 +1939,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">XGB 四级验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
@@ -1568,12 +1993,53 @@ INDEX_HTML = r"""<!doctype html>
         <div id="trendChart" class="chart empty">选择 1 到 4 个数据后点击“显示趋势”。</div>
         <div id="trendLegend" class="legend"></div>
         <div id="trendStats" class="trend-stats empty">选择数据并点击“显示趋势”后显示统计摘要。</div>
+        <section class="scatter-matrix-section">
+          <h2>XY 散点矩阵</h2>
+          <div class="help">最多选择 3 个 X 轴变量和 3 个 Y 轴变量，按组合显示最多 9 个散点子图。散点关系用于人工观察变量关系、分群和异常点，不代表因果关系。</div>
+          <div class="scatter-matrix-controls">
+            <label>X 变量 1<select id="scatterX1"></select></label>
+            <label>X 变量 2<select id="scatterX2"></select></label>
+            <label>X 变量 3<select id="scatterX3"></select></label>
+            <label>Y 变量 1<select id="scatterY1"></select></label>
+            <label>Y 变量 2<select id="scatterY2"></select></label>
+            <label>Y 变量 3<select id="scatterY3"></select></label>
+            <button id="drawScatterMatrix" disabled>显示散点矩阵</button>
+          </div>
+          <div id="scatterMatrixMeta" class="help">选择 X 和 Y 变量后点击“显示散点矩阵”。</div>
+          <div id="scatterMatrixChart" class="scatter-matrix-chart empty">选择至少一个 X 变量和一个 Y 变量。</div>
+        </section>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
-        <h2>二次验证</h2>
-        <div class="help">先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</div>
-        <div class="help">Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</div>
+        <div class="card">
+          <h3>二次验证参数</h3>
+          <div class="help">
+            <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
+            <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
+            <span>原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；在主筛查 TopK 和主筛查强制复核变量之外，可追加补充变量进入二次验证；若改用原始采样，请按原始采样间隔重新填写最大滞后点数，例如 1min 数据验证 360min 滞后，应填 360。</span>
+          </div>
+          <div class="grid">
+            <label>二次验证补充变量（白名单）
+              <details id="secondaryIncludeDropdown" class="multi-dropdown">
+                <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
+                <div id="secondaryIncludeOptions" class="multi-options"></div>
+              </details>
+            </label>
+            <label>二次验证重采样
+              <select id="secondaryResampleMode">
+                <option value="raw" selected>原始数据（不重采样）</option>
+                <option value="inherit">继承主筛查</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <label>二次验证自定义重采样规则
+              <input id="secondaryResampleRule" placeholder="例如 2min / 5min，仅自定义时使用">
+            </label>
+            <label>二次验证最大滞后点数
+              <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
+            </label>
+          </div>
+        </div>
         <div class="actions">
           <button id="runEnhancedScreening" disabled>运行增强筛选</button>
           <button id="runGranger" disabled>运行 Granger 验证</button>
@@ -1640,6 +2106,30 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
 
+      <div id="xgbValidationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-xgbValidationTab" hidden>
+        <h2>XGB 四级验证</h2>
+        <div class="help">XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。</div>
+        <div class="row">
+          <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
+          <label>候选数量<input id="xgbTopN" type="number" min="1" max="8" value="8"></label>
+          <label>最大滞后<input id="xgbMaxLag" type="number" min="1" max="5000" placeholder="自动"></label>
+          <label>白名单<input id="xgbWhitelist" placeholder="变量名以逗号分隔"></label>
+        </div>
+        <div class="actions">
+          <button id="runXgbValidation" disabled>运行 XGB 四级验证</button>
+        </div>
+        <div id="xgbStatus" class="help" aria-live="polite">XGB 四级验证未启用。</div>
+        <div id="xgbRunSummary" class="overview-grid"></div>
+        <h2>模型时间外验证摘要</h2>
+        <div class="download-buttons" id="xgbModelSummaryDownload"></div>
+        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 四级验证。</div>
+        <h2>候选变量增量验证</h2>
+        <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
+        <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 四级验证。</div>
+        <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
+      </div>
+
+
       <div id="llmReportTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-llmReportTab" hidden>
         <h2>AI 综合解读</h2>
         <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
@@ -1647,8 +2137,7 @@ INDEX_HTML = r"""<!doctype html>
           <label>分析变量数量<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
           <label>报告类型
             <select id="llmReportType">
-              <option value="apc_advice">APC/DCS 工程建议</option>
-              <option value="general">通用综合解读</option>
+              <option value="apc_advice">工程建议</option>
             </select>
           </label>
           <label>模型服务
@@ -1716,33 +2205,52 @@ let lastConditionalRows = [];
 let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
+let lastXgbModelSummaryRows = [];
+let lastXgbCandidateUpliftRows = [];
+let lastXgbValidationSummary = {};
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
-let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+let tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 const llmPromptEndpoint = "/api/llm_prompt";
 let lastTrendSeries = [];
 let lastTrendAxisMode = "shared";
 let trendResizeTimer = null;
+let lastScatterMatrixPayload = null;
+let scatterMatrixResizeTimer = null;
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
   button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
 el("drawTrend").addEventListener("click", drawTrend);
+el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
 el("runCausalReview").addEventListener("click", runCausalReview);
+el("runXgbValidation").addEventListener("click", runXgbValidation);
+el("enableXgbValidation").addEventListener("change", updateXgbRunAvailability);
 el("detailModalClose").addEventListener("click", closeDetailModal);
 el("detailModal").addEventListener("click", (event) => { if (event.target === el("detailModal")) closeDetailModal(); });
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeDetailModal(); });
 window.addEventListener("resize", () => {
-  if (!lastTrendSeries.length) return;
-  clearTimeout(trendResizeTimer);
-  trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+  if (lastTrendSeries.length) {
+    const trendContainer = el("trendChart");
+    if (isElementVisible(trendContainer)) {
+      clearTimeout(trendResizeTimer);
+      trendResizeTimer = setTimeout(() => renderTrendChart(lastTrendSeries, lastTrendAxisMode), 120);
+    }
+  }
+  if (lastScatterMatrixPayload) {
+    const scatterContainer = el("scatterMatrixChart");
+    if (isElementVisible(scatterContainer)) {
+      clearTimeout(scatterMatrixResizeTimer);
+      scatterMatrixResizeTimer = setTimeout(() => renderScatterMatrix(lastScatterMatrixPayload), 120);
+    }
+  }
 });
 el("testLlmConnection").addEventListener("click", testLlmConnection);
 el("generateLlmReport").addEventListener("click", generateLlmReport);
@@ -1816,6 +2324,35 @@ function updateForceIncludeSummary() {
   el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
 }
 
+function fillSecondaryIncludeOptions(columns) {
+  const box = el("secondaryIncludeOptions");
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("change", updateSecondaryIncludeSummary);
+    box.appendChild(row);
+  });
+  updateSecondaryIncludeSummary();
+}
+
+function getSecondaryIncludeSelection() {
+  return Array.from(document.querySelectorAll('#secondaryIncludeOptions input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+function updateSecondaryIncludeSummary() {
+  const selected = getSecondaryIncludeSelection();
+  el("secondaryIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择二次验证补充变量";
+}
+
+function appendSecondaryValidationOptions(form) {
+  form.append("secondary_include_variables", getSecondaryIncludeSelection().join(","));
+  form.append("secondary_resample_mode", el("secondaryResampleMode").value || "raw");
+  form.append("secondary_resample_rule", el("secondaryResampleRule").value.trim());
+  form.append("secondary_max_lag", el("secondaryMaxLag").value);
+}
+
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
@@ -1843,12 +2380,22 @@ async function loadColumns() {
   fillSelect(el("segmentColumn"), data.numericColumns, true);
   fillCapacityOptions(data.numericColumns);
   fillForceIncludeOptions(data.numericColumns);
+  fillSecondaryIncludeOptions(data.numericColumns);
   el("capacityDropdown").open = false;
   el("forceIncludeDropdown").open = false;
+  el("secondaryIncludeDropdown").open = false;
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar4"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX1"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX2"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterX3"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY1"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY2"), data.numericColumns, true, "不选择");
+  fillSelect(el("scatterY3"), data.numericColumns, true, "不选择");
+  lastScatterMatrixPayload = null;
+  clearScatterMatrix();
   const timeCandidate = data.columns.find((name) => /time|date|timestamp|时间|日期/i.test(name));
   if (data.timeColumn && data.columns.includes(data.timeColumn)) {
     el("timeColumn").value = data.timeColumn;
@@ -1864,6 +2411,7 @@ async function loadColumns() {
     }
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
+  el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
     setStatus(`列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
   } catch (error) {
     el("analyze").disabled = true;
@@ -1946,9 +2494,13 @@ function renderAnalysisResult(data) {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastXgbModelSummaryRows = [];
+  lastXgbCandidateUpliftRows = [];
+  lastXgbValidationSummary = {};
   closeDetailModal();
   renderOverview(data.overview || {});
   renderScreeningQualityHints(lastRows);
+  tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
@@ -1963,12 +2515,16 @@ function renderAnalysisResult(data) {
   renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
   renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
+  renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+  renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+  renderXgbRunSummary(lastXgbValidationSummary);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
+  updateXgbRunAvailability();
 }
 
 function sleep(ms) {
@@ -2006,6 +2562,7 @@ async function runEnhancedScreening() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_enhanced_screening", form);
     lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
     lastEnhancedLiftRows = data.modelLiftScores || [];
@@ -2031,6 +2588,7 @@ async function runGranger() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_granger", form);
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
@@ -2053,6 +2611,7 @@ async function runModel() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
+    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
     lastModelVariableRows = data.modelVariableImportance || [];
@@ -2102,12 +2661,62 @@ async function runCausalReview() {
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
+    updateXgbRunAvailability();
     setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt), "success");
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     stopStatusTimer(timerId);
     el("runCausalReview").disabled = !currentRunId;
+  }
+}
+
+
+function updateXgbRunAvailability() {
+  const enabled = el("enableXgbValidation").checked;
+  el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length);
+  if (!enabled) el("xgbStatus").textContent = "XGB 四级验证未启用。";
+}
+
+async function runXgbValidation() {
+  if (!el("enableXgbValidation").checked) {
+    el("xgbStatus").textContent = "请先启用 XGB 四级验证。";
+    return;
+  }
+  if (!currentRunId || !lastFinalReviewSummaryRows.length) {
+    el("xgbStatus").textContent = "请先完成三层复核。";
+    return;
+  }
+  const startedAt = performance.now();
+  el("runXgbValidation").disabled = true;
+  el("xgbStatus").textContent = "正在运行 XGB 四级验证...";
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("enable_xgb_validation", "true");
+    form.append("top_n", el("xgbTopN").value || "8");
+    form.append("max_lag", el("xgbMaxLag").value);
+    form.append("whitelist", el("xgbWhitelist").value.trim());
+    form.append("control_columns", getCapacitySelection().join(","));
+    const data = await postForm("/api/run_xgb_validation", form);
+    lastXgbModelSummaryRows = data.xgbModelSummary || [];
+    lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
+    lastXgbValidationSummary = data.xgbValidationSummary || {};
+    renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+    renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+    renderXgbRunSummary(lastXgbValidationSummary);
+    renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
+    renderDownloads(data.downloads || []);
+    const message = data.error_message || data.message || "XGB 四级验证失败。";
+    const success = data.status === "success";
+    el("xgbStatus").textContent = appendElapsed(message, startedAt);
+    setStatus(appendElapsed(message, startedAt), success ? "success" : "error");
+  } catch (error) {
+    const message = appendElapsed(error.message || String(error), startedAt);
+    el("xgbStatus").textContent = message;
+    setStatus(message, "error");
+  } finally {
+    updateXgbRunAvailability();
   }
 }
 
@@ -2374,6 +2983,15 @@ function renderTermsHelpTab() {
 
 renderTermsHelpTab();
 
+function isElementVisible(node) {
+  return Boolean(
+    node &&
+    !node.hidden &&
+    node.offsetParent !== null &&
+    node.getClientRects().length
+  );
+}
+
 function activateTab(tabId) {
   for (const button of document.querySelectorAll(".tab-button")) {
     const isActive = button.dataset.tab === tabId;
@@ -2385,6 +3003,16 @@ function activateTab(tabId) {
     const isActive = panel.id === tabId;
     panel.classList.toggle("active", isActive);
     panel.hidden = !isActive;
+  }
+  if (tabId === "trendTab") {
+    requestAnimationFrame(() => {
+      if (lastTrendSeries.length && isElementVisible(el("trendChart"))) {
+        renderTrendChart(lastTrendSeries, lastTrendAxisMode);
+      }
+      if (lastScatterMatrixPayload && isElementVisible(el("scatterMatrixChart"))) {
+        renderScatterMatrix(lastScatterMatrixPayload);
+      }
+    });
   }
 }
 
@@ -2423,26 +3051,29 @@ function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段"
   }
 }
 
+function appendChartQueryParams(params) {
+  params.set("file_id", fileId);
+  params.set("encoding", el("encoding").value);
+  params.set("time_column", el("timeColumn").value);
+  params.set("trend_start", el("trendStart").value);
+  params.set("trend_end", el("trendEnd").value);
+  params.set("trend_max_points", el("trendMaxPoints").value || "10000");
+  params.set("segment_column", el("segmentColumn").value);
+  params.set("segment_mode", el("segmentMode").value);
+  params.set("segment_min", el("segmentMin").value);
+  params.set("segment_max", el("segmentMax").value);
+  params.set("preprocess_mode", el("preprocessMode").value);
+  params.set("detrend_window", el("detrendWindow").value);
+}
+
 async function drawTrend() {
   try {
     const variables = [el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value].filter(Boolean);
     if (!variables.length) return setStatus("请至少选择一个趋势变量。");
     if (new Set(variables).size !== variables.length) return setStatus("趋势变量不能重复选择。");
-    const params = new URLSearchParams({
-      file_id: fileId,
-      encoding: el("encoding").value,
-      time_column: el("timeColumn").value,
-      variables: variables.join(","),
-      preprocess_mode: el("preprocessMode").value,
-      detrend_window: el("detrendWindow").value,
-      segment_column: el("segmentColumn").value,
-      segment_mode: el("segmentMode").value,
-      segment_min: el("segmentMin").value,
-      segment_max: el("segmentMax").value,
-      trend_start: el("trendStart").value,
-      trend_end: el("trendEnd").value,
-      trend_max_points: el("trendMaxPoints").value,
-    });
+    const params = new URLSearchParams();
+    appendChartQueryParams(params);
+    params.set("variables", variables.join(","));
     setStatus("正在生成趋势图...", "loading");
     const response = await fetch(`/api/trend?${params.toString()}`);
     const data = await response.json();
@@ -2460,6 +3091,232 @@ async function drawTrend() {
     el("trendLegend").innerHTML = "";
     clearTrendStats();
     setStatus(error.message || String(error), "error");
+  }
+}
+
+function selectedScatterVariables(prefix) {
+  const ids = prefix === "x" ? ["scatterX1", "scatterX2", "scatterX3"] : ["scatterY1", "scatterY2", "scatterY3"];
+  return Array.from(new Set(ids.map((id) => el(id).value.trim()).filter(Boolean)));
+}
+
+function clearScatterMatrix(message = "选择至少一个 X 变量和一个 Y 变量。") {
+  const container = el("scatterMatrixChart");
+  container.className = "scatter-matrix-chart empty";
+  container.textContent = message;
+  el("scatterMatrixMeta").textContent = "选择 X 和 Y 变量后点击“显示散点矩阵”。";
+}
+
+async function drawScatterMatrix() {
+  if (!fileId) return setStatus("请先上传数据文件。", "warning");
+  const xVariables = selectedScatterVariables("x");
+  const yVariables = selectedScatterVariables("y");
+  if (!xVariables.length) return setStatus("请选择至少一个 X 轴变量。", "warning");
+  if (!yVariables.length) return setStatus("请选择至少一个 Y 轴变量。", "warning");
+  const startedAt = performance.now();
+  el("drawScatterMatrix").disabled = true;
+  setStatus("正在生成 XY 散点矩阵...", "loading");
+  try {
+    const params = new URLSearchParams();
+    appendChartQueryParams(params);
+    params.set("x_variables", xVariables.join(","));
+    params.set("y_variables", yVariables.join(","));
+    const response = await fetch(`/api/scatter_matrix?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "散点矩阵生成失败");
+    if (!Array.isArray(data.values) || data.values.length === 0) {
+      throw new Error("当前时间范围、工况和预处理条件下没有可绘制的散点数据");
+    }
+    lastScatterMatrixPayload = data;
+    renderScatterMatrix(data);
+    el("scatterMatrixMeta").textContent = `实际绘图 ${data.rows || 0} 行；筛选后原始行数 ${data.raw_rows || 0}；${(data.x_variables || []).length} 个 X × ${(data.y_variables || []).length} 个 Y。`;
+    setStatus(appendElapsed("XY 散点矩阵生成完成。", startedAt), "success");
+  } catch (error) {
+    lastScatterMatrixPayload = null;
+    clearScatterMatrix(error.message || String(error));
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
+  } finally {
+    el("drawScatterMatrix").disabled = !fileId;
+  }
+}
+
+function fitCanvasText(context, text, maxWidth) {
+  const value = String(text ?? "");
+  if (context.measureText(value).width <= maxWidth) {
+    return value;
+  }
+
+  const suffix = "…";
+  let result = value;
+
+  while (
+    result.length > 1 &&
+    context.measureText(result + suffix).width > maxWidth
+  ) {
+    result = result.slice(0, -1);
+  }
+
+  return result + suffix;
+}
+
+function finiteScatterNumber(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function renderScatterMatrix(payload) {
+  const container = el("scatterMatrixChart");
+  const xVariables = payload.x_variables || [];
+  const yVariables = payload.y_variables || [];
+  const columns = payload.columns || [];
+  const values = payload.values || [];
+  if (!xVariables.length || !yVariables.length || !values.length) {
+    clearScatterMatrix("没有可绘制的散点数据。");
+    return;
+  }
+  container.className = "scatter-matrix-chart";
+  container.innerHTML = "";
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("aria-label", "XY 散点矩阵");
+  container.appendChild(canvas);
+  const columnCount = xVariables.length;
+  const rowCount = yVariables.length;
+  const availableWidth = Math.max(container.clientWidth || 900, 720);
+  const measureContext = canvas.getContext("2d");
+  if (!measureContext) {
+    clearScatterMatrix("当前浏览器无法创建 Canvas 绘图上下文。");
+    return;
+  }
+  measureContext.font = "11px sans-serif";
+  let maxYLabelWidth = 0;
+  for (const yName of yVariables) {
+    maxYLabelWidth = Math.max(maxYLabelWidth, measureContext.measureText(yName).width);
+  }
+  const leftLabelWidth = Math.min(220, Math.max(96, Math.ceil(maxYLabelWidth) + 18));
+  const topLabelHeight = 38;
+  const rightPadding = 16;
+  const bottomPadding = 26;
+  const usableWidth = Math.max(300, availableWidth - leftLabelWidth - rightPadding);
+  const panelWidth = Math.max(260, Math.floor(usableWidth / Math.max(columnCount, 1)));
+  const panelHeight = Math.max(220, Math.min(360, Math.round(panelWidth * 0.62)));
+  const cssWidth = Math.max(availableWidth, leftLabelWidth + columnCount * panelWidth + rightPadding);
+  const cssHeight = topLabelHeight + rowCount * panelHeight + bottomPadding;
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.style.width = `${cssWidth}px`;
+  canvas.style.height = `${cssHeight}px`;
+  canvas.width = Math.round(cssWidth * pixelRatio);
+  canvas.height = Math.round(cssHeight * pixelRatio);
+  const context = canvas.getContext("2d");
+  if (!context) {
+    clearScatterMatrix("当前浏览器无法创建 Canvas 绘图上下文。");
+    return;
+  }
+  context.scale(pixelRatio, pixelRatio);
+  context.font = "11px sans-serif";
+  const columnIndex = new Map(columns.map((name, index) => [name, index]));
+  xVariables.forEach((xName, col) => {
+    const maxTextWidth = Math.max(40, panelWidth - 20);
+    const displayName = fitCanvasText(context, xName, maxTextWidth);
+    const textWidth = context.measureText(displayName).width;
+    context.fillText(displayName, leftLabelWidth + col * panelWidth + Math.max(8, (panelWidth - textWidth) / 2), 24);
+  });
+  yVariables.forEach((yName, row) => {
+    const displayName = fitCanvasText(context, yName, leftLabelWidth - 16);
+    context.fillText(displayName, 8, topLabelHeight + row * panelHeight + 22);
+  });
+  for (let row = 0; row < rowCount; row += 1) {
+    for (let col = 0; col < columnCount; col += 1) {
+      const xName = xVariables[col];
+      const yName = yVariables[row];
+      const xIndex = columnIndex.get(xName);
+      const yIndex = columnIndex.get(yName);
+      const left = leftLabelWidth + col * panelWidth + 42;
+      const top = topLabelHeight + row * panelHeight + 24;
+      const width = panelWidth - 58;
+      const height = panelHeight - 46;
+      context.strokeStyle = "#d8dee8";
+      context.strokeRect(left, top, width, height);
+      if (xIndex === undefined || yIndex === undefined) {
+        context.fillStyle = "#5f6b7a";
+        context.fillText("变量列不存在", left, top + 20);
+        drawCountLabel(left, top, 0);
+        continue;
+      }
+
+      let validCount = 0;
+      let xMin = Infinity;
+      let xMax = -Infinity;
+      let yMin = Infinity;
+      let yMax = -Infinity;
+
+      for (const valueRow of values) {
+        const x = finiteScatterNumber (valueRow[xIndex]);
+        const y = finiteScatterNumber (valueRow[yIndex]);
+        if (x === null || y === null) {
+          continue;
+        }
+        validCount += 1;
+        if (x < xMin) xMin = x;
+        if (x > xMax) xMax = x;
+        if (y < yMin) yMin = y;
+        if (y > yMax) yMax = y;
+      }
+
+      if (validCount === 0) {
+        context.fillStyle = "#5f6b7a";
+        context.fillText("无有效配对数据", left + 12, top + 24);
+        drawCountLabel(left, top, validCount);
+        continue;
+      }
+      if (xMin === xMax) { xMin -= 0.5; xMax += 0.5; }
+      if (yMin === yMax) { yMin -= 0.5; yMax += 0.5; }
+      const xPadding = Math.max((xMax - xMin) * 0.05, Number.EPSILON);
+      const yPadding = Math.max((yMax - yMin) * 0.05, Number.EPSILON);
+      const xRange = { min: xMin - xPadding, max: xMax + xPadding };
+      const yRange = { min: yMin - yPadding, max: yMax + yPadding };
+      context.strokeStyle = "#edf1f5";
+      context.fillStyle = "#5f6b7a";
+      axisTicks(xRange, 4).forEach((tick) => { const px = left + ((tick - xRange.min) / (xRange.max - xRange.min)) * width; context.beginPath(); context.moveTo(px, top); context.lineTo(px, top + height); context.stroke(); context.fillText(formatAxisValue(tick), px - 14, top + height + 14); });
+      axisTicks(yRange, 4).forEach((tick) => { const py = top + height - ((tick - yRange.min) / (yRange.max - yRange.min)) * height; context.beginPath(); context.moveTo(left, py); context.lineTo(left + width, py); context.stroke(); context.fillText(formatAxisValue(tick), left - 36, py + 4); });
+      context.save();
+      context.globalAlpha = 0.35;
+      context.fillStyle = "#176b87";
+      for (const valueRow of values) {
+        const x = finiteScatterNumber (valueRow[xIndex]);
+        const y = finiteScatterNumber (valueRow[yIndex]);
+        if (x === null || y === null) {
+          continue;
+        }
+        const px = left + ((x - xRange.min) / (xRange.max - xRange.min)) * width;
+        const py = top + height - ((y - yRange.min) / (yRange.max - yRange.min)) * height;
+        context.beginPath();
+        context.arc(px, py, 1.7, 0, Math.PI * 2);
+        context.fill();
+      }
+      context.restore();
+      drawCountLabel(left, top, validCount);
+    }
+  }
+
+  function drawCountLabel(left, top, validCount) {
+    const countText = `n=${validCount}`;
+    context.font = "12px sans-serif";
+    const countWidth = context.measureText(countText).width;
+    context.save();
+    context.globalAlpha = 0.82;
+    context.fillStyle = "#ffffff";
+    context.fillRect(left + 4, top + 3, countWidth + 8, 16);
+    context.restore();
+    context.fillStyle = "#44546a";
+    context.fillText(countText, left + 8, top + 15);
+    context.font = "11px sans-serif";
   }
 }
 
@@ -2860,7 +3717,9 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
   enhancedLiftTable: ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
-  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"]
+  conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
+  xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
+  xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"]
 };
 
 function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
@@ -3224,6 +4083,8 @@ function missingText(targetId) {
   if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
+  if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
+  if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
   return "无可展示结果。";
 }
@@ -3267,6 +4128,49 @@ function rollingCorrColumns() {
 
 function conditionalGrangerColumns() {
   return ["variable", "status", "best_lag", "tested_lags", "lag_mode", "lag_window", "fallback_maxlag", "baseline_maxlag", "min_p_value", "fdr_q_value", "baseline_rmse", "full_rmse", "predictive_contribution", "condition_number", "base_condition_number", "full_condition_number", "control_columns", "n_rows", "interpretation"];
+}
+
+function xgbModelSummaryColumns() {
+  return ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"];
+}
+
+function xgbCandidateUpliftColumns() {
+  return ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];
+}
+
+function renderXgbRunSummary(summary) {
+  const container = el("xgbRunSummary");
+  if (!container) return;
+  if (!summary || summary.status !== "success") {
+    container.innerHTML = "";
+    return;
+  }
+  const timings = summary.timings_seconds || {};
+  const requiredValues = [
+    summary.row_count,
+    summary.candidate_count,
+    summary.fold_count,
+    summary.m0_feature_count,
+    summary.m1_feature_count,
+    summary.m2_feature_count,
+    summary.max_used_lag,
+    timings.total,
+  ];
+  if (requiredValues.some(value => value === undefined || value === null)) {
+    container.innerHTML = "";
+    return;
+  }
+  const metrics = [
+    ["样本行数", summary.row_count],
+    ["候选数量", summary.candidate_count],
+    ["时间折数", summary.fold_count],
+    ["M0/M1/M2 特征数", `${summary.m0_feature_count}/${summary.m1_feature_count}/${summary.m2_feature_count}`],
+    ["最大使用滞后", summary.max_used_lag],
+    ["总耗时（秒）", timings.total],
+  ];
+  container.innerHTML = metrics.map(([label, value]) =>
+    `<div class="metric-card"><span class="metric-value">${escapeHtml(formatValue(value))}</span><span class="metric-label">${escapeHtml(label)}</span></div>`
+  ).join("");
 }
 
 function causalReviewColumns() {
@@ -3467,6 +4371,12 @@ function renderReviewDownloads(downloads) {
   renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
   renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
+}
+
+function renderXgbDownloads(downloads) {
+  renderDownloadTarget("xgbModelSummaryDownload", downloads, "xgb_validation/xgb_model_summary.csv");
+  renderDownloadTarget("xgbCandidateUpliftDownload", downloads, "xgb_validation/xgb_candidate_uplift.csv");
+  renderDownloadTarget("xgbValidationSummaryDownload", downloads, "xgb_validation/xgb_validation_summary.json");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {
@@ -3715,9 +4625,11 @@ function columnLabel(column) {
     lag: "滞后",
     direction: "方向",
     raw_corr: "原始相关",
-    raw_corr_score: "原始相关得分",
+    association_score: "原始关联规范化得分",
     residual_corr: "残差相关",
-    residual_corr_score: "残差相关得分",
+    independent_signal_score: "独立残差信号得分",
+    correlation_evidence_score: "关联证据综合得分",
+    correlation_evidence_status: "关联证据状态",
     residual_status: "残差状态",
     risk_flags: "风险标签",
     recommended_use: "建议用途",
@@ -3788,6 +4700,15 @@ function columnLabel(column) {
     fallback_maxlag: "回退最大滞后",
     baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
+    model_name: "模型",
+    mean_rmse: "平均RMSE",
+    mean_mae: "平均MAE",
+    mean_r2: "平均R²",
+    M2_vs_M1_rmse_improvement_pct: "M2相对M1 RMSE改善(%)",
+    median_rmse_improvement_pct: "RMSE改善中位数(%)",
+    median_mae_improvement_pct: "MAE改善中位数(%)",
+    positive_rmse_fold_ratio: "RMSE改善折占比",
+    validation_status: "验证状态",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
     review_priority: "复核优先级",
@@ -3888,9 +4809,13 @@ function reset() {
   lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
+  lastXgbModelSummaryRows = [];
+  lastXgbCandidateUpliftRows = [];
+  lastXgbValidationSummary = {};
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
-  tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+  lastScatterMatrixPayload = null;
+  tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
@@ -3901,10 +4826,17 @@ function reset() {
   el("forceIncludeOptions").innerHTML = "";
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
+  el("secondaryIncludeOptions").innerHTML = "";
+  el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
+  el("secondaryIncludeDropdown").open = false;
+  el("secondaryResampleMode").value = "raw";
+  el("secondaryResampleRule").value = "";
+  el("secondaryMaxLag").value = "";
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";
   el("trendVar4").innerHTML = "";
+  ["scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => { if (el(id)) el(id).value = ""; });
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
@@ -3913,7 +4845,10 @@ function reset() {
   el("runGranger").disabled = true;
   el("runModel").disabled = true;
   el("runCausalReview").disabled = true;
+  el("enableXgbValidation").checked = false;
+  el("runXgbValidation").disabled = true;
   el("drawTrend").disabled = true;
+  el("drawScatterMatrix").disabled = true;
   el("downloads").innerHTML = "";
   llmPromptText = "";
   el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
@@ -3934,6 +4869,7 @@ function reset() {
   el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";
   el("trendLegend").innerHTML = "";
   clearTrendStats();
+  clearScatterMatrix();
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("modelVariableImportanceTable").className = "empty";
@@ -3954,6 +4890,16 @@ function reset() {
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
   closeDetailModal();
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
+  resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
+  resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
+  clearOptionalElement("xgbRunSummary");
+  clearOptionalElement("xgbModelSummaryDownload");
+  clearOptionalElement("xgbCandidateUpliftDownload");
+  clearOptionalElement("xgbValidationSummaryDownload");
+  el("xgbStatus").textContent = "XGB 四级验证未启用。";
+  el("xgbTopN").value = "8";
+  el("xgbMaxLag").value = "";
+  el("xgbWhitelist").value = "";
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");
   clearOptionalElement("causalEvidenceDownload");

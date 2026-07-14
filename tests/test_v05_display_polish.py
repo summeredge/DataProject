@@ -9,8 +9,10 @@ def test_modal_raw_fields_are_collapsed_by_default():
 
 def test_remaining_detail_field_names_are_chinese_ready():
     required = [
-        "raw_corr_score",
-        "residual_corr_score",
+        "association_score",
+        "independent_signal_score",
+        "correlation_evidence_score",
+        "correlation_evidence_status",
         "residual_status",
         "regime_stability_final",
         "regime_status",
@@ -20,8 +22,10 @@ def test_remaining_detail_field_names_are_chinese_ready():
         "model_lift_status",
         "risk_penalty",
         "force_included",
-        "原始相关得分",
-        "残差相关得分",
+        "原始关联规范化得分",
+        "独立残差信号得分",
+        "关联证据综合得分",
+        "关联证据状态",
         "残差状态",
         "工况稳定性",
         "工况状态",

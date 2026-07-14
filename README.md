@@ -198,6 +198,16 @@ python -m chem_ts_corr.cli analyze `
 - `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
 - `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
 
+完成三层复核后，可在 Web 的“XGB 四级验证”页签中显式启用并运行时间外增量验证。该步骤默认关闭，结果独立写入 `xgb_validation/`：
+
+- `xgb_model_summary.csv`：M0、M1、M2 的跨时间折模型指标摘要
+- `xgb_candidate_uplift.csv`：逐候选变量相对 M1 的增量验证结果
+- `xgb_validation_summary.json`：本次四级验证的状态、候选数和输出文件清单
+
+XGB 四级验证不会回写主筛查得分或排名；缺少 `xgboost` 时页面会返回依赖提示，已有三层分析结果仍保持可用。
+
+详细说明见 [XGB 四级验证说明](docs/xgb_validation.md)。
+
 ## 推荐工作流
 
 1. 在界面上传 CSV。
@@ -219,3 +229,26 @@ python -m chem_ts_corr.cli analyze `
 相关性初筛不能证明工艺因果。工业装置里常见的伪相关来源包括共同负荷变化、控制回路、物料停留时间、批次切换、牌号切换、开停车、仪表漂移和数据压缩策略。
 
 因此，初筛结果应作为“候选线索”，不是最终结论。
+
+## 筛选评分评价基线
+
+对已有运行目录生成当前排名的评价基线：
+
+```bash
+python -m chem_ts_corr.ranking_baseline \
+  --run-dir runs/<run_id>
+```
+
+带人工评价清单时：
+
+```bash
+python -m chem_ts_corr.ranking_baseline \
+  --run-dir runs/<run_id> \
+  --expectations ranking_expectations.csv
+```
+
+`expected_class` 可取值：
+
+- `reasonable_driver`：用户认为工艺上合理的驱动候选
+- `implausible_driver`：用户认为工艺上不合理的驱动候选
+- `neutral`：只记录、不参与合理/不合理指标

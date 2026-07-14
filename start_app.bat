@@ -22,29 +22,19 @@ if not defined PYTHON_CMD (
 )
 
 echo Checking Python dependencies...
-%PYTHON_CMD% -c "import pandas, numpy" >nul 2>nul
+%PYTHON_CMD% -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('pandas') and importlib.util.find_spec('numpy') else 1)" >nul 2>nul
 if errorlevel 1 (
-  echo Installing required packages...
-  %PYTHON_CMD% -m pip install -e .
-  if errorlevel 1 (
-    echo Failed to install dependencies.
-    echo Please check Python, pip, and network settings.
-    pause
-    exit /b 1
-  )
+  echo Required Python packages are missing.
+  echo Please run: %PYTHON_CMD% -m pip install -e .
+  pause
+  exit /b 1
 )
 
-echo Checking model explanation dependencies...
-%PYTHON_CMD% -c "import sklearn, shap" >nul 2>nul
+echo Checking optional model explanation dependencies...
+%PYTHON_CMD% -c "import importlib.util; raise SystemExit(0 if importlib.util.find_spec('sklearn') and importlib.util.find_spec('shap') else 1)" >nul 2>nul
 if errorlevel 1 (
-  echo scikit-learn or SHAP was not found. Installing model explanation packages...
-  %PYTHON_CMD% -m pip install scikit-learn shap
-  if errorlevel 1 (
-    echo Failed to install model explanation packages.
-    echo Model explanation requires scikit-learn and SHAP. Please check Python, pip, and network settings.
-    pause
-    exit /b 1
-  )
+  echo Optional model explanation packages were not found.
+  echo The app will still start; model explanation features may be unavailable until scikit-learn and SHAP are installed.
 )
 
 echo Starting local web app...

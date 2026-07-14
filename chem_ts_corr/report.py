@@ -113,7 +113,7 @@ def build_markdown_summary(
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","final_score","raw_corr_score","residual_corr_score","regime_stability_final","rolling_stability","lag_quality","model_lift_score","risk_penalty","residual_status","regime_status","rolling_status","model_lift_status","lag_quality_status"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","evidence_score","association_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","lag_quality","lag_quality_status","model_lift_score","model_lift_status","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
     lines.extend(_table_lines(ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()))
 
     lines.extend(["", "## 预测候选", ""])
@@ -167,9 +167,9 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 使用动态权重：未计算项不参与评分，剩余已计算项按原始权重重归一；risk_penalty 按强/弱风险扣减。",
+            "- final_score 使用动态权重：未计算项不参与评分，剩余已计算项按原始权重重归一；risk_penalty 按风险 token 的固定权重累计扣减，总扣分受上限约束，部分高风险还会触发 risk_score_cap。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
-            "- regime_stability 综合相关强度、符号一致性和滞后一致性。",
+            "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",
             "- recommended_action 给出下一步处理建议，包括可作为预测候选、疑似共同负荷驱动、疑似闭环反馈、仅作相关性参考、建议人工工艺复核。",
             "- 本报告输出的是筛查线索和预测候选，不直接给出工艺因果结论。",

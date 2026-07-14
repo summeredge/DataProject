@@ -202,50 +202,26 @@ def _fast_granger_lag_statistics(
     variable_square_prefix = _squared_prefix(variable_values)
 
     key = mask_key or _restricted_mask_key(target, np.ones(len(target_values), dtype=bool))
-    try:
-        if key not in active_cache:
-            active_cache[key] = _restricted_statistics_path(
-                target_values,
-                maxlag,
-                active_diagnostics,
-            )
-            active_diagnostics.restricted_cache_entries = len(active_cache)
-        restricted_path = active_cache[key]
-
-        state = _initial_qr_state(
+    if key not in active_cache:
+        active_cache[key] = _restricted_statistics_path(
             target_values,
-            variable_values,
-            maxlag,
-            restricted=False,
-            diagnostics=active_diagnostics,
-        )
-    except (FloatingPointError, ValueError, np.linalg.LinAlgError):
-        return _legacy_lag_statistics_path(
-            target_values,
-            variable_values,
             maxlag,
             active_diagnostics,
         )
-    ssr_guard = _try_initial_ssr_guard(state)
-    if not _qr_state_is_valid(
-        state,
-        expected_columns=2 * maxlag + 2,
+        active_diagnostics.restricted_cache_entries = len(active_cache)
+    restricted_path = active_cache[key]
+
+    state = _try_build_valid_qr_state(
         target_values=target_values,
         variable_values=variable_values,
         lag=maxlag,
         restricted=False,
+        diagnostics=active_diagnostics,
         target_square_prefix=target_square_prefix,
         variable_square_prefix=variable_square_prefix,
-        ssr_guard=None,
-    ):
-        return _legacy_lag_statistics_path(
-            target_values,
-            variable_values,
-            maxlag,
-            active_diagnostics,
-        )
-    if ssr_guard is not None and not _ssr_guard_matches(state, ssr_guard):
-        ssr_guard = None
+        rebuild=False,
+    )
+    ssr_guard = _try_valid_ssr_guard(state)
     descending: dict[int, _LagStatistics] = {}
     force_fallback = False
     guard_failure_streak = 0
@@ -253,7 +229,7 @@ def _fast_granger_lag_statistics(
         restricted_stats = restricted_path[lag]
         fallback_used = restricted_stats.fallback_used
 
-        if force_fallback or ssr_guard is None:
+        if state is None or force_fallback or ssr_guard is None:
             unrestricted_stats = _safe_lstsq_model_statistics(
                 target_values,
                 variable_values,
@@ -307,6 +283,22 @@ def _fast_granger_lag_statistics(
 
         if lag > 1:
             next_lag = lag - 1
+            if state is None:
+                state = _try_build_valid_qr_state(
+                    target_values=target_values,
+                    variable_values=variable_values,
+                    lag=next_lag,
+                    restricted=False,
+                    diagnostics=active_diagnostics,
+                    target_square_prefix=target_square_prefix,
+                    variable_square_prefix=variable_square_prefix,
+                    rebuild=True,
+                )
+                ssr_guard = _try_valid_ssr_guard(state)
+                force_fallback = False
+                guard_failure_streak = 0
+                continue
+
             guard_was_available = ssr_guard is not None
             next_guard = _try_downdate_ssr_guard(
                 ssr_guard,
@@ -338,15 +330,18 @@ def _fast_granger_lag_statistics(
                 if next_guard is not None and not _ssr_guard_matches(state, next_guard):
                     raise FloatingPointError("QR state does not match SSR guard")
             except (FloatingPointError, ValueError, np.linalg.LinAlgError):
-                state = _rebuild_qr_state(
-                    target_values,
-                    variable_values,
-                    next_lag,
+                state = _try_build_valid_qr_state(
+                    target_values=target_values,
+                    variable_values=variable_values,
+                    lag=next_lag,
                     restricted=False,
                     diagnostics=active_diagnostics,
+                    target_square_prefix=target_square_prefix,
+                    variable_square_prefix=variable_square_prefix,
+                    rebuild=True,
                 )
-                ssr_guard = _try_initial_ssr_guard(state)
-                force_fallback = True
+                ssr_guard = _try_valid_ssr_guard(state)
+                force_fallback = state is not None
                 guard_failure_streak = 0
             else:
                 guard_update_failed = guard_was_available and next_guard is None
@@ -354,7 +349,9 @@ def _fast_granger_lag_statistics(
                     guard_failure_streak += 1
                     force_fallback = True
                     if guard_failure_streak == 1:
-                        next_guard = _try_initial_ssr_guard(state)
+                        next_guard = _try_valid_ssr_guard(state)
+                elif not guard_was_available and guard_failure_streak == 0:
+                    next_guard = _try_valid_ssr_guard(state)
                 elif next_guard is not None:
                     guard_failure_streak = 0
                 ssr_guard = next_guard
@@ -368,35 +365,24 @@ def _restricted_statistics_path(
     diagnostics: _GrangerDiagnostics,
 ) -> _RestrictedPath:
     target_square_prefix = _squared_prefix(target_values)
-    state = _initial_qr_state(
-        target_values,
-        None,
-        maxlag,
-        restricted=True,
-        diagnostics=diagnostics,
-    )
-    ssr_guard = _try_initial_ssr_guard(state)
-    if not _qr_state_is_valid(
-        state,
-        expected_columns=maxlag + 2,
+    state = _try_build_valid_qr_state(
         target_values=target_values,
         variable_values=None,
         lag=maxlag,
         restricted=True,
+        diagnostics=diagnostics,
         target_square_prefix=target_square_prefix,
         variable_square_prefix=None,
-        ssr_guard=None,
-    ):
-        raise FloatingPointError("invalid initial restricted QR state")
-    if ssr_guard is not None and not _ssr_guard_matches(state, ssr_guard):
-        ssr_guard = None
+        rebuild=False,
+    )
+    ssr_guard = _try_valid_ssr_guard(state)
     descending: _RestrictedPath = {}
     force_fallback = False
     guard_failure_streak = 0
     for lag in range(maxlag, 0, -1):
         nobs = len(target_values) - lag
         target_scale = _target_variation_scale(target_values[lag:])
-        if force_fallback or ssr_guard is None:
+        if state is None or force_fallback or ssr_guard is None:
             stats = _safe_lstsq_model_statistics(
                 target_values,
                 None,
@@ -419,6 +405,22 @@ def _restricted_statistics_path(
 
         if lag > 1:
             next_lag = lag - 1
+            if state is None:
+                state = _try_build_valid_qr_state(
+                    target_values=target_values,
+                    variable_values=None,
+                    lag=next_lag,
+                    restricted=True,
+                    diagnostics=diagnostics,
+                    target_square_prefix=target_square_prefix,
+                    variable_square_prefix=None,
+                    rebuild=True,
+                )
+                ssr_guard = _try_valid_ssr_guard(state)
+                force_fallback = False
+                guard_failure_streak = 0
+                continue
+
             guard_was_available = ssr_guard is not None
             next_guard = _try_downdate_ssr_guard(
                 ssr_guard,
@@ -450,15 +452,18 @@ def _restricted_statistics_path(
                 if next_guard is not None and not _ssr_guard_matches(state, next_guard):
                     raise FloatingPointError("QR state does not match SSR guard")
             except (FloatingPointError, ValueError, np.linalg.LinAlgError):
-                state = _rebuild_qr_state(
-                    target_values,
-                    None,
-                    next_lag,
+                state = _try_build_valid_qr_state(
+                    target_values=target_values,
+                    variable_values=None,
+                    lag=next_lag,
                     restricted=True,
                     diagnostics=diagnostics,
+                    target_square_prefix=target_square_prefix,
+                    variable_square_prefix=None,
+                    rebuild=True,
                 )
-                ssr_guard = _try_initial_ssr_guard(state)
-                force_fallback = True
+                ssr_guard = _try_valid_ssr_guard(state)
+                force_fallback = state is not None
                 guard_failure_streak = 0
             else:
                 guard_update_failed = guard_was_available and next_guard is None
@@ -466,7 +471,9 @@ def _restricted_statistics_path(
                     guard_failure_streak += 1
                     force_fallback = True
                     if guard_failure_streak == 1:
-                        next_guard = _try_initial_ssr_guard(state)
+                        next_guard = _try_valid_ssr_guard(state)
+                elif not guard_was_available and guard_failure_streak == 0:
+                    next_guard = _try_valid_ssr_guard(state)
                 elif next_guard is not None:
                     guard_failure_streak = 0
                 ssr_guard = next_guard
@@ -499,6 +506,62 @@ def _rebuild_qr_state(
     diagnostics.matrix_build_count += 1
     diagnostics.qr_rebuild_count += 1
     return _r_only_qr(matrix)
+
+
+def _try_build_valid_qr_state(
+    *,
+    target_values: np.ndarray,
+    variable_values: np.ndarray | None,
+    lag: int,
+    restricted: bool,
+    diagnostics: _GrangerDiagnostics,
+    target_square_prefix: np.ndarray,
+    variable_square_prefix: np.ndarray | None,
+    rebuild: bool,
+) -> np.ndarray | None:
+    try:
+        if rebuild:
+            state = _rebuild_qr_state(
+                target_values,
+                variable_values,
+                lag,
+                restricted=restricted,
+                diagnostics=diagnostics,
+            )
+        else:
+            state = _initial_qr_state(
+                target_values,
+                variable_values,
+                lag,
+                restricted=restricted,
+                diagnostics=diagnostics,
+            )
+    except (FloatingPointError, ValueError, np.linalg.LinAlgError):
+        return None
+
+    expected_columns = lag + 2 if restricted else 2 * lag + 2
+    if not _qr_state_is_valid(
+        state,
+        expected_columns=expected_columns,
+        target_values=target_values,
+        variable_values=variable_values,
+        lag=lag,
+        restricted=restricted,
+        target_square_prefix=target_square_prefix,
+        variable_square_prefix=variable_square_prefix,
+        ssr_guard=None,
+    ):
+        return None
+    return state
+
+
+def _try_valid_ssr_guard(state: np.ndarray | None) -> np.ndarray | None:
+    if state is None:
+        return None
+    guard = _try_initial_ssr_guard(state)
+    if guard is None or not _ssr_guard_matches(state, guard):
+        return None
+    return guard
 
 
 def _r_only_qr(matrix: np.ndarray) -> np.ndarray:

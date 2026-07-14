@@ -113,8 +113,13 @@ def _assert_lag_equivalence(
         maxlag,
         diagnostics=diagnostics,
     )
-    assert list(actual) == list(range(1, maxlag + 1))
-    for lag in range(1, maxlag + 1):
+    _assert_statistics_match_reference(actual, expected, rtol=rtol, atol=atol)
+    return actual, expected
+
+
+def _assert_statistics_match_reference(actual, expected, *, rtol=1e-7, atol=1e-9):
+    assert list(actual) == list(expected)
+    for lag in expected:
         observed = actual[lag]
         reference = expected[lag]
         assert observed.nobs == reference["nobs"]
@@ -134,7 +139,6 @@ def _assert_lag_equivalence(
                 reference["f_statistic"], rel=rtol, abs=atol
             )
             assert observed.p_value == pytest.approx(reference["p_value"], rel=rtol, abs=atol)
-    return actual, expected
 
 
 def _ordinary_pair(seed: int = 1, rows: int = 180) -> pd.DataFrame:
@@ -289,6 +293,214 @@ def test_single_guard_update_failure_recovers_fast_path(monkeypatch, restricted)
             rel=1e-7,
             abs=1e-9,
         )
+
+
+def test_unrestricted_initial_guard_failure_recovers_fast_path(monkeypatch):
+    maxlag = 10
+    pair = _ordinary_pair(seed=29, rows=220)
+    diagnostics = _GrangerDiagnostics()
+    original = causality._try_initial_ssr_guard
+    calls = []
+
+    def fail_once(state):
+        calls.append(state.shape[0])
+        if state.shape == (2 * maxlag + 2, 2 * maxlag + 2) and calls.count(
+            2 * maxlag + 2
+        ) == 1:
+            return None
+        return original(state)
+
+    monkeypatch.setattr(causality, "_try_initial_ssr_guard", fail_once)
+    actual = _fast_granger_lag_statistics(
+        pair,
+        "Y",
+        "X",
+        maxlag,
+        diagnostics=diagnostics,
+    )
+    expected = _reference_lag_statistics(pair, "Y", "X", maxlag)
+
+    assert actual[maxlag].fallback_used
+    assert not actual[maxlag - 1].fallback_used
+    assert 2 * (maxlag - 1) + 2 in calls
+    assert diagnostics.fallback_count == 1
+    assert diagnostics.lstsq_count == 1
+    assert diagnostics.qr_rebuild_count == 0
+    _assert_statistics_match_reference(actual, expected)
+
+
+def test_restricted_initial_guard_failure_recovers_and_reuses_cache(monkeypatch):
+    maxlag = 8
+    frame = _ordinary_pair(seed=30, rows=220)
+    frame["X2"] = np.random.default_rng(31).normal(size=len(frame))
+    diagnostics = _GrangerDiagnostics()
+    restricted_cache = {}
+    mask_key = _restricted_mask_key("Y", np.ones(len(frame), dtype=bool))
+    original = causality._try_initial_ssr_guard
+    failed = {"done": False}
+    restricted_shapes = []
+
+    def fail_once(state):
+        if state.shape[0] <= maxlag + 2:
+            restricted_shapes.append(state.shape[0])
+        if state.shape == (maxlag + 2, maxlag + 2) and not failed["done"]:
+            failed["done"] = True
+            return None
+        return original(state)
+
+    monkeypatch.setattr(causality, "_try_initial_ssr_guard", fail_once)
+    first = _fast_granger_lag_statistics(
+        frame[["Y", "X"]],
+        "Y",
+        "X",
+        maxlag,
+        diagnostics=diagnostics,
+        restricted_cache=restricted_cache,
+        mask_key=mask_key,
+    )
+    second = _fast_granger_lag_statistics(
+        frame[["Y", "X2"]],
+        "Y",
+        "X2",
+        maxlag,
+        diagnostics=diagnostics,
+        restricted_cache=restricted_cache,
+        mask_key=mask_key,
+    )
+
+    assert failed["done"]
+    assert maxlag + 1 in restricted_shapes
+    assert first[maxlag].fallback_used
+    assert not first[maxlag - 1].fallback_used
+    assert second[maxlag].fallback_used
+    assert diagnostics.restricted_cache_entries == 1
+    assert diagnostics.initial_qr_count == 3
+    assert diagnostics.lstsq_count == 1
+    assert diagnostics.fallback_count == 2
+    _assert_statistics_match_reference(
+        first,
+        _reference_lag_statistics(frame[["Y", "X"]], "Y", "X", maxlag),
+    )
+    _assert_statistics_match_reference(
+        second,
+        _reference_lag_statistics(frame[["Y", "X2"]], "Y", "X2", maxlag),
+    )
+
+
+def test_unrestricted_initial_qr_failure_rebuilds_lower_lag(monkeypatch):
+    maxlag = 8
+    pair = _ordinary_pair(seed=32, rows=220)
+    diagnostics = _GrangerDiagnostics()
+    original = causality._initial_qr_state
+    failed = {"done": False}
+
+    def fail_once(target_values, variable_values, lag, *, restricted, diagnostics):
+        state = original(
+            target_values,
+            variable_values,
+            lag,
+            restricted=restricted,
+            diagnostics=diagnostics,
+        )
+        if not restricted and lag == maxlag and not failed["done"]:
+            failed["done"] = True
+            raise np.linalg.LinAlgError("injected initial QR failure")
+        return state
+
+    monkeypatch.setattr(causality, "_initial_qr_state", fail_once)
+    monkeypatch.setattr(
+        causality,
+        "_legacy_lag_statistics_path",
+        lambda *args, **kwargs: pytest.fail("whole-path legacy fallback is forbidden"),
+    )
+    actual = _fast_granger_lag_statistics(
+        pair,
+        "Y",
+        "X",
+        maxlag,
+        diagnostics=diagnostics,
+    )
+    expected = _reference_lag_statistics(pair, "Y", "X", maxlag)
+
+    assert failed["done"]
+    assert actual[maxlag].fallback_used
+    assert not actual[maxlag - 1].fallback_used
+    assert diagnostics.fallback_count == 1
+    assert diagnostics.lstsq_count == 1
+    assert diagnostics.qr_rebuild_count == 1
+    assert diagnostics.lstsq_count < 2 * maxlag
+    _assert_statistics_match_reference(actual, expected)
+
+
+def test_restricted_qr_rebuild_retries_each_lower_lag(monkeypatch):
+    maxlag = 8
+    pair = _ordinary_pair(seed=33, rows=220)
+    diagnostics = _GrangerDiagnostics()
+    original_initial = causality._initial_qr_state
+    original_rebuild = causality._rebuild_qr_state
+    initial_failed = {"done": False}
+    rebuild_failures = {"count": 0}
+    rebuild_lags = []
+
+    def fail_initial(target_values, variable_values, lag, *, restricted, diagnostics):
+        state = original_initial(
+            target_values,
+            variable_values,
+            lag,
+            restricted=restricted,
+            diagnostics=diagnostics,
+        )
+        if restricted and lag == maxlag and not initial_failed["done"]:
+            initial_failed["done"] = True
+            raise np.linalg.LinAlgError("injected initial QR failure")
+        return state
+
+    def fail_two_rebuilds(
+        target_values,
+        variable_values,
+        lag,
+        *,
+        restricted,
+        diagnostics,
+    ):
+        state = original_rebuild(
+            target_values,
+            variable_values,
+            lag,
+            restricted=restricted,
+            diagnostics=diagnostics,
+        )
+        if restricted:
+            rebuild_lags.append(lag)
+            if rebuild_failures["count"] < 2:
+                rebuild_failures["count"] += 1
+                raise np.linalg.LinAlgError("injected rebuild failure")
+        return state
+
+    monkeypatch.setattr(causality, "_initial_qr_state", fail_initial)
+    monkeypatch.setattr(causality, "_rebuild_qr_state", fail_two_rebuilds)
+    monkeypatch.setattr(
+        causality,
+        "_legacy_lag_statistics_path",
+        lambda *args, **kwargs: pytest.fail("whole-path legacy fallback is forbidden"),
+    )
+    actual = _fast_granger_lag_statistics(
+        pair,
+        "Y",
+        "X",
+        maxlag,
+        diagnostics=diagnostics,
+    )
+    expected = _reference_lag_statistics(pair, "Y", "X", maxlag)
+
+    assert initial_failed["done"]
+    assert rebuild_lags[:3] == [maxlag - 1, maxlag - 2, maxlag - 3]
+    assert diagnostics.fallback_count == 3
+    assert diagnostics.lstsq_count == 3
+    assert diagnostics.qr_rebuild_count == 3
+    assert all(actual[lag].fallback_used for lag in [maxlag, maxlag - 1, maxlag - 2])
+    assert not actual[maxlag - 3].fallback_used
+    _assert_statistics_match_reference(actual, expected)
 
 
 def test_known_lag_signal_matches_reference_and_final_result():
@@ -583,7 +795,7 @@ def test_unused_trailing_candidate_inf_keeps_valid_lag_results():
         assert actual[lag].f_statistic == pytest.approx(expected[lag]["f_statistic"])
 
 
-def test_initial_qr_failure_uses_safe_per_lag_compatibility_path(monkeypatch):
+def test_both_initial_qr_failures_rebuild_lower_lag(monkeypatch):
     pair = _ordinary_pair(seed=26, rows=180)
     diagnostics = _GrangerDiagnostics()
 
@@ -594,8 +806,11 @@ def test_initial_qr_failure_uses_safe_per_lag_compatibility_path(monkeypatch):
     actual = _fast_granger_lag_statistics(pair, "Y", "X", 6, diagnostics=diagnostics)
     expected = _reference_lag_statistics(pair, "Y", "X", 6)
 
-    assert diagnostics.fallback_count == 6
-    assert diagnostics.lstsq_count == 12
+    assert diagnostics.fallback_count == 1
+    assert diagnostics.lstsq_count == 2
+    assert diagnostics.qr_rebuild_count == 2
+    assert actual[6].fallback_used
+    assert not actual[5].fallback_used
     for lag in actual:
         assert actual[lag].f_statistic == pytest.approx(expected[lag]["f_statistic"])
         assert actual[lag].p_value == pytest.approx(expected[lag]["p_value"])

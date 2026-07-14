@@ -532,8 +532,13 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
 
 
 def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    from chem_ts_corr.screening import model_lift_scores, rolling_corr_scores
+    from chem_ts_corr.screening import (
+        model_lift_scores,
+        prepare_best_lag_evidence,
+        rolling_corr_scores,
+    )
 
+    total_started = time.perf_counter()
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
@@ -558,30 +563,59 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
 
     lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
-    best_lags = {} if lag_search_changed else _best_lags_from_ranked(ranked)
-    best_lags = _secondary_best_lags_for_missing_variables(
+    lag_evidence_started = time.perf_counter()
+    best_lag_evidence, _ = prepare_best_lag_evidence(
         scaled,
         secondary_config.target,
         variables,
-        best_lags,
         secondary_config.max_lag,
-        recompute_limit=None if lag_search_changed else 20,
+        ranked=ranked,
+        allow_ranked_reuse=not lag_search_changed,
     )
+    lag_evidence_seconds = time.perf_counter() - lag_evidence_started
+    best_lags = {
+        variable: evidence["best_lag"]
+        for variable, evidence in best_lag_evidence.items()
+        if evidence["best_lag"] is not None
+    }
+
+    model_lift_started = time.perf_counter()
     lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
-    rolling = rolling_corr_scores(scaled, secondary_config.target, variables, secondary_config.max_lag)
+    model_lift_seconds = time.perf_counter() - model_lift_started
+
+    rolling_started = time.perf_counter()
+    rolling = rolling_corr_scores(
+        scaled,
+        secondary_config.target,
+        variables,
+        secondary_config.max_lag,
+        best_lag_evidence=best_lag_evidence,
+    )
+    rolling_seconds = time.perf_counter() - rolling_started
+
+    output_started = time.perf_counter()
     enhanced = _enhanced_validation_summary(ranked, lift, rolling)
 
     lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
     rolling.to_csv(output_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig")
     enhanced.to_csv(output_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig")
 
-    return {
+    result = {
         "modelLiftScores": _records(lift.head(200)),
         "rollingCorrScores": _records(rolling.head(200)),
         "enhancedValidationSummary": _records(enhanced.head(200)),
         "downloads": _download_links(run_id, output_dir),
         "message": "增强筛选完成：结果用于补充验证预测增益和时间稳定性，不代表因果结论。",
     }
+    output_seconds = time.perf_counter() - output_started
+    result["timings"] = {
+        "lag_evidence_seconds": lag_evidence_seconds,
+        "model_lift_seconds": model_lift_seconds,
+        "rolling_seconds": rolling_seconds,
+        "output_seconds": output_seconds,
+        "total_seconds": time.perf_counter() - total_started,
+    }
+    return result
 
 
 def _enhanced_validation_summary(

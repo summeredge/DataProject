@@ -65,3 +65,53 @@ def test_analyze_numeric_frame_reports_progress_and_skip_flags(tmp_path):
     assert set(tables.rolling_corr_scores["valid_window_count"]) == {0}
     assert tables.metrics["skip_model_lift"] == "True"
     assert tables.metrics["skip_rolling_corr"] == "True"
+
+
+def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, monkeypatch):
+    from chem_ts_corr import screening
+
+    n = 100
+    frame = pd.DataFrame(
+        {
+            "target": np.sin(np.arange(n) / 5),
+            "x1": np.cos(np.arange(n) / 5),
+            "x2": np.arange(n, dtype=float),
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="min"),
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "unused.csv",
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=4,
+        top_k=2,
+        enable_model=False,
+        skip_model_lift=True,
+    )
+    captured = {}
+    original_rolling = screening.rolling_corr_scores
+
+    def capture_rolling(*args, best_lag_evidence=None, **kwargs):
+        captured["evidence"] = best_lag_evidence
+        return original_rolling(
+            *args,
+            best_lag_evidence=best_lag_evidence,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
+    monkeypatch.setattr(
+        screening,
+        "compute_lag_scores",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("rolling path must reuse the primary lag search")
+        ),
+    )
+
+    analyze_numeric_frame(frame, config)
+
+    assert captured["evidence"]
+    assert set(captured["evidence"]) == {"x1", "x2"}
+    assert {item["source"] for item in captured["evidence"].values()} == {"ranked"}
+    assert all("best_score" in item for item in captured["evidence"].values())

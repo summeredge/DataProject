@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Literal, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -73,6 +76,15 @@ REGIME_STABILITY_COLUMNS = [
 ]
 PRIMARY_RANK_COLUMN = "driver_rank"
 PRIMARY_SCORE_COLUMN = "driver_priority_score"
+
+
+class BestLagEvidence(TypedDict):
+    best_lag: int | None
+    best_score: float | None
+    max_lag: int
+    pair_alignment_key: str
+    source: str
+    status: Literal["ok", "scanned_no_result"]
 
 
 def load_roles(config: AnalysisConfig, columns: list[str]) -> dict[str, str]:
@@ -309,7 +321,158 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
     return pd.DataFrame(rows, columns=cols)
 
 
-def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: list[str], max_lag: int, window: int | None = None, min_periods: int | None = None) -> pd.DataFrame:
+def pair_alignment_key(pair: pd.DataFrame) -> str:
+    index_hashes = pd.util.hash_pandas_object(pair.index, index=False).to_numpy(
+        dtype=np.uint64,
+        copy=False,
+    )
+    digest = hashlib.sha256()
+    digest.update(str(len(pair)).encode("utf-8"))
+    digest.update(str(pair.index.dtype).encode("utf-8"))
+    digest.update(index_hashes.tobytes())
+    return digest.hexdigest()[:24]
+
+
+def prepare_best_lag_evidence(
+    frame: pd.DataFrame,
+    target: str,
+    candidate_variables: list[str],
+    max_lag: int,
+    ranked: pd.DataFrame | None = None,
+    allow_ranked_reuse: bool = True,
+) -> tuple[dict[str, BestLagEvidence], dict[str, int]]:
+    evidence: dict[str, BestLagEvidence] = {}
+    diagnostics = {
+        "reused_evidence_count": 0,
+        "recomputed_evidence_count": 0,
+        "invalid_evidence_count": 0,
+    }
+    if target not in frame.columns or max_lag < 0:
+        return evidence, diagnostics
+
+    for variable in dict.fromkeys(candidate_variables):
+        if variable == target or variable not in frame.columns:
+            continue
+        pair = frame[[target, variable]].dropna()
+        alignment_key = pair_alignment_key(pair)
+        ranked_row = _ranked_row(ranked, variable)
+        pair_matches_ranked_search = len(pair) == len(frame) and pair.index.equals(frame.index)
+        if allow_ranked_reuse and ranked_row is not None and pair_matches_ranked_search:
+            candidate = _evidence_from_ranked_row(ranked_row, max_lag, alignment_key)
+            if _validated_best_lag_evidence(candidate, pair, max_lag) is not None:
+                evidence[variable] = candidate
+                diagnostics["reused_evidence_count"] += 1
+                continue
+
+        if allow_ranked_reuse and ranked_row is not None:
+            diagnostics["invalid_evidence_count"] += 1
+        if len(pair) < max(10, max_lag + 5):
+            continue
+        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        diagnostics["recomputed_evidence_count"] += 1
+        if best.empty:
+            evidence[variable] = {
+                "best_lag": None,
+                "best_score": None,
+                "max_lag": int(max_lag),
+                "pair_alignment_key": alignment_key,
+                "source": "recomputed",
+                "status": "scanned_no_result",
+            }
+            continue
+        best_row = best.iloc[0]
+        evidence[variable] = {
+            "best_lag": int(best_row["lag"]),
+            "best_score": float(best_row["score"]),
+            "max_lag": int(max_lag),
+            "pair_alignment_key": alignment_key,
+            "source": "recomputed",
+            "status": "ok",
+        }
+    return evidence, diagnostics
+
+
+def _ranked_row(ranked: pd.DataFrame | None, variable: str) -> pd.Series | None:
+    if ranked is None or ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
+        return None
+    matches = ranked.loc[ranked["variable"].astype(str).eq(variable)]
+    return None if matches.empty else matches.iloc[0]
+
+
+def _evidence_from_ranked_row(
+    row: pd.Series,
+    max_lag: int,
+    alignment_key: str,
+) -> BestLagEvidence:
+    score = row.get("score", row.get("raw_corr", np.nan))
+    return {
+        "best_lag": row.get("lag"),
+        "best_score": score,
+        "max_lag": int(max_lag),
+        "pair_alignment_key": alignment_key,
+        "source": "ranked",
+        "status": "ok",
+    }
+
+
+def _is_scanned_no_result_evidence(
+    evidence: Mapping[str, object] | None,
+    pair: pd.DataFrame,
+    max_lag: int,
+) -> bool:
+    if not isinstance(evidence, Mapping) or evidence.get("status") != "scanned_no_result":
+        return False
+    try:
+        evidence_max_lag = float(evidence.get("max_lag"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        np.isfinite(evidence_max_lag)
+        and evidence_max_lag.is_integer()
+        and int(evidence_max_lag) == max_lag
+        and evidence.get("best_lag") is None
+        and evidence.get("best_score") is None
+        and evidence.get("source") == "recomputed"
+        and evidence.get("pair_alignment_key") == pair_alignment_key(pair)
+    )
+
+
+def _validated_best_lag_evidence(
+    evidence: Mapping[str, object] | None,
+    pair: pd.DataFrame,
+    max_lag: int,
+) -> tuple[int, float] | None:
+    if not isinstance(evidence, Mapping):
+        return None
+    try:
+        lag_value = float(evidence.get("best_lag"))
+        score = float(evidence.get("best_score"))
+        evidence_max_lag = float(evidence.get("max_lag"))
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite(value) for value in [lag_value, score, evidence_max_lag]):
+        return None
+    if not lag_value.is_integer() or not evidence_max_lag.is_integer():
+        return None
+    lag = int(lag_value)
+    if int(evidence_max_lag) != max_lag or not -max_lag <= lag <= max_lag:
+        return None
+    if not 0.0 <= score <= 1.0 or not str(evidence.get("source", "")).strip():
+        return None
+    if evidence.get("pair_alignment_key") != pair_alignment_key(pair):
+        return None
+    return lag, score
+
+
+def rolling_corr_scores(
+    frame: pd.DataFrame,
+    target: str,
+    candidate_variables: list[str],
+    max_lag: int,
+    window: int | None = None,
+    min_periods: int | None = None,
+    best_lag_evidence: Mapping[str, Mapping[str, object]] | None = None,
+) -> pd.DataFrame:
     cols = ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_abs_corr_median", "rolling_corr_iqr", "rolling_sign_consistency", "valid_window_count", "rolling_stability"]
     if target not in frame.columns or not candidate_variables:
         return pd.DataFrame(columns=cols)
@@ -322,11 +485,23 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
         pair = frame[[target, variable]].dropna()
         if len(pair) < max(window_size, max_lag + 10):
             continue
-        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
-        if best.empty:
+        candidate_evidence = best_lag_evidence.get(variable) if best_lag_evidence else None
+        if _is_scanned_no_result_evidence(candidate_evidence, pair, max_lag):
             continue
-        best_row = best.iloc[0]
-        best_lag = int(best_row["lag"])
+        prepared = _validated_best_lag_evidence(
+            candidate_evidence,
+            pair,
+            max_lag,
+        )
+        if prepared is None:
+            best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+            if best.empty:
+                continue
+            best_row = best.iloc[0]
+            best_lag = int(best_row["lag"])
+            best_score = float(best_row.get("score", 0.0) or 0.0)
+        else:
+            best_lag, best_score = prepared
         shifted = pair[variable].shift(best_lag)
         rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target]).dropna()
         if rolling.empty:
@@ -335,7 +510,7 @@ def rolling_corr_scores(frame: pd.DataFrame, target: str, candidate_variables: l
         iqr = float(rolling.quantile(0.75) - rolling.quantile(0.25))
         abs_median = float(rolling.abs().median())
         stability = max(0.0, min(1.0, abs_median * float(sign_consistency) * (1.0 - min(1.0, iqr))))
-        rows.append({"variable": variable, "best_lag": best_lag, "best_score": float(best_row.get("score", 0.0) or 0.0), "rolling_corr_median": float(rolling.median()), "rolling_abs_corr_median": abs_median, "rolling_corr_iqr": iqr, "rolling_sign_consistency": float(sign_consistency), "valid_window_count": int(len(rolling)), "rolling_stability": stability})
+        rows.append({"variable": variable, "best_lag": best_lag, "best_score": best_score, "rolling_corr_median": float(rolling.median()), "rolling_abs_corr_median": abs_median, "rolling_corr_iqr": iqr, "rolling_sign_consistency": float(sign_consistency), "valid_window_count": int(len(rolling)), "rolling_stability": stability})
     return pd.DataFrame(rows, columns=cols)
 
 

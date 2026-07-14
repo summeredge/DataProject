@@ -71,6 +71,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         final_ranked_features,
         load_roles,
         model_lift_scores,
+        prepare_best_lag_evidence,
         regime_scores,
         residual_corr_scores,
         risk_flags,
@@ -131,7 +132,20 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         rolling = _skipped_rolling_corr_scores(candidate_variables)
     else:
         _progress(progress_callback, "正在计算滚动稳定性")
-        rolling = rolling_corr_scores(scaled, config.target, candidate_variables, config.max_lag)
+        best_lag_evidence, _ = prepare_best_lag_evidence(
+            scaled,
+            config.target,
+            candidate_variables,
+            config.max_lag,
+            ranked=raw_ranked,
+        )
+        rolling = rolling_corr_scores(
+            scaled,
+            config.target,
+            candidate_variables,
+            config.max_lag,
+            best_lag_evidence=best_lag_evidence,
+        )
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
     ranked = final_ranked_features(

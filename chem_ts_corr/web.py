@@ -1664,6 +1664,7 @@ INDEX_HTML = r"""<!doctype html>
     .control-group { display:grid; gap:8px; padding:10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
     .card { display:grid; gap:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface-muted); }
     .grid { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:10px; align-items:end; }
+    .secondary-validation-params { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:end; }
     .control-group-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
@@ -2019,7 +2020,7 @@ INDEX_HTML = r"""<!doctype html>
             <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
             <span>原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；在主筛查 TopK 和主筛查强制复核变量之外，可追加补充变量进入二次验证；若改用原始采样，请按原始采样间隔重新填写最大滞后点数，例如 1min 数据验证 360min 滞后，应填 360。</span>
           </div>
-          <div class="grid">
+          <div class="secondary-validation-params">
             <label>二次验证补充变量（白名单）
               <details id="secondaryIncludeDropdown" class="multi-dropdown">
                 <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
@@ -2068,9 +2069,11 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
         <h2>三层复核</h2>
-        <div class="help">所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</div>
-        <div class="help">三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</div>
-        <div class="help">高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</div>
+        <div class="help">
+          <span>所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</span>
+          <span>三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
+          <span>高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</span>
+        </div>
         <div class="causal-review-params">
           <label>条件Granger滞后模式
             <select id="conditionalLagMode">

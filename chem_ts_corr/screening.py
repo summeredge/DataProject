@@ -340,6 +340,7 @@ def prepare_best_lag_evidence(
     max_lag: int,
     ranked: pd.DataFrame | None = None,
     allow_ranked_reuse: bool = True,
+    ranked_source_frame: pd.DataFrame | None = None,
 ) -> tuple[dict[str, BestLagEvidence], dict[str, int]]:
     evidence: dict[str, BestLagEvidence] = {}
     diagnostics = {
@@ -353,29 +354,43 @@ def prepare_best_lag_evidence(
     for variable in dict.fromkeys(candidate_variables):
         if variable == target or variable not in frame.columns:
             continue
-        pair = frame[[target, variable]].dropna()
-        alignment_key = pair_alignment_key(pair)
+        current_pair = frame[[target, variable]].dropna()
+        current_alignment_key = pair_alignment_key(current_pair)
         ranked_row = _ranked_row(ranked, variable)
-        pair_matches_ranked_search = len(pair) == len(frame) and pair.index.equals(frame.index)
-        if allow_ranked_reuse and ranked_row is not None and pair_matches_ranked_search:
-            candidate = _evidence_from_ranked_row(ranked_row, max_lag, alignment_key)
-            if _validated_best_lag_evidence(candidate, pair, max_lag) is not None:
-                evidence[variable] = candidate
-                diagnostics["reused_evidence_count"] += 1
-                continue
-
         if allow_ranked_reuse and ranked_row is not None:
+            source_columns_available = (
+                ranked_source_frame is not None
+                and target in ranked_source_frame.columns
+                and variable in ranked_source_frame.columns
+            )
+            if source_columns_available:
+                source_pair = ranked_source_frame[[target, variable]].dropna()
+                source_alignment_key = pair_alignment_key(source_pair)
+                source_matches_current = (
+                    source_alignment_key == current_alignment_key
+                    and source_pair.index.equals(current_pair.index)
+                )
+                if source_matches_current:
+                    candidate = _evidence_from_ranked_row(
+                        ranked_row,
+                        max_lag,
+                        source_alignment_key,
+                    )
+                    if _validated_best_lag_evidence(candidate, source_pair, max_lag) is not None:
+                        evidence[variable] = candidate
+                        diagnostics["reused_evidence_count"] += 1
+                        continue
             diagnostics["invalid_evidence_count"] += 1
-        if len(pair) < max(10, max_lag + 5):
+        if len(current_pair) < max(10, max_lag + 5):
             continue
-        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        best = summarize_best_lags(compute_lag_scores(current_pair, target, max_lag))
         diagnostics["recomputed_evidence_count"] += 1
         if best.empty:
             evidence[variable] = {
                 "best_lag": None,
                 "best_score": None,
                 "max_lag": int(max_lag),
-                "pair_alignment_key": alignment_key,
+                "pair_alignment_key": current_alignment_key,
                 "source": "recomputed",
                 "status": "scanned_no_result",
             }
@@ -385,7 +400,7 @@ def prepare_best_lag_evidence(
             "best_lag": int(best_row["lag"]),
             "best_score": float(best_row["score"]),
             "max_lag": int(max_lag),
-            "pair_alignment_key": alignment_key,
+            "pair_alignment_key": current_alignment_key,
             "source": "recomputed",
             "status": "ok",
         }

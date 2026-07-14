@@ -104,7 +104,7 @@ def test_rolling_uses_complete_evidence_without_lag_scan(monkeypatch):
     expected = _legacy_rolling_corr_scores(frame, "target", variables, max_lag=5)
     ranked = _ranked_for(frame, variables, max_lag=5)
     evidence, diagnostics = screening.prepare_best_lag_evidence(
-        frame, "target", variables, 5, ranked=ranked
+        frame, "target", variables, 5, ranked=ranked, ranked_source_frame=frame
     )
 
     monkeypatch.setattr(
@@ -130,7 +130,7 @@ def test_rolling_scans_only_variable_missing_evidence(monkeypatch):
     expected = _legacy_rolling_corr_scores(frame, "target", variables, max_lag=5)
     ranked = _ranked_for(frame, ["x1"], max_lag=5)
     evidence, _ = screening.prepare_best_lag_evidence(
-        frame, "target", ["x1"], 5, ranked=ranked
+        frame, "target", ["x1"], 5, ranked=ranked, ranked_source_frame=frame
     )
     original = screening.compute_lag_scores
     calls = []
@@ -204,7 +204,8 @@ def test_stale_scanned_no_result_evidence_keeps_single_fallback(monkeypatch):
 
 def test_prepare_recomputes_ranked_evidence_for_internal_missing_pair(monkeypatch):
     frame = _lagged_frame({"x": 3})
-    ranked = _ranked_for(frame, ["x"], max_lag=5)
+    ranked_source_frame = frame.copy(deep=True)
+    ranked = _ranked_for(ranked_source_frame, ["x"], max_lag=5)
     frame.loc[frame.index[70], "x"] = np.nan
     pair = frame[["target", "x"]].dropna()
     expected_best = summarize_best_lags(compute_lag_scores(pair, "target", 5)).iloc[0]
@@ -217,7 +218,12 @@ def test_prepare_recomputes_ranked_evidence_for_internal_missing_pair(monkeypatc
 
     monkeypatch.setattr(screening, "compute_lag_scores", counted)
     evidence, diagnostics = screening.prepare_best_lag_evidence(
-        frame, "target", ["x"], 5, ranked=ranked
+        frame,
+        "target",
+        ["x"],
+        5,
+        ranked=ranked,
+        ranked_source_frame=ranked_source_frame,
     )
 
     assert len(calls) == 1
@@ -241,6 +247,66 @@ def test_alignment_key_uses_full_order_not_only_row_count():
     assert screening.pair_alignment_key(first) != screening.pair_alignment_key(second)
 
 
+def test_ranked_evidence_without_source_frame_fails_closed(monkeypatch):
+    frame = _lagged_frame({"x": 2})
+    ranked = _ranked_for(frame, ["x"], max_lag=5)
+    original = screening.compute_lag_scores
+    calls = []
+
+    def counted(pair, target, max_lag):
+        calls.append(pair.columns[-1])
+        return original(pair, target, max_lag)
+
+    monkeypatch.setattr(screening, "compute_lag_scores", counted)
+    evidence, diagnostics = screening.prepare_best_lag_evidence(
+        frame, "target", ["x"], 5, ranked=ranked, ranked_source_frame=None
+    )
+    screening.rolling_corr_scores(
+        frame, "target", ["x"], 5, best_lag_evidence=evidence
+    )
+
+    assert calls == ["x"]
+    assert evidence["x"]["source"] == "recomputed"
+    assert diagnostics == {
+        "reused_evidence_count": 0,
+        "recomputed_evidence_count": 1,
+        "invalid_evidence_count": 1,
+    }
+
+
+def test_same_length_different_source_index_recomputes_once(monkeypatch):
+    ranked_source_frame = _lagged_frame({"x": -2})
+    frame = ranked_source_frame.copy(deep=True)
+    reordered_index = frame.index.to_list()
+    reordered_index[70], reordered_index[71] = reordered_index[71], reordered_index[70]
+    frame.index = pd.DatetimeIndex(reordered_index)
+    ranked = _ranked_for(ranked_source_frame, ["x"], max_lag=5)
+    original = screening.compute_lag_scores
+    calls = []
+
+    def counted(pair, target, max_lag):
+        calls.append(pair.index.copy())
+        return original(pair, target, max_lag)
+
+    monkeypatch.setattr(screening, "compute_lag_scores", counted)
+    evidence, diagnostics = screening.prepare_best_lag_evidence(
+        frame,
+        "target",
+        ["x"],
+        5,
+        ranked=ranked,
+        ranked_source_frame=ranked_source_frame,
+    )
+
+    assert len(frame) == len(ranked_source_frame)
+    assert frame.index[0] == ranked_source_frame.index[0]
+    assert frame.index[-1] == ranked_source_frame.index[-1]
+    assert len(calls) == 1
+    assert calls[0].equals(frame.index)
+    assert evidence["x"]["source"] == "recomputed"
+    assert diagnostics["invalid_evidence_count"] == 1
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -254,7 +320,7 @@ def test_invalid_evidence_falls_back_once(monkeypatch, field, value):
     frame = _lagged_frame({"x": 2})
     ranked = _ranked_for(frame, ["x"], max_lag=5)
     evidence, _ = screening.prepare_best_lag_evidence(
-        frame, "target", ["x"], 5, ranked=ranked
+        frame, "target", ["x"], 5, ranked=ranked, ranked_source_frame=frame
     )
     evidence["x"][field] = value
     original = screening.compute_lag_scores
@@ -279,7 +345,7 @@ def test_evidence_preserves_negative_zero_and_boundary_lags(expected_lag):
     expected = _legacy_rolling_corr_scores(frame, "target", ["x"], max_lag=5)
     ranked = _ranked_for(frame, ["x"], max_lag=5)
     evidence, _ = screening.prepare_best_lag_evidence(
-        frame, "target", ["x"], 5, ranked=ranked
+        frame, "target", ["x"], 5, ranked=ranked, ranked_source_frame=frame
     )
 
     actual = screening.rolling_corr_scores(

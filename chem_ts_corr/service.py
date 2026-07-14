@@ -138,6 +138,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
             candidate_variables,
             config.max_lag,
             ranked=raw_ranked,
+            ranked_source_frame=scaled,
         )
         rolling = rolling_corr_scores(
             scaled,

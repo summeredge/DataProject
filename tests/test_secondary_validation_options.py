@@ -422,6 +422,8 @@ def test_enhanced_screening_recomputes_best_lags_when_secondary_resample_changes
 
     assert "lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)" in function_body
     assert "prepare_best_lag_evidence(" in function_body
+    assert "ranked_source_scaled = _scaled_frame_for_secondary(base_config)" in function_body
+    assert "ranked_source_frame=ranked_source_scaled" in function_body
     assert "allow_ranked_reuse=not lag_search_changed" in function_body
     assert "best_lag_evidence=best_lag_evidence" in function_body
 
@@ -471,7 +473,13 @@ def _run_enhanced_screening_case(tmp_path, monkeypatch, lag_search_changed):
     monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: [])
     monkeypatch.setattr(web, "_safe_read_result_csv", lambda path: ranked)
     monkeypatch.setattr(web, "_secondary_variables_from_ranked", lambda *args, **kwargs: ["x"])
-    monkeypatch.setattr(web, "_scaled_frame_for_secondary", lambda *args, **kwargs: frame)
+    scaled_calls = []
+
+    def scaled_for_config(config, protected_columns=None):
+        scaled_calls.append((config, tuple(protected_columns or [])))
+        return frame
+
+    monkeypatch.setattr(web, "_scaled_frame_for_secondary", scaled_for_config)
     monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
 
     original_compute = screening.compute_lag_scores
@@ -491,17 +499,21 @@ def _run_enhanced_screening_case(tmp_path, monkeypatch, lag_search_changed):
 
     def capture_rolling(*args, best_lag_evidence=None, **kwargs):
         captured["evidence"] = best_lag_evidence
-        return original_rolling(
+        captured["rolling"] = original_rolling(
             *args,
             best_lag_evidence=best_lag_evidence,
             **kwargs,
         )
+        return captured["rolling"]
 
     monkeypatch.setattr(screening, "compute_lag_scores", counted_compute)
     monkeypatch.setattr(screening, "model_lift_scores", capture_lift)
     monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
 
     result = web._run_enhanced_screening_response(object())
+    captured["scaled_calls"] = scaled_calls
+    captured["base_config"] = base_config
+    captured["secondary_config"] = secondary_config
     return result, captured, scan_calls
 
 
@@ -512,6 +524,10 @@ def test_enhanced_screening_reuses_ranked_evidence_and_reports_timings(tmp_path,
 
     assert scan_calls == []
     assert captured["evidence"]["x"]["source"] == "ranked"
+    assert captured["scaled_calls"] == [
+        (captured["secondary_config"], ()),
+        (captured["base_config"], ()),
+    ]
     assert captured["best_lags"] == {
         variable: item["best_lag"] for variable, item in captured["evidence"].items()
     }
@@ -533,7 +549,122 @@ def test_enhanced_screening_changed_parameters_scan_each_variable_once(tmp_path,
     assert scan_calls == ["x"]
     assert captured["evidence"]["x"]["source"] == "recomputed"
     assert captured["best_lags"]["x"] == captured["evidence"]["x"]["best_lag"]
+    assert captured["scaled_calls"] == [(captured["secondary_config"], ())]
     assert result["timings"]["total_seconds"] >= max(result["timings"].values())
+
+
+def test_enhanced_screening_extra_variable_index_change_recomputes_ranked_candidate(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import screening, web
+    from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+
+    n = 120
+    rng = np.random.default_rng(23)
+    target = pd.Series(rng.normal(size=n))
+    x = target.shift(-2).ffill().bfill() + rng.normal(scale=1e-4, size=n)
+    z = target.shift(1).ffill().bfill()
+    full_index = pd.date_range("2026-02-01", periods=n, freq="min")
+    raw = pd.DataFrame(
+        {
+            "timestamp": full_index,
+            "target": target.to_numpy(),
+            "x": x.to_numpy(),
+            "z": z.to_numpy(),
+        }
+    )
+    raw.loc[20:89, "z"] = np.nan
+    input_path = tmp_path / "input.csv"
+    raw.to_csv(input_path, index=False, encoding="utf-8-sig")
+    base_config = AnalysisConfig(
+        input_path=input_path,
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=3,
+        top_k=1,
+    )
+    secondary_config = AnalysisConfig(
+        input_path=input_path,
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=3,
+        top_k=1,
+        force_include_variables=["z"],
+    )
+    monkeypatch.setattr(web, "SCALED_FRAME_CACHE", {})
+    source_frame = web._scaled_frame_for_secondary(base_config)
+    current_frame = web._scaled_frame_for_secondary(
+        secondary_config, protected_columns=["z"]
+    )
+    assert "z" not in source_frame.columns
+    assert "z" in current_frame.columns
+    assert len(current_frame) < len(source_frame)
+    assert current_frame[["target", "x"]].notna().all().all()
+    expected = screening.rolling_corr_scores(current_frame, "target", ["x"], 3)
+    ranked_best = summarize_best_lags(compute_lag_scores(source_frame, "target", 3)).iloc[0]
+    ranked = pd.DataFrame(
+        {
+            "variable": ["x"],
+            "lag": [int(ranked_best["lag"])],
+            "raw_corr": [float(ranked_best["score"])],
+        }
+    )
+    web.SCALED_FRAME_CACHE.clear()
+
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: {})
+    monkeypatch.setattr(web, "_field", lambda form, name: "run-1")
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: base_config)
+    monkeypatch.setattr(web, "_secondary_config_from_form", lambda config, form: secondary_config)
+    monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: ["z"])
+    monkeypatch.setattr(web, "_safe_read_result_csv", lambda path: ranked)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
+
+    scaled_calls = []
+    original_scaled = web._scaled_frame_for_secondary
+
+    def capture_scaled(config, protected_columns=None):
+        scaled_calls.append((config, tuple(protected_columns or [])))
+        return original_scaled(config, protected_columns)
+
+    monkeypatch.setattr(web, "_scaled_frame_for_secondary", capture_scaled)
+    original_compute = screening.compute_lag_scores
+    scan_calls = []
+
+    def counted_compute(pair, target_name, max_lag):
+        scan_calls.append(pair.columns[-1])
+        return original_compute(pair, target_name, max_lag)
+
+    captured = {}
+    original_rolling = screening.rolling_corr_scores
+
+    def capture_rolling(*args, best_lag_evidence=None, **kwargs):
+        captured["evidence"] = best_lag_evidence
+        captured["rolling"] = original_rolling(
+            *args,
+            best_lag_evidence=best_lag_evidence,
+            **kwargs,
+        )
+        return captured["rolling"]
+
+    monkeypatch.setattr(screening, "compute_lag_scores", counted_compute)
+    monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
+
+    web._run_enhanced_screening_response(object())
+
+    assert not _secondary_lag_search_changed(base_config, secondary_config)
+    assert scan_calls.count("x") == 1
+    assert captured["evidence"]["x"]["source"] == "recomputed"
+    assert scaled_calls == [
+        (secondary_config, ("z",)),
+        (base_config, ()),
+    ]
+    actual = captured["rolling"].loc[
+        captured["rolling"]["variable"].eq("x")
+    ].reset_index(drop=True)
+    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
 
 
 def test_model_response_recomputes_best_lags_when_secondary_resample_changes():

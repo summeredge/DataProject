@@ -564,12 +564,16 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
 
     lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
     lag_evidence_started = time.perf_counter()
+    ranked_source_scaled = None
+    if not lag_search_changed:
+        ranked_source_scaled = _scaled_frame_for_secondary(base_config)
     best_lag_evidence, _ = prepare_best_lag_evidence(
         scaled,
         secondary_config.target,
         variables,
         secondary_config.max_lag,
         ranked=ranked,
+        ranked_source_frame=ranked_source_scaled,
         allow_ranked_reuse=not lag_search_changed,
     )
     lag_evidence_seconds = time.perf_counter() - lag_evidence_started

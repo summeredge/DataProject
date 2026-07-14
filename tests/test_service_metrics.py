@@ -90,7 +90,18 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
         skip_model_lift=True,
     )
     captured = {}
+    original_prepare = screening.prepare_best_lag_evidence
     original_rolling = screening.rolling_corr_scores
+
+    def capture_prepare(frame, *args, ranked_source_frame=None, **kwargs):
+        captured["frame"] = frame
+        captured["ranked_source_frame"] = ranked_source_frame
+        return original_prepare(
+            frame,
+            *args,
+            ranked_source_frame=ranked_source_frame,
+            **kwargs,
+        )
 
     def capture_rolling(*args, best_lag_evidence=None, **kwargs):
         captured["evidence"] = best_lag_evidence
@@ -100,6 +111,7 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
             **kwargs,
         )
 
+    monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_prepare)
     monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
     monkeypatch.setattr(
         screening,
@@ -112,6 +124,12 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
     analyze_numeric_frame(frame, config)
 
     assert captured["evidence"]
+    assert captured["frame"] is captured["ranked_source_frame"]
     assert set(captured["evidence"]) == {"x1", "x2"}
     assert {item["source"] for item in captured["evidence"].values()} == {"ranked"}
     assert all("best_score" in item for item in captured["evidence"].values())
+    assert all(
+        item["pair_alignment_key"]
+        == screening.pair_alignment_key(captured["frame"][["target", variable]].dropna())
+        for variable, item in captured["evidence"].items()
+    )

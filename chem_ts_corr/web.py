@@ -835,14 +835,14 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
                 run_id,
                 output_dir,
                 status="invalid_input",
-                error_message="max_lag must be a positive integer or empty",
+                error_message="max_lag must be an integer between 1 and 5000",
             )
-        if max_lag <= 0:
+        if not 1 <= max_lag <= 5000:
             return _xgb_response_payload(
                 run_id,
                 output_dir,
                 status="invalid_input",
-                error_message="max_lag must be a positive integer or empty",
+                error_message="max_lag must be an integer between 1 and 5000",
             )
     else:
         max_lag = config.xgb_max_lag
@@ -2112,13 +2112,14 @@ INDEX_HTML = r"""<!doctype html>
         <div class="row">
           <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
           <label>候选数量<input id="xgbTopN" type="number" min="1" max="8" value="8"></label>
-          <label>最大滞后<input id="xgbMaxLag" type="number" min="1" placeholder="自动"></label>
+          <label>最大滞后<input id="xgbMaxLag" type="number" min="1" max="5000" placeholder="自动"></label>
           <label>白名单<input id="xgbWhitelist" placeholder="变量名以逗号分隔"></label>
         </div>
         <div class="actions">
           <button id="runXgbValidation" disabled>运行 XGB 四级验证</button>
         </div>
         <div id="xgbStatus" class="help" aria-live="polite">XGB 四级验证未启用。</div>
+        <div id="xgbRunSummary" class="overview-grid"></div>
         <h2>模型时间外验证摘要</h2>
         <div class="download-buttons" id="xgbModelSummaryDownload"></div>
         <div id="xgbModelSummaryTable" class="empty">未运行 XGB 四级验证。</div>
@@ -2206,6 +2207,7 @@ let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
 let lastXgbModelSummaryRows = [];
 let lastXgbCandidateUpliftRows = [];
+let lastXgbValidationSummary = {};
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
@@ -2494,6 +2496,7 @@ function renderAnalysisResult(data) {
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
+  lastXgbValidationSummary = {};
   closeDetailModal();
   renderOverview(data.overview || {});
   renderScreeningQualityHints(lastRows);
@@ -2514,6 +2517,7 @@ function renderAnalysisResult(data) {
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
   renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+  renderXgbRunSummary(lastXgbValidationSummary);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runEnhancedScreening").disabled = !currentRunId;
@@ -2697,8 +2701,10 @@ async function runXgbValidation() {
     const data = await postForm("/api/run_xgb_validation", form);
     lastXgbModelSummaryRows = data.xgbModelSummary || [];
     lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
+    lastXgbValidationSummary = data.xgbValidationSummary || {};
     renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
     renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+    renderXgbRunSummary(lastXgbValidationSummary);
     renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
     renderDownloads(data.downloads || []);
     const message = data.error_message || data.message || "XGB 四级验证失败。";
@@ -4132,6 +4138,41 @@ function xgbCandidateUpliftColumns() {
   return ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];
 }
 
+function renderXgbRunSummary(summary) {
+  const container = el("xgbRunSummary");
+  if (!container) return;
+  if (!summary || summary.status !== "success") {
+    container.innerHTML = "";
+    return;
+  }
+  const timings = summary.timings_seconds || {};
+  const requiredValues = [
+    summary.row_count,
+    summary.candidate_count,
+    summary.fold_count,
+    summary.m0_feature_count,
+    summary.m1_feature_count,
+    summary.m2_feature_count,
+    summary.max_used_lag,
+    timings.total,
+  ];
+  if (requiredValues.some(value => value === undefined || value === null)) {
+    container.innerHTML = "";
+    return;
+  }
+  const metrics = [
+    ["样本行数", summary.row_count],
+    ["候选数量", summary.candidate_count],
+    ["时间折数", summary.fold_count],
+    ["M0/M1/M2 特征数", `${summary.m0_feature_count}/${summary.m1_feature_count}/${summary.m2_feature_count}`],
+    ["最大使用滞后", summary.max_used_lag],
+    ["总耗时（秒）", timings.total],
+  ];
+  container.innerHTML = metrics.map(([label, value]) =>
+    `<div class="metric-card"><span class="metric-value">${escapeHtml(formatValue(value))}</span><span class="metric-label">${escapeHtml(label)}</span></div>`
+  ).join("");
+}
+
 function causalReviewColumns() {
   return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
 }
@@ -4770,6 +4811,7 @@ function reset() {
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
+  lastXgbValidationSummary = {};
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
   lastScatterMatrixPayload = null;
@@ -4850,6 +4892,7 @@ function reset() {
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
+  clearOptionalElement("xgbRunSummary");
   clearOptionalElement("xgbModelSummaryDownload");
   clearOptionalElement("xgbCandidateUpliftDownload");
   clearOptionalElement("xgbValidationSummaryDownload");

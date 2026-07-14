@@ -157,8 +157,9 @@ def test_missing_final_review_is_rejected_before_loading_or_service_call(
     [
         ("top_n", "0", "top_n must be an integer between 1 and 8"),
         ("top_n", "abc", "top_n must be an integer between 1 and 8"),
-        ("max_lag", "0", "max_lag must be a positive integer or empty"),
-        ("max_lag", "abc", "max_lag must be a positive integer or empty"),
+        ("max_lag", "0", "max_lag must be an integer between 1 and 5000"),
+        ("max_lag", "abc", "max_lag must be an integer between 1 and 5000"),
+        ("max_lag", "5001", "max_lag must be an integer between 1 and 5000"),
     ],
 )
 def test_invalid_xgb_parameters_are_rejected_before_data_or_service_call(
@@ -340,6 +341,9 @@ def test_xgb_web_surface_and_architecture_guards():
         'id="xgbWhitelist"', 'id="runXgbValidation"', 'id="xgbModelSummaryTable"',
         'id="xgbCandidateUpliftTable"', "xgb_validation/xgb_model_summary.csv",
         "xgb_validation/xgb_candidate_uplift.csv", "xgb_validation/xgb_validation_summary.json",
+        'id="xgbRunSummary"', 'max="5000"', "renderXgbRunSummary",
+        "row_count", "candidate_count", "fold_count", "m0_feature_count",
+        "m1_feature_count", "m2_feature_count", "max_used_lag", "timings.total",
     ]:
         assert marker in web.INDEX_HTML or marker in web.DOWNLOAD_FILES
     for forbidden in [
@@ -352,3 +356,18 @@ def test_xgb_web_surface_and_architecture_guards():
     assert service.run_xgb_analysis is not None
     assert "XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。" in web.INDEX_HTML
     assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML
+
+
+def test_xgb_run_summary_uses_json_and_hides_missing_or_failed_values():
+    function_body = web.INDEX_HTML.split("function renderXgbRunSummary", 1)[1].split(
+        "function", 1
+    )[0]
+
+    assert 'summary.status !== "success"' in function_body
+    assert 'container.innerHTML = ""' in function_body
+    assert "summary.row_count" in function_body
+    assert "summary.candidate_count" in function_body
+    assert "summary.fold_count" in function_body
+    assert "summary.max_used_lag" in function_body
+    assert "timings.total" in function_body
+    assert "|| 0" not in function_body

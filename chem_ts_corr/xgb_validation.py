@@ -15,6 +15,7 @@ except ImportError:
 
 
 DEFAULT_XGB_TOP_N = 8
+MAX_XGB_LAG_POINTS = 5000
 DEFAULT_BASELINE_LAGS = (1, 2, 5, 10, 30, 60)
 DEFAULT_CANDIDATE_LAG_RADIUS = 2
 DEFAULT_OUTER_SPLITS = 3
@@ -295,8 +296,7 @@ def prepare_xgb_validation_frame(
 
 
 def normalize_positive_lags(lags: Sequence[int], max_lag: int) -> tuple[int, ...]:
-    if max_lag < 1:
-        raise ValueError("max_lag must be at least 1")
+    max_lag = validate_xgb_max_lag(max_lag)
     valid = {
         int(lag)
         for lag in lags
@@ -310,14 +310,22 @@ def candidate_lag_window(
     max_lag: int,
     radius: int = DEFAULT_CANDIDATE_LAG_RADIUS,
 ) -> tuple[int, ...]:
-    if max_lag < 1:
-        raise ValueError("max_lag must be at least 1")
+    max_lag = validate_xgb_max_lag(max_lag)
     if radius < 0:
         raise ValueError("radius must be non-negative")
     lag = _integer(best_lag)
     if lag is None or lag <= 0:
         return ()
     return tuple(range(max(1, lag - radius), min(max_lag, lag + radius) + 1))
+
+
+def validate_xgb_max_lag(max_lag: object) -> int:
+    if isinstance(max_lag, bool) or not isinstance(max_lag, Integral):
+        raise ValueError("max_lag must be an integer between 1 and 5000")
+    resolved = int(max_lag)
+    if not 1 <= resolved <= MAX_XGB_LAG_POINTS:
+        raise ValueError("max_lag must be an integer between 1 and 5000")
+    return resolved
 
 
 def build_xgb_feature_sets(
@@ -606,7 +614,7 @@ def run_candidate_uplift_validation(
         raise ValueError("XGB features and target must use the same index")
 
     pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
-    candidates = _ordered_uplift_candidates(pool)[:DEFAULT_XGB_TOP_N]
+    candidates = _bounded_uplift_candidates(pool)
     available = set(feature_sets.features.columns)
     m1_features = tuple(feature_sets.m1_features)
     if not set(m1_features).issubset(available):
@@ -986,6 +994,34 @@ def _ordered_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
         ["_candidate_order", "_source_order"], kind="mergesort", na_position="last"
     )
     return _stable_unique(_text(variable) for variable in source["variable"] if _text(variable))
+
+
+def _bounded_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
+    if candidate_pool.empty or "variable" not in candidate_pool.columns:
+        return []
+    source = candidate_pool.copy(deep=True)
+    source["_source_order"] = range(len(source))
+    source["_candidate_order"] = pd.to_numeric(
+        source.get("candidate_order", pd.Series(index=source.index, dtype=float)),
+        errors="coerce",
+    )
+    source = source.sort_values(
+        ["_candidate_order", "_source_order"], kind="mergesort", na_position="last"
+    )
+    selected: list[str] = []
+    automatic_count = 0
+    for _, row in source.iterrows():
+        variable = _text(row.get("variable"))
+        if not variable or variable in selected:
+            continue
+        force_included = row.get("force_included") is True or str(
+            row.get("force_included", "")
+        ).strip().lower() in {"1", "true", "yes"}
+        if force_included or automatic_count < DEFAULT_XGB_TOP_N:
+            selected.append(variable)
+            if not force_included:
+                automatic_count += 1
+    return selected
 
 
 def _summarize_xgb_metrics(fold_metrics: pd.DataFrame) -> pd.DataFrame:

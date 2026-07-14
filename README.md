@@ -206,6 +206,8 @@ python -m chem_ts_corr.cli analyze `
 
 XGB 四级验证不会回写主筛查得分或排名；缺少 `xgboost` 时页面会返回依赖提示，已有三层分析结果仍保持可用。
 
+详细说明见 [XGB 四级验证说明](docs/xgb_validation.md)。
+
 ## 推荐工作流
 
 1. 在界面上传 CSV。

@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from numbers import Integral
 from pathlib import Path
 
 import numpy as np
@@ -12,13 +14,16 @@ import pandas as pd
 
 from chem_ts_corr.xgb_validation import (
     DEFAULT_CANDIDATE_LAG_RADIUS,
+    DEFAULT_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGB_TOP_N,
+    DEFAULT_XGB_PARAMS,
     XGBRegressor,
     build_expanding_time_splits,
     build_xgb_candidate_pool,
     build_xgb_feature_sets,
     run_candidate_uplift_validation,
     run_xgb_time_validation,
+    validate_xgb_max_lag,
 )
 
 
@@ -61,15 +66,36 @@ def run_xgb_validation(
     top_n: int = DEFAULT_XGB_TOP_N,
     max_lag: int | None = None,
 ) -> XGBRunResult:
+    total_started_at = time.perf_counter()
+    timings = {
+        name: 0.0
+        for name in (
+            "input_validation",
+            "candidate_pool",
+            "feature_build",
+            "split_build",
+            "model_validation",
+            "candidate_uplift",
+            "write_outputs",
+            "total",
+        )
+    }
+    stage_started_at = time.perf_counter()
     input_error = _input_error(run_dir, target, data, final_review_summary, ranked_features)
     if input_error:
         return _error_result("invalid_input", input_error)
+    if (
+        isinstance(top_n, bool)
+        or not isinstance(top_n, Integral)
+        or not 1 <= int(top_n) <= DEFAULT_XGB_TOP_N
+    ):
+        return _error_result("invalid_input", "top_n must be an integer between 1 and 8")
+    resolved_top_n = int(top_n)
+
     try:
-        resolved_top_n = int(top_n)
-    except (TypeError, ValueError, OverflowError):
-        return _error_result("invalid_input", "top_n must be an integer between 0 and 8")
-    if resolved_top_n != top_n or not 0 <= resolved_top_n <= DEFAULT_XGB_TOP_N:
-        return _error_result("invalid_input", "top_n must be an integer between 0 and 8")
+        resolved_max_lag = _resolve_max_lag(max_lag, final_review_summary, ranked_features)
+    except (TypeError, ValueError) as exc:
+        return _error_result("invalid_input", str(exc))
 
     try:
         output_dir = Path(run_dir) / "xgb_validation"
@@ -81,9 +107,10 @@ def run_xgb_validation(
 
     if XGBRegressor is None:
         return _error_result("missing_dependency", _MISSING_DEPENDENCY_MESSAGE)
+    timings["input_validation"] = _elapsed_seconds(stage_started_at)
 
+    stage_started_at = time.perf_counter()
     try:
-        resolved_max_lag = _resolve_max_lag(max_lag, final_review_summary, ranked_features)
         candidate_pool = build_xgb_candidate_pool(
             final_review_summary,
             ranked_features,
@@ -92,6 +119,14 @@ def run_xgb_validation(
             whitelist=whitelist,
             control_columns=control_columns,
         )
+        timings["candidate_pool"] = _elapsed_seconds(stage_started_at)
+    except (TypeError, ValueError) as exc:
+        return _error_result("invalid_input", str(exc))
+    except Exception as exc:
+        return _error_result("failed", str(exc))
+
+    stage_started_at = time.perf_counter()
+    try:
         feature_sets = build_xgb_feature_sets(
             data,
             target,
@@ -99,22 +134,43 @@ def run_xgb_validation(
             control_columns=control_columns,
             max_lag=resolved_max_lag,
         )
-        splits = build_expanding_time_splits(
-            len(feature_sets.features), gap=feature_sets.max_used_lag
-        )
+        timings["feature_build"] = _elapsed_seconds(stage_started_at)
     except (TypeError, ValueError) as exc:
         return _error_result("invalid_input", str(exc))
     except Exception as exc:
         return _error_result("failed", str(exc))
 
+    stage_started_at = time.perf_counter()
+    try:
+        splits = build_expanding_time_splits(
+            len(feature_sets.features), gap=feature_sets.max_used_lag
+        )
+        timings["split_build"] = _elapsed_seconds(stage_started_at)
+    except (TypeError, ValueError) as exc:
+        return _error_result("invalid_input", str(exc))
+    except Exception as exc:
+        return _error_result("failed", str(exc))
+
+    stage_started_at = time.perf_counter()
     try:
         model_result = run_xgb_time_validation(feature_sets, splits)
+        timings["model_validation"] = _elapsed_seconds(stage_started_at)
+    except RuntimeError as exc:
+        if "xgboost is not installed" in str(exc).lower():
+            return _error_result("missing_dependency", _MISSING_DEPENDENCY_MESSAGE)
+        return _error_result("failed", str(exc))
+    except Exception as exc:
+        return _error_result("failed", str(exc))
+
+    stage_started_at = time.perf_counter()
+    try:
         _, candidate_summary = run_candidate_uplift_validation(
             feature_sets,
             splits,
             candidate_pool,
             baseline_result=model_result,
         )
+        timings["candidate_uplift"] = _elapsed_seconds(stage_started_at)
     except RuntimeError as exc:
         if "xgboost is not installed" in str(exc).lower():
             return _error_result("missing_dependency", _MISSING_DEPENDENCY_MESSAGE)
@@ -124,12 +180,26 @@ def run_xgb_validation(
 
     try:
         paths = {name: output_dir / name for name in XGB_OUTPUT_FILES}
+        provenance = model_result.provenance
         summary_payload = {
             "status": "success",
             "target": target,
             "candidate_count": int(len(candidate_summary)),
             "candidate_pool_count": int(len(candidate_pool)),
             "fold_count": int(len(splits)),
+            "row_count": int(len(feature_sets.features)),
+            "m0_feature_count": int(len(feature_sets.m0_features)),
+            "m1_feature_count": int(len(feature_sets.m1_features)),
+            "m2_feature_count": int(len(feature_sets.m2_features)),
+            "max_used_lag": int(feature_sets.max_used_lag),
+            "resolved_max_lag": int(resolved_max_lag),
+            "top_n": int(resolved_top_n),
+            "data_fingerprint": (
+                provenance.data_fingerprint if provenance is not None else ""
+            ),
+            "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
+            "model_parameters": dict(DEFAULT_XGB_PARAMS),
+            "timings_seconds": timings,
             "files": list(XGB_OUTPUT_FILES),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -142,6 +212,9 @@ def run_xgb_validation(
                 "xgb_predictions.csv": model_result.predictions,
             },
             summary_payload,
+            timings=timings,
+            total_started_at=total_started_at,
+            write_started_at=time.perf_counter(),
         )
     except OSError as exc:
         return _error_result("invalid_input", f"run_dir is not writable: {exc}")
@@ -162,6 +235,10 @@ def _write_outputs_transactionally(
     output_dir: Path,
     frames: dict[str, pd.DataFrame],
     summary_payload: dict[str, object],
+    *,
+    timings: dict[str, float] | None = None,
+    total_started_at: float | None = None,
+    write_started_at: float | None = None,
 ) -> None:
     with tempfile.TemporaryDirectory(prefix=".xgb-stage-", dir=output_dir.parent) as temp_name:
         transaction_dir = Path(temp_name)
@@ -172,7 +249,8 @@ def _write_outputs_transactionally(
 
         for name in XGB_OUTPUT_FILES[:-1]:
             frames[name].to_csv(staged_dir / name, index=False, encoding="utf-8-sig")
-        (staged_dir / XGB_OUTPUT_FILES[-1]).write_text(
+        summary_name = XGB_OUTPUT_FILES[-1]
+        (staged_dir / summary_name).write_text(
             json.dumps(summary_payload, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
@@ -186,6 +264,20 @@ def _write_outputs_transactionally(
             for name in XGB_OUTPUT_FILES:
                 (staged_dir / name).replace(output_dir / name)
                 committed.append(name)
+
+            # Measure after one complete five-file commit; the final replace persists the timings.
+            if timings is not None and write_started_at is not None:
+                timings["write_outputs"] = _elapsed_seconds(write_started_at)
+            if timings is not None and total_started_at is not None:
+                timings["total"] = _elapsed_seconds(total_started_at)
+            if timings is not None:
+                summary_payload["timings_seconds"] = dict(timings)
+                final_summary = staged_dir / ".final-summary.json"
+                final_summary.write_text(
+                    json.dumps(summary_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                final_summary.replace(output_dir / summary_name)
         except Exception as commit_error:
             rollback_errors: list[str] = []
             for name in reversed(committed):
@@ -235,13 +327,7 @@ def _resolve_max_lag(
     ranked_features: pd.DataFrame | None,
 ) -> int:
     if max_lag is not None:
-        try:
-            resolved = int(max_lag)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("max_lag must be a positive integer") from exc
-        if resolved < 1 or float(max_lag) != resolved:
-            raise ValueError("max_lag must be a positive integer")
-        return resolved
+        return validate_xgb_max_lag(max_lag)
 
     lag_values: list[pd.Series] = []
     if "screening_lag" in final_review_summary.columns:
@@ -254,7 +340,12 @@ def _resolve_max_lag(
     positive = positive[np.isfinite(positive) & positive.gt(0)]
     if positive.empty:
         return 1
-    return max(1, int(np.ceil(float(positive.max()))) + DEFAULT_CANDIDATE_LAG_RADIUS)
+    inferred = max(1, int(np.ceil(float(positive.max()))) + DEFAULT_CANDIDATE_LAG_RADIUS)
+    return validate_xgb_max_lag(inferred)
+
+
+def _elapsed_seconds(started_at: float) -> float:
+    return round(max(0.0, time.perf_counter() - started_at), 6)
 
 
 def _error_result(status: str, message: str) -> XGBRunResult:

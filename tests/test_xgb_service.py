@@ -12,7 +12,14 @@ import chem_ts_corr.pipeline as pipeline
 import chem_ts_corr.service as service
 import chem_ts_corr.xgb_runner as runner
 from chem_ts_corr.xgb_runner import XGBRunResult, XGB_OUTPUT_FILES, run_xgb_validation
-from chem_ts_corr.xgb_validation import XGBFeatureSets, XGBTimeSplit, XGBValidationResult
+from chem_ts_corr.xgb_validation import (
+    DEFAULT_EARLY_STOPPING_ROUNDS,
+    DEFAULT_XGB_PARAMS,
+    XGBFeatureSets,
+    XGBTimeSplit,
+    XGBValidationProvenance,
+    XGBValidationResult,
+)
 
 
 CANDIDATE_COLUMNS = [
@@ -88,6 +95,13 @@ def _model_result() -> XGBValidationResult:
                 "M0_prediction": 8.0, "M1_prediction": 8.5, "M2_prediction": 9.0,
             }]
         ),
+        provenance=XGBValidationProvenance(
+            m1_features=("target__lag_1",),
+            split_signature=(),
+            parameter_signature=(),
+            early_stopping_rounds=DEFAULT_EARLY_STOPPING_ROUNDS,
+            data_fingerprint="test-provenance-fingerprint",
+        ),
     )
 
 
@@ -98,7 +112,13 @@ def _candidate_summary() -> pd.DataFrame:
     )
 
 
-def _mock_success(monkeypatch: pytest.MonkeyPatch, calls: list[str]):
+def _mock_success(
+    monkeypatch: pytest.MonkeyPatch,
+    calls: list[str],
+    *,
+    expected_top_n: int = 8,
+    expected_max_lag: int = 5,
+):
     pool = pd.DataFrame([{"candidate_order": 1, "variable": "x", "screening_lag": 3}])
     feature_sets = _feature_sets()
     splits = [XGBTimeSplit(0, slice(0, 6), slice(6, 9), slice(9, 12), 3)]
@@ -108,12 +128,12 @@ def _mock_success(monkeypatch: pytest.MonkeyPatch, calls: list[str]):
 
     def build_pool(*args, **kwargs):
         calls.append("candidate_pool")
-        assert kwargs["top_n"] == 8
+        assert kwargs["top_n"] == expected_top_n
         return pool.copy(deep=True)
 
     def build_features(*args, **kwargs):
         calls.append("features")
-        assert kwargs["max_lag"] == 5
+        assert kwargs["max_lag"] == expected_max_lag
         return feature_sets
 
     def build_splits(n_samples, **kwargs):
@@ -210,10 +230,31 @@ def test_json_summary_is_auditable_and_has_no_ranking_fields(
     assert payload["candidate_count"] == 1
     assert payload["candidate_pool_count"] == 1
     assert payload["fold_count"] == 1
+    assert payload["row_count"] == len(_feature_sets().features)
+    assert payload["m0_feature_count"] == len(_feature_sets().m0_features)
+    assert payload["m1_feature_count"] == len(_feature_sets().m1_features)
+    assert payload["m2_feature_count"] == len(_feature_sets().m2_features)
+    assert payload["max_used_lag"] == _feature_sets().max_used_lag
+    assert payload["resolved_max_lag"] == 5
+    assert payload["top_n"] == 8
+    assert payload["data_fingerprint"] == "test-provenance-fingerprint"
+    assert payload["early_stopping_rounds"] == DEFAULT_EARLY_STOPPING_ROUNDS
+    assert payload["model_parameters"] == DEFAULT_XGB_PARAMS
+    assert set(payload["timings_seconds"]) == {
+        "input_validation", "candidate_pool", "feature_build", "split_build",
+        "model_validation", "candidate_uplift", "write_outputs", "total",
+    }
+    assert all(value >= 0 for value in payload["timings_seconds"].values())
+    assert payload["timings_seconds"]["total"] >= max(
+        value
+        for key, value in payload["timings_seconds"].items()
+        if key != "total"
+    )
     assert payload["files"] == list(XGB_OUTPUT_FILES)
     assert payload["created_at"]
     assert "final_score" not in payload
     assert "driver_rank" not in payload
+    assert "final_rank" not in payload
 
 
 @pytest.mark.parametrize(
@@ -385,7 +426,7 @@ def test_first_run_staging_failure_leaves_no_partial_formal_files(
     assert not any((output_dir / name).exists() for name in XGB_OUTPUT_FILES)
 
 
-@pytest.mark.parametrize("failure_position", [2, 5])
+@pytest.mark.parametrize("failure_position", [2, 5, 6])
 def test_commit_failure_rolls_back_every_existing_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_position: int
 ):
@@ -416,8 +457,9 @@ def test_commit_failure_rolls_back_every_existing_output(
         assert (output_dir / name).read_text() == content
 
 
+@pytest.mark.parametrize("failure_position", [3, 6])
 def test_first_run_commit_failure_removes_new_partial_outputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_position: int
 ):
     calls: list[str] = []
     _mock_success(monkeypatch, calls)
@@ -427,7 +469,7 @@ def test_first_run_commit_failure_removes_new_partial_outputs(
     def failing_replace(path, target):
         nonlocal replace_count
         replace_count += 1
-        if replace_count == 3:
+        if replace_count == failure_position:
             raise OSError("injected commit failure")
         return original_replace(path, target)
 
@@ -442,6 +484,46 @@ def test_first_run_commit_failure_removes_new_partial_outputs(
     assert result.status == "invalid_input"
     output_dir = tmp_path / "xgb_validation"
     assert not any((output_dir / name).exists() for name in XGB_OUTPUT_FILES)
+
+
+def test_output_timings_include_json_write_and_atomic_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[str] = []
+    _mock_success(monkeypatch, calls)
+    clock = {"seconds": 0.0}
+    original_write_text = Path.write_text
+    original_replace = Path.replace
+
+    monkeypatch.setattr(runner.time, "perf_counter", lambda: clock["seconds"])
+
+    def delayed_write_text(path, *args, **kwargs):
+        if path.name in {"xgb_validation_summary.json", ".final-summary.json"}:
+            clock["seconds"] += 0.2
+        return original_write_text(path, *args, **kwargs)
+
+    def delayed_replace(path, target):
+        clock["seconds"] += 0.1
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "write_text", delayed_write_text)
+    monkeypatch.setattr(Path, "replace", delayed_replace)
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+    )
+    payload = json.loads(
+        (tmp_path / "xgb_validation/xgb_validation_summary.json").read_text()
+    )
+
+    assert result.status == "success"
+    assert payload["timings_seconds"]["write_outputs"] >= 0.7
+    assert payload["timings_seconds"]["total"] >= 0.7
 
 
 def test_json_candidate_count_matches_uplift_when_whitelist_expands_pool(
@@ -487,7 +569,80 @@ def test_top_n_above_eight_is_rejected_explicitly(tmp_path: Path):
     )
 
     assert result.status == "invalid_input"
-    assert result.error_message == "top_n must be an integer between 0 and 8"
+    assert result.error_message == "top_n must be an integer between 1 and 8"
+
+
+@pytest.mark.parametrize("top_n", [0, 9, True, 4.0])
+def test_runner_rejects_invalid_top_n_types_or_range(tmp_path: Path, top_n: object):
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+        top_n=top_n,
+    )
+
+    assert result.status == "invalid_input"
+    assert result.error_message == "top_n must be an integer between 1 and 8"
+
+
+@pytest.mark.parametrize("max_lag", [0, 5001, True, 1.0])
+def test_runner_rejects_invalid_max_lag_types_or_range(tmp_path: Path, max_lag: object):
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+        max_lag=max_lag,
+    )
+
+    assert result.status == "invalid_input"
+    assert result.error_message == "max_lag must be an integer between 1 and 5000"
+
+
+def test_runner_accepts_max_lag_hard_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[str] = []
+    _mock_success(monkeypatch, calls, expected_max_lag=5000)
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+        max_lag=5000,
+    )
+
+    assert result.status == "success"
+
+
+def test_runner_accepts_numpy_integral_parameters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[str] = []
+    _mock_success(monkeypatch, calls, expected_top_n=4, expected_max_lag=5)
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+        top_n=np.int64(4),
+        max_lag=np.int64(5),
+    )
+
+    assert result.status == "success"
 
 
 def test_inputs_are_not_modified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

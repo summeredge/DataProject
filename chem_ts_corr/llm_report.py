@@ -19,6 +19,7 @@ PACKAGE_KEYS = [
     "control_candidate_variables",
     "risk_and_limitations",
     "variable_role_hints",
+    "xgb_out_of_time_validation",
 ]
 
 RISK_EXPLANATIONS = {
@@ -45,6 +46,7 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
     importance = _read_csv(path / "model_variable_importance.csv")
     enhanced = _read_csv(path / "enhanced_validation_summary.csv")
     summary = _read_summary(path / "summary.md")
+    xgb_validation = _xgb_out_of_time_validation(path, top_n)
 
     risk_by_var = _index_by_variable(risk)
     evidence_by_var = _index_by_variable(evidence)
@@ -98,13 +100,24 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
 
     package = {
         "meta": {"run_dir": str(path), **summary},
-        "overview": {"top_n": top_n, "available_files": sorted(p.name for p in path.glob("*.csv")) if path.exists() else [], "model_variable_importance_rows": int(len(importance)), "enhanced_validation_rows": int(len(enhanced))},
+        "overview": {
+            "top_n": top_n,
+            "available_files": sorted(p.name for p in path.glob("*.csv")) if path.exists() else [],
+            "model_variable_importance_rows": int(len(importance)),
+            "enhanced_validation_rows": int(len(enhanced)),
+            "xgb_validation_status": xgb_validation["status"],
+            "xgb_validation_available": xgb_validation["available"],
+            "xgb_model_summary_rows": len(xgb_validation["model_comparison"]),
+            "xgb_candidate_uplift_rows": len(xgb_validation["candidate_uplift"]),
+            "xgb_available_files": _xgb_available_files(xgb_validation),
+        },
         "highly_correlated_variables": highly,
         "attention_variables": attention,
         "predictive_causal_evidence": predictive,
         "control_candidate_variables": control,
         "risk_and_limitations": risks,
         "variable_role_hints": role_hints,
+        "xgb_out_of_time_validation": xgb_validation,
     }
     json.dumps(package, ensure_ascii=False)
     return package
@@ -132,6 +145,12 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 控制回路历史数据通常属于闭环数据，必须提示 PID 控制动作、SV/MV 变化、MV 饱和、自动/手动状态对相关性和预测性的影响。
 - 不得机械排除 .PV 并写成“.PV 不能做 MV，所以只能作为监控变量”；也不得写成“.PV 点本身就是最终写入 MV”。
 - 如果 meta/overview 显示 model_status=skipped、skip_model_lift=True 或 skip_rolling_corr=True，不得把 model_explanation_support、model_lift_support、rolling_stability_supported 作为主要证据；只能提示“输入证据字段中出现，但需核对该模块是否实际启用”。
+- XGBoost 时间外增量验证仅代表时间外预测增量证据，不代表确定性因果，也不改变前三层排名；不得用它回写或重排前三层候选，单独证明变量可操纵、是根本原因或作为 APC 投用依据。
+- XGB 模型定义：M0 仅使用目标变量最短期历史作为简单基线；M1 使用目标变量历史滞后及配置的控制变量历史作为基线；M2 在 M1 基础上加入本次选中的全部候选变量滞后特征；逐候选增量验证比较“M1 + 单个候选变量”与 M1。不得将 M2_vs_M1 总体改善归因给某个单一候选，也不得将单候选改善解释为全体候选共同贡献。
+- 改善率 = (基线误差 - 候选模型误差) / 基线误差 × 100%：大于 0 表示加入候选后误差下降，等于或接近 0 表示相对基线增量有限，小于 0 表示误差上升。
+- positive_rmse_fold_ratio 只能解释为 RMSE 改善大于 0 的时间折占比，不得称为稳定性分数或因果置信度；数值越高只表示正向改善出现在更多时间折，仍须结合改善幅度、最差折结果和 validation_status 判断跨时间一致性。
+- validation_status 的边界：validated_incremental_signal 表示多个时间折支持正向预测增量但仍不是因果结论；weak_incremental_value 表示存在一定预测增量但强度或跨折一致性不足；redundant_with_baseline 表示候选没有明显超过目标历史和控制变量基线，不等于工艺上无关；unstable_out_of_time 表示时间折方向不一致，应检查工况变化、漂移或数据分布变化但不得断言具体原因；insufficient_features 表示当前滞后或数据条件下特征不足，不能据此否定变量。
+- 当 xgb_out_of_time_validation.available=false 时，必须按其 status 明确说明 XGB 未运行、运行失败、摘要无效或输出不完整；未运行时不得编造结果，不得编造 RMSE、MAE、R² 或候选验证结论。
 
 ## 风险解释必须覆盖
 common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
@@ -141,9 +160,10 @@ common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_l
 2. 与目标变量高度相关的过程变量
 3. 最需要关注的变量
 4. 相关性与因果复核证据靠前的变量
-5. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量
-6. 主要风险与解释限制
-7. 下一步工程验证动作
+5. XGBoost 时间外增量验证：报告是否实际运行成功，解释 M0、M1、M2 总体比较和逐候选增量结果，区分正向增量、弱增量、基线冗余、跨时间不稳定和特征不足；与前三层证据交叉核对但不改变前三层排序，也不写成工艺因果结论。
+6. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量
+7. 主要风险与解释限制
+8. 下一步工程验证动作
 
 ## 压缩分析包
 ```json
@@ -159,6 +179,103 @@ def _read_csv(path: Path) -> pd.DataFrame:
         return pd.read_csv(path, encoding="utf-8-sig")
     except Exception:
         return pd.DataFrame()
+
+
+def _read_json(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_required_csv(path: Path) -> pd.DataFrame | None:
+    if not path.exists():
+        return None
+    try:
+        return pd.read_csv(path, encoding="utf-8-sig")
+    except Exception:
+        return None
+
+
+def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
+    empty = {
+        "available": False,
+        "summary": {},
+        "model_comparison": [],
+        "candidate_uplift": [],
+        "evidence_scope": "时间外预测增量证据，不是工艺因果结论，也不改变前三层排名",
+    }
+    xgb_dir = path / "xgb_validation"
+    summary_path = xgb_dir / "xgb_validation_summary.json"
+    if not summary_path.exists():
+        return {"status": "not_run", **empty}
+
+    summary = _read_json(summary_path)
+    if summary is None:
+        return {"status": "invalid_summary", **empty}
+
+    compact_summary = _compact(
+        summary,
+        [
+            "status", "target", "row_count", "candidate_count", "candidate_pool_count",
+            "fold_count", "m0_feature_count", "m1_feature_count", "m2_feature_count",
+            "max_used_lag", "resolved_max_lag", "top_n", "created_at",
+        ],
+    )
+    status = str(summary.get("status") or "invalid_summary")
+    if status != "success":
+        return {"status": status, **empty, "summary": compact_summary}
+
+    model_summary = _read_required_csv(xgb_dir / "xgb_model_summary.csv")
+    candidate_uplift = _read_required_csv(xgb_dir / "xgb_candidate_uplift.csv")
+    if model_summary is None or candidate_uplift is None:
+        return {"status": "incomplete_outputs", **empty, "summary": compact_summary}
+
+    return {
+        "status": "success",
+        "available": True,
+        "summary": compact_summary,
+        "model_comparison": [
+            _compact(
+                row,
+                [
+                    "model_name", "mean_rmse", "median_rmse", "mean_mae", "median_mae",
+                    "mean_r2", "fold_count", "M2_vs_M1_rmse_improvement_pct",
+                    "M2_vs_M1_mae_improvement_pct",
+                ],
+            )
+            for row in _rows(model_summary, len(model_summary))
+        ],
+        "candidate_uplift": [
+            _compact(
+                row,
+                [
+                    "variable", "fold_count", "positive_rmse_fold_count",
+                    "positive_mae_fold_count", "positive_rmse_fold_ratio",
+                    "median_rmse_improvement_pct", "median_mae_improvement_pct",
+                    "mean_rmse_improvement_pct", "mean_mae_improvement_pct",
+                    "worst_fold_rmse_improvement_pct", "validation_status",
+                ],
+            )
+            for row in _rows(candidate_uplift, top_n)
+        ],
+        "evidence_scope": empty["evidence_scope"],
+    }
+
+
+def _xgb_available_files(xgb_validation: dict[str, Any]) -> list[str]:
+    if xgb_validation["status"] == "invalid_summary" or xgb_validation["status"] == "not_run":
+        return []
+    files = ["xgb_validation/xgb_validation_summary.json"]
+    if xgb_validation["available"]:
+        files.extend(
+            [
+                "xgb_validation/xgb_model_summary.csv",
+                "xgb_validation/xgb_candidate_uplift.csv",
+            ]
+        )
+    return files
 
 
 def _read_summary(path: Path) -> dict[str, Any]:

@@ -542,7 +542,7 @@ def test_summary_sorts_by_median_rmse_descending_stably():
     assert summary["variable"].tolist() == ["a", "b", "c"]
 
 
-def test_candidate_limit_uses_first_eight_in_candidate_order(
+def test_candidate_limit_uses_first_ten_in_candidate_order(
     fake_dependency, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[dict[str, object]] = []
@@ -555,10 +555,10 @@ def test_candidate_limit_uses_first_eight_in_candidate_order(
         _feature_sets(10), [_splits()[0]], pool
     )
 
-    assert metrics["variable"].tolist() == variables[:8]
-    assert set(summary["variable"]) == set(variables[:8])
+    assert metrics["variable"].tolist() == variables
+    assert set(summary["variable"]) == set(variables)
     assert len([call for call in calls if call["model_name"] == "M1"]) == 1
-    assert len([call for call in calls if call["model_name"] == "CANDIDATE"]) == 8
+    assert len([call for call in calls if call["model_name"] == "CANDIDATE"]) == 10
 
 
 def test_repeated_inputs_produce_identical_results(

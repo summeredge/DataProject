@@ -6,7 +6,6 @@ import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from numbers import Integral
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +23,7 @@ from chem_ts_corr.xgb_validation import (
     run_candidate_uplift_validation,
     run_xgb_time_validation,
     validate_xgb_max_lag,
+    validate_xgb_top_n,
 )
 
 
@@ -84,13 +84,10 @@ def run_xgb_validation(
     input_error = _input_error(run_dir, target, data, final_review_summary, ranked_features)
     if input_error:
         return _error_result("invalid_input", input_error)
-    if (
-        isinstance(top_n, bool)
-        or not isinstance(top_n, Integral)
-        or not 1 <= int(top_n) <= DEFAULT_XGB_TOP_N
-    ):
-        return _error_result("invalid_input", "top_n must be an integer between 1 and 8")
-    resolved_top_n = int(top_n)
+    try:
+        resolved_top_n = validate_xgb_top_n(top_n)
+    except ValueError as exc:
+        return _error_result("invalid_input", str(exc))
 
     try:
         resolved_max_lag = _resolve_max_lag(max_lag, final_review_summary, ranked_features)
@@ -105,8 +102,6 @@ def run_xgb_validation(
     except (OSError, TypeError, ValueError) as exc:
         return _error_result("invalid_input", f"run_dir is not writable: {exc}")
 
-    if XGBRegressor is None:
-        return _error_result("missing_dependency", _MISSING_DEPENDENCY_MESSAGE)
     timings["input_validation"] = _elapsed_seconds(stage_started_at)
 
     stage_started_at = time.perf_counter()
@@ -124,6 +119,9 @@ def run_xgb_validation(
         return _error_result("invalid_input", str(exc))
     except Exception as exc:
         return _error_result("failed", str(exc))
+
+    if XGBRegressor is None:
+        return _error_result("missing_dependency", _MISSING_DEPENDENCY_MESSAGE)
 
     stage_started_at = time.perf_counter()
     try:

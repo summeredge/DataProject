@@ -65,6 +65,20 @@ def _pool_with_whitelist() -> pd.DataFrame:
     )
 
 
+def _pool_with_ten_automatic_candidates() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "candidate_order": number + 1,
+                "variable": f"c{number}",
+                "selection_source": "final_review",
+                "force_included": False,
+            }
+            for number in range(10)
+        ]
+    )
+
+
 def test_fit_count_is_three_models_plus_every_effective_candidate_per_fold(monkeypatch):
     fit_calls: list[tuple[str, ...]] = []
 
@@ -100,6 +114,34 @@ def test_fit_count_is_three_models_plus_every_effective_candidate_per_fold(monke
     assert set(candidate_summary["variable"]) == {f"c{number}" for number in range(10)}
     assert len(fit_calls) == (3 + candidate_count) * fold_count
     assert fit_calls.count(feature_sets.m1_features) == fold_count
+
+
+def test_uplift_validation_keeps_all_ten_automatic_candidates(monkeypatch):
+    class FakeXGBRegressor:
+        best_iteration = 1
+
+        def __init__(self, **params):
+            self.params = params
+
+        def fit(self, X, y, *, eval_set, verbose):
+            return self
+
+        def predict(self, X):
+            return np.zeros(len(X), dtype=float)
+
+    monkeypatch.setattr(validation, "XGBRegressor", FakeXGBRegressor)
+    feature_sets = _feature_sets()
+    splits = _splits()
+    baseline_result = validation.run_xgb_time_validation(feature_sets, splits)
+
+    _, candidate_summary = validation.run_candidate_uplift_validation(
+        feature_sets,
+        splits,
+        _pool_with_ten_automatic_candidates(),
+        baseline_result=baseline_result,
+    )
+
+    assert candidate_summary["variable"].tolist() == [f"c{number}" for number in range(10)]
 
 
 def test_runner_builds_pool_features_and_splits_once(monkeypatch, tmp_path: Path):
@@ -240,12 +282,17 @@ def test_xgb_sources_keep_performance_and_ranking_architecture_guards():
 
 def test_xgb_hard_limits_and_benchmark_script_contract():
     assert validation.MAX_XGB_LAG_POINTS == 5000
+    assert validation.DEFAULT_XGB_TOP_N == 8
+    assert validation.MAX_XGB_AUTO_TOP_N == 10
+    assert validation.MAX_XGB_TOTAL_CANDIDATES == 12
     benchmark = Path("scripts/benchmark_xgb_validation.py").read_text(encoding="utf-8")
     for marker in [
         "np.random.default_rng(42)",
         'default=50_000',
         'default=50',
         "DEFAULT_XGB_TOP_N",
+        "MAX_XGB_AUTO_TOP_N",
+        "candidates must be between 1 and 10",
         'default=360',
         "time.perf_counter()",
         "tracemalloc",
@@ -253,6 +300,11 @@ def test_xgb_hard_limits_and_benchmark_script_contract():
         'pip install -e ".[xgb]"',
     ]:
         assert marker in benchmark
+    assert "between 1 and 8" not in benchmark
+    assert "args.candidates <= DEFAULT_XGB_TOP_N" not in benchmark
+    validation_source = Path("chem_ts_corr/xgb_validation.py").read_text(encoding="utf-8")
+    assert "automatic_count < DEFAULT_XGB_TOP_N" not in validation_source
+    assert "automatic_count < MAX_XGB_AUTO_TOP_N" in validation_source
     assert "assert elapsed <" not in benchmark
 
 

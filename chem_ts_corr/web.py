@@ -27,6 +27,7 @@ from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
 from chem_ts_corr.service import run_xgb_analysis
+from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 
@@ -848,20 +849,13 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
     config = _read_run_config(output_dir)
     top_n_raw = _field(form, "top_n", str(config.xgb_top_n)).strip()
     try:
-        top_n = int(top_n_raw)
-    except ValueError:
+        top_n = validate_xgb_top_n(int(top_n_raw))
+    except (TypeError, ValueError):
         return _xgb_response_payload(
             run_id,
             output_dir,
             status="invalid_input",
-            error_message="top_n must be an integer between 1 and 8",
-        )
-    if not 1 <= top_n <= 8:
-        return _xgb_response_payload(
-            run_id,
-            output_dir,
-            status="invalid_input",
-            error_message="top_n must be an integer between 1 and 8",
+            error_message="top_n must be an integer between 1 and 10",
         )
 
     max_lag_raw = _field(form, "max_lag").strip()
@@ -2153,10 +2147,11 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。</div>
         <div class="row">
           <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
-          <label>候选数量<input id="xgbTopN" type="number" min="1" max="8" value="8"></label>
+          <label>候选数量<input id="xgbTopN" type="number" min="1" max="10" value="8"></label>
           <label>最大滞后<input id="xgbMaxLag" type="number" min="1" max="5000" placeholder="自动"></label>
           <label>白名单<input id="xgbWhitelist" placeholder="变量名以逗号分隔"></label>
         </div>
+        <div class="help">自动候选默认 8 个、最多 10 个；加入白名单后，总候选数量最多 12 个。</div>
         <div class="actions">
           <button id="runXgbValidation" disabled>运行 XGB 四级验证</button>
         </div>

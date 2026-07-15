@@ -526,16 +526,16 @@ def test_output_timings_include_json_write_and_atomic_commit(
     assert payload["timings_seconds"]["total"] >= 0.7
 
 
-def test_json_candidate_count_matches_uplift_when_whitelist_expands_pool(
+def test_json_distinguishes_requested_top_n_from_final_candidate_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[str] = []
-    _mock_success(monkeypatch, calls)
+    _mock_success(monkeypatch, calls, expected_top_n=10)
     pool = pd.DataFrame(
-        [{"candidate_order": index + 1, "variable": f"c{index}"} for index in range(9)]
+        [{"candidate_order": index + 1, "variable": f"c{index}"} for index in range(12)]
     )
     summary = pd.concat(
-        [_candidate_summary().assign(variable=f"c{index}") for index in range(8)],
+        [_candidate_summary().assign(variable=f"c{index}") for index in range(12)],
         ignore_index=True,
     )
     monkeypatch.setattr(runner, "build_xgb_candidate_pool", lambda *args, **kwargs: pool)
@@ -549,30 +549,35 @@ def test_json_candidate_count_matches_uplift_when_whitelist_expands_pool(
     result = run_xgb_validation(
         run_dir=tmp_path, target="target", data=data,
         final_review_summary=final, ranked_features=ranked,
-        whitelist=[f"c{index}" for index in range(9)],
+        top_n=10,
+        whitelist=["manual1", "manual2"],
     )
     payload = json.loads((tmp_path / "xgb_validation/xgb_validation_summary.json").read_text())
     uplift = pd.read_csv(tmp_path / "xgb_validation/xgb_candidate_uplift.csv")
 
     assert result.status == "success"
-    assert payload["candidate_pool_count"] == 9
-    assert payload["candidate_count"] == 8
+    assert payload["top_n"] == 10
+    assert payload["candidate_pool_count"] == 12
+    assert payload["candidate_count"] == 12
     assert payload["candidate_count"] == uplift["variable"].nunique()
 
 
-def test_top_n_above_eight_is_rejected_explicitly(tmp_path: Path):
+def test_runner_accepts_top_n_ten(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[str] = []
+    _mock_success(monkeypatch, calls, expected_top_n=10)
     data, final, ranked = _inputs()
 
     result = run_xgb_validation(
         run_dir=tmp_path, target="target", data=data,
-        final_review_summary=final, ranked_features=ranked, top_n=9,
+        final_review_summary=final, ranked_features=ranked, top_n=10,
     )
 
-    assert result.status == "invalid_input"
-    assert result.error_message == "top_n must be an integer between 1 and 8"
+    assert result.status == "success"
 
 
-@pytest.mark.parametrize("top_n", [0, 9, True, 4.0])
+@pytest.mark.parametrize("top_n", [0, 11, -1, True, 8.5])
 def test_runner_rejects_invalid_top_n_types_or_range(tmp_path: Path, top_n: object):
     data, final, ranked = _inputs()
 
@@ -586,7 +591,64 @@ def test_runner_rejects_invalid_top_n_types_or_range(tmp_path: Path, top_n: obje
     )
 
     assert result.status == "invalid_input"
-    assert result.error_message == "top_n must be an integer between 1 and 8"
+    assert result.error_message == "top_n must be an integer between 1 and 10"
+
+
+@pytest.mark.parametrize(
+    ("top_n", "whitelist_count"),
+    [(8, 5), (10, 3)],
+)
+def test_runner_rejects_thirteen_candidates_before_downstream_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    top_n: int,
+    whitelist_count: int,
+):
+    final = pd.DataFrame(
+        [
+            {
+                "final_rank": number,
+                "variable": f"auto{number}",
+                "final_recommendation": "priority_review",
+                "screening_lag": 3,
+            }
+            for number in range(1, top_n + 1)
+        ]
+    )
+    data, _, ranked = _inputs()
+    monkeypatch.setattr(runner, "XGBRegressor", object)
+    monkeypatch.setattr(
+        runner,
+        "build_xgb_feature_sets",
+        lambda *args, **kwargs: pytest.fail("features must not be built"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_xgb_time_validation",
+        lambda *args, **kwargs: pytest.fail("models must not run"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_candidate_uplift_validation",
+        lambda *args, **kwargs: pytest.fail("uplift must not run"),
+    )
+
+    result = run_xgb_validation(
+        run_dir=tmp_path,
+        target="target",
+        data=data,
+        final_review_summary=final,
+        ranked_features=ranked,
+        top_n=top_n,
+        whitelist=[f"manual{number}" for number in range(whitelist_count)],
+    )
+
+    assert result.status == "invalid_input"
+    assert result.error_message == (
+        "XGB total candidate count including whitelist must not exceed 12"
+    )
+    assert not any((tmp_path / "xgb_validation").glob("*.csv"))
+    assert not any((tmp_path / "xgb_validation").glob("*.json"))
 
 
 @pytest.mark.parametrize("max_lag", [0, 5001, True, 1.0])

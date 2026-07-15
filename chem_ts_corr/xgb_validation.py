@@ -15,6 +15,8 @@ except ImportError:
 
 
 DEFAULT_XGB_TOP_N = 8
+MAX_XGB_AUTO_TOP_N = 10
+MAX_XGB_TOTAL_CANDIDATES = 12
 MAX_XGB_LAG_POINTS = 5000
 DEFAULT_BASELINE_LAGS = (1, 2, 5, 10, 30, 60)
 DEFAULT_CANDIDATE_LAG_RADIUS = 2
@@ -188,6 +190,7 @@ def build_xgb_candidate_pool(
         raise ValueError(f"{message}: missing variable column")
     if "final_recommendation" not in final_review_summary.columns:
         raise ValueError(f"{message}: missing final_recommendation column")
+    resolved_top_n = validate_xgb_top_n(top_n)
 
     summary = final_review_summary.copy(deep=True)
     ranked = ranked_features.copy(deep=True) if ranked_features is not None else pd.DataFrame()
@@ -211,7 +214,7 @@ def build_xgb_candidate_pool(
     eligible = candidates[candidates["auto_eligible"]].sort_values(
         ["_rank_missing", "_rank_sort", "_source_order"], kind="mergesort"
     )
-    selected = eligible.head(max(0, int(top_n))).copy()
+    selected = eligible.head(resolved_top_n).copy()
     selected["selection_source"] = "final_review"
     selected["force_included"] = False
 
@@ -240,6 +243,8 @@ def build_xgb_candidate_pool(
     if not selected_rows:
         return pd.DataFrame(columns=XGB_CANDIDATE_COLUMNS)
     result = pd.DataFrame(selected_rows)
+    if len(result["variable"].drop_duplicates()) > MAX_XGB_TOTAL_CANDIDATES:
+        raise ValueError("XGB total candidate count including whitelist must not exceed 12")
     result["candidate_order"] = range(1, len(result) + 1)
     return result.loc[:, XGB_CANDIDATE_COLUMNS].reset_index(drop=True)
 
@@ -325,6 +330,15 @@ def validate_xgb_max_lag(max_lag: object) -> int:
     resolved = int(max_lag)
     if not 1 <= resolved <= MAX_XGB_LAG_POINTS:
         raise ValueError("max_lag must be an integer between 1 and 5000")
+    return resolved
+
+
+def validate_xgb_top_n(top_n: object) -> int:
+    if isinstance(top_n, bool) or not isinstance(top_n, Integral):
+        raise ValueError("top_n must be an integer between 1 and 10")
+    resolved = int(top_n)
+    if not 1 <= resolved <= MAX_XGB_AUTO_TOP_N:
+        raise ValueError("top_n must be an integer between 1 and 10")
     return resolved
 
 
@@ -1017,7 +1031,7 @@ def _bounded_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
         force_included = row.get("force_included") is True or str(
             row.get("force_included", "")
         ).strip().lower() in {"1", "true", "yes"}
-        if force_included or automatic_count < DEFAULT_XGB_TOP_N:
+        if force_included or automatic_count < MAX_XGB_AUTO_TOP_N:
             selected.append(variable)
             if not force_included:
                 automatic_count += 1

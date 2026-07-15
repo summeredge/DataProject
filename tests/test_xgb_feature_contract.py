@@ -13,6 +13,8 @@ from chem_ts_corr.xgb_validation import (
     DEFAULT_OUTER_SPLITS,
     DEFAULT_VALIDATION_FRACTION,
     DEFAULT_XGB_TOP_N,
+    MAX_XGB_AUTO_TOP_N,
+    MAX_XGB_TOTAL_CANDIDATES,
     XGB_CANDIDATE_COLUMNS,
     XGBFeatureSets,
     XGBTimeSplit,
@@ -22,6 +24,7 @@ from chem_ts_corr.xgb_validation import (
     candidate_lag_window,
     normalize_positive_lags,
     prepare_xgb_validation_frame,
+    validate_xgb_top_n,
 )
 
 
@@ -246,18 +249,101 @@ def test_whitelist_overrides_auto_exclusions_but_preserves_reasons(
     assert reason in result.loc[0, "auto_exclusion_reasons"].split(";")
 
 
-def test_top_n_zero_keeps_only_whitelist_in_user_order_without_duplicates():
+def test_whitelist_keeps_user_order_without_duplicates_or_target():
     result = build_xgb_candidate_pool(
-        _summary([{"variable": "auto"}]),
+        _summary([{"variable": "auto", "final_recommendation": "manual_review_only"}]),
         _ranked([{"variable": "w2"}, {"variable": "w1"}]),
         target="y",
-        top_n=0,
+        top_n=1,
         whitelist=["", "w2", "w1", "w2", "y"],
     )
 
     assert result["variable"].tolist() == ["w2", "w1"]
     assert result["candidate_order"].tolist() == [1, 2]
     assert result["selection_source"].tolist() == ["whitelist", "whitelist"]
+
+
+def test_top_n_ten_selects_first_ten_eligible_candidates_in_rank_order():
+    summary = _summary(
+        [{"variable": f"x{number}", "final_rank": number} for number in range(1, 13)]
+    )
+
+    result = build_xgb_candidate_pool(summary, target="y", top_n=10)
+
+    assert result["variable"].tolist() == [f"x{number}" for number in range(1, 11)]
+    assert result["candidate_order"].tolist() == list(range(1, 11))
+
+
+@pytest.mark.parametrize("top_n", [0, 11, -1, True, 8.5])
+def test_candidate_pool_rejects_invalid_top_n_without_direct_call_bypass(top_n: object):
+    with pytest.raises(ValueError, match="top_n must be an integer between 1 and 10"):
+        build_xgb_candidate_pool(
+            _summary([{"variable": "x"}]), target="y", top_n=top_n
+        )
+
+
+@pytest.mark.parametrize(
+    ("top_n", "whitelist_count"),
+    [(8, 4), (10, 2)],
+)
+def test_final_candidate_pool_allows_twelve_unique_candidates(
+    top_n: int, whitelist_count: int
+):
+    summary = _summary(
+        [{"variable": f"auto{number}", "final_rank": number} for number in range(top_n)]
+    )
+    whitelist = [f"manual{number}" for number in range(whitelist_count)]
+
+    result = build_xgb_candidate_pool(
+        summary, target="y", top_n=top_n, whitelist=whitelist
+    )
+
+    assert len(result) == 12
+    assert result["variable"].tolist()[-whitelist_count:] == whitelist
+    assert result["candidate_order"].tolist() == list(range(1, 13))
+
+
+@pytest.mark.parametrize(
+    ("top_n", "whitelist_count"),
+    [(8, 5), (10, 3)],
+)
+def test_final_candidate_pool_rejects_thirteen_unique_candidates(
+    top_n: int, whitelist_count: int
+):
+    summary = _summary(
+        [{"variable": f"auto{number}", "final_rank": number} for number in range(top_n)]
+    )
+
+    with pytest.raises(
+        ValueError, match="XGB total candidate count including whitelist must not exceed 12"
+    ):
+        build_xgb_candidate_pool(
+            summary,
+            target="y",
+            top_n=top_n,
+            whitelist=[f"manual{number}" for number in range(whitelist_count)],
+        )
+
+
+def test_total_candidate_limit_counts_unique_non_target_variables_only():
+    summary = _summary(
+        [{"variable": f"x{number}", "final_rank": number} for number in range(1, 11)]
+    )
+
+    result = build_xgb_candidate_pool(
+        summary,
+        target="y",
+        top_n=10,
+        whitelist=["x1", "x1", "manual", "manual", "y"],
+    )
+
+    assert len(result) == 11
+    assert result["variable"].value_counts().max() == 1
+    assert "y" not in result["variable"].tolist()
+    assert result.loc[result["variable"].eq("x1"), "selection_source"].item() == (
+        "final_review+whitelist"
+    )
+    assert bool(result.loc[result["variable"].eq("x1"), "force_included"].item()) is True
 
 
 def test_auto_and_whitelist_overlap_is_one_forced_row_in_auto_position():
@@ -519,6 +605,9 @@ def test_feature_builder_does_not_modify_inputs():
 
 def test_default_constants_match_contract():
     assert DEFAULT_XGB_TOP_N == 8
+    assert MAX_XGB_AUTO_TOP_N == 10
+    assert MAX_XGB_TOTAL_CANDIDATES == 12
+    assert validate_xgb_top_n(np.int64(10)) == 10
     assert DEFAULT_BASELINE_LAGS == (1, 2, 5, 10, 30, 60)
     assert DEFAULT_CANDIDATE_LAG_RADIUS == 2
     assert DEFAULT_OUTER_SPLITS == 3

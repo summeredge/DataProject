@@ -105,7 +105,7 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
         {
             "run_id": run_dir.name,
             "enable_xgb_validation": "true",
-            "top_n": "4",
+            "top_n": "10",
             "max_lag": "6",
             "whitelist": "manual_a, manual_b",
             "control_columns": "control",
@@ -118,7 +118,7 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert captured["run_dir"] == run_dir
     assert captured["data"] is data
     assert captured["target"] == "target"
-    assert captured["top_n"] == 4
+    assert captured["top_n"] == 10
     assert captured["max_lag"] == 6
     assert captured["whitelist"] == ["manual_a", "manual_b"]
     assert captured["control_columns"] == ["control"]
@@ -155,8 +155,10 @@ def test_missing_final_review_is_rejected_before_loading_or_service_call(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("top_n", "0", "top_n must be an integer between 1 and 8"),
-        ("top_n", "abc", "top_n must be an integer between 1 and 8"),
+        ("top_n", "0", "top_n must be an integer between 1 and 10"),
+        ("top_n", "11", "top_n must be an integer between 1 and 10"),
+        ("top_n", "8.5", "top_n must be an integer between 1 and 10"),
+        ("top_n", "abc", "top_n must be an integer between 1 and 10"),
         ("max_lag", "0", "max_lag must be an integer between 1 and 5000"),
         ("max_lag", "abc", "max_lag must be an integer between 1 and 5000"),
         ("max_lag", "5001", "max_lag must be an integer between 1 and 5000"),
@@ -356,6 +358,16 @@ def test_xgb_web_surface_and_architecture_guards():
     assert service.run_xgb_analysis is not None
     assert "XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。" in web.INDEX_HTML
     assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML
+
+
+def test_xgb_candidate_count_input_keeps_default_and_exposes_both_limits():
+    source = web.INDEX_HTML
+
+    assert 'id="xgbTopN" type="number" min="1" max="10" value="8"' in source
+    assert "自动候选默认 8 个、最多 10 个" in source
+    assert "加入白名单后，总候选数量最多 12 个" in source
+    assert 'form.append("top_n", el("xgbTopN").value || "8")' in source
+    assert 'id="xgbTopN" type="number" min="1" max="8"' not in source
 
 
 def _xgb_run_function_body() -> str:

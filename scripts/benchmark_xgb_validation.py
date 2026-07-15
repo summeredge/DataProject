@@ -12,7 +12,11 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.xgb_runner import XGBRegressor, run_xgb_validation
-from chem_ts_corr.xgb_validation import DEFAULT_OUTER_SPLITS, DEFAULT_XGB_TOP_N
+from chem_ts_corr.xgb_validation import (
+    DEFAULT_OUTER_SPLITS,
+    DEFAULT_XGB_TOP_N,
+    MAX_XGB_AUTO_TOP_N,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -79,8 +83,8 @@ def main() -> int:
     if args.rows < 1 or args.variables < 2:
         print("rows must be positive and variables must be at least 2", file=sys.stderr)
         return 2
-    if not 1 <= args.candidates <= min(DEFAULT_XGB_TOP_N, args.variables - 1):
-        print("candidates must be between 1 and 8 and less than variables", file=sys.stderr)
+    if not 1 <= args.candidates <= min(MAX_XGB_AUTO_TOP_N, args.variables - 1):
+        print("candidates must be between 1 and 10 and less than variables", file=sys.stderr)
         return 2
 
     frame, final_review, ranked, controls = _synthetic_inputs(

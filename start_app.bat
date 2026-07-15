@@ -41,7 +41,7 @@ echo Starting local web app...
 echo Open this URL if the browser does not open automatically:
 echo %APP_URL%
 
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Start-Sleep -Seconds 2; Start-Process '%APP_URL%'"
+start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$url='%APP_URL%'; for($i=0; $i -lt 120; $i++){ try { $response=Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1; if($response.StatusCode -ge 200){ Start-Process $url; exit 0 } } catch {}; Start-Sleep -Milliseconds 250 }; Start-Process $url"
 
 %PYTHON_CMD% -m chem_ts_corr.cli serve --host 127.0.0.1 --port 8765 --no-open
 

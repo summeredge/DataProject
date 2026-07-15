@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -290,10 +292,20 @@ def _validate_xgb_model_summary(frame: pd.DataFrame) -> bool:
         set(normalized_names)
     ):
         return False
-    metric_columns = [
-        "mean_rmse", "median_rmse", "mean_mae", "median_mae", "mean_r2", "fold_count",
-    ]
-    return frame[metric_columns].notna().any().any()
+    error_columns = ["mean_rmse", "median_rmse", "mean_mae", "median_mae"]
+    for model_name in ("M0", "M1", "M2"):
+        row = frame.loc[normalized_names.eq(model_name)].iloc[0]
+        fold_count = _validated_nonnegative_integer(row["fold_count"])
+        if fold_count is None or fold_count == 0:
+            return False
+        for column in error_columns:
+            value = _finite_number(row[column])
+            if value is None or value < 0:
+                return False
+        mean_r2 = row["mean_r2"]
+        if not _is_missing_value(mean_r2) and _finite_number(mean_r2) is None:
+            return False
+    return True
 
 
 def _validate_xgb_candidate_uplift(
@@ -307,12 +319,13 @@ def _validate_xgb_candidate_uplift(
     }
     if not required.issubset(frame.columns):
         return False
-    try:
-        candidate_count = int(summary.get("candidate_count") or 0)
-    except (TypeError, ValueError):
+    if "candidate_count" not in summary:
         return False
-    if frame.empty:
-        return candidate_count == 0
+    candidate_count = _validated_nonnegative_integer(summary["candidate_count"])
+    if candidate_count is None or len(frame) != candidate_count:
+        return False
+    if candidate_count == 0:
+        return True
     variables = frame["variable"]
     statuses = frame["validation_status"]
     if (
@@ -333,6 +346,37 @@ def _validate_xgb_candidate_uplift(
     if ratios[present_ratios].isna().any() or ((ratios.dropna() < 0) | (ratios.dropna() > 1)).any():
         return False
     return True
+
+
+def _validated_nonnegative_integer(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        return None
+    return int(number)
+
+
+def _finite_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
 def _xgb_available_files(xgb_validation: dict[str, Any]) -> list[str]:

@@ -4,6 +4,7 @@ import argparse
 from dataclasses import asdict, replace
 import json
 import math
+from numbers import Integral
 import re
 import threading
 import time
@@ -86,6 +87,8 @@ MAX_TASKS = 100
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
 _FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_MINUTE_RESAMPLE_RE = re.compile(r"([1-9]\d*)(?:min)?")
+_RESAMPLE_MINUTES_ERROR = "重采样间隔必须是大于 0 的整数分钟"
 SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
 SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
@@ -367,6 +370,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         raise ValueError("请选择时间列")
     if not target:
         raise ValueError("请选择目标列")
+    resample_rule = _normalize_minute_resample_rule(_field(form, "resample_rule", ""))
 
     run_id = uuid.uuid4().hex
     output_dir = RUNS_DIR / run_id
@@ -379,7 +383,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         output_dir=output_dir,
         encoding=resolved_encoding,
         max_lag=_int_field(form, "max_lag", 12),
-        resample_rule=_field(form, "resample_rule", "") or None,
+        resample_rule=resample_rule,
         min_valid_ratio=_float_field(form, "min_valid_ratio", 0.7),
         top_k=_int_field(form, "top_k", 30),
         preprocess_mode=_field(form, "preprocess_mode", "raw"),
@@ -429,15 +433,46 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                     task["message"] = message
                     task["updated_at"] = time.time()
 
-        run_analysis(config, progress_callback=progress)
+        pipeline_timings = run_analysis(config, progress_callback=progress)
+        if not isinstance(pipeline_timings, dict):
+            pipeline_timings = {}
+        analysis_timings = {
+            key: _non_negative_seconds(pipeline_timings.get(key))
+            for key in [
+                "read_data_seconds",
+                "analysis_core_seconds",
+                "write_outputs_seconds",
+                "pipeline_total_seconds",
+            ]
+        }
+
+        payload_started = time.perf_counter()
+        result = _build_result_payload(config.output_dir.name, config.output_dir, config)
+        result_payload_seconds = _non_negative_seconds(time.perf_counter() - payload_started)
+        ended_at = time.time()
         with TASKS_LOCK:
+            started_at = float(TASKS[task_id].get("start_time") or ended_at)
+            task_total_seconds = round(max(0.0, ended_at - started_at), 6)
+            task_total_seconds = max(
+                task_total_seconds,
+                analysis_timings["pipeline_total_seconds"],
+            )
+            analysis_timings.update(
+                {
+                    "result_payload_seconds": result_payload_seconds,
+                    "task_total_seconds": task_total_seconds,
+                }
+            )
+            result["elapsed_seconds"] = task_total_seconds
+            result["analysis_timings"] = analysis_timings
+            result.setdefault("overview", {})["analysis_elapsed_seconds"] = task_total_seconds
             TASKS[task_id].update(
                 {
                     "status": "done",
                     "message": "分析完成",
-                    "end_time": time.time(),
-                    "updated_at": time.time(),
-                    "result": _build_result_payload(config.output_dir.name, config.output_dir, config),
+                    "end_time": ended_at,
+                    "updated_at": ended_at,
+                    "result": result,
                 }
             )
         _cleanup_tasks()
@@ -453,6 +488,16 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                 }
             )
         _cleanup_tasks()
+
+
+def _non_negative_seconds(value: object) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(seconds) or seconds < 0:
+        return 0.0
+    return round(seconds, 6)
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
@@ -1066,14 +1111,16 @@ def _secondary_variables_from_ranked(
 
 def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) -> AnalysisConfig:
     mode = _field(form, "secondary_resample_mode", "raw").strip().lower()
-    custom_rule = _field(form, "secondary_resample_rule", "").strip()
     secondary_max_lag = _int_field(form, "secondary_max_lag", config.max_lag)
     secondary_max_lag = min(5000, max(0, secondary_max_lag))
 
     if mode == "inherit":
         resample_rule = config.resample_rule
     elif mode == "custom":
-        resample_rule = custom_rule or None
+        resample_rule = _normalize_minute_resample_rule(
+            _field(form, "secondary_resample_rule", ""),
+            allow_empty=False,
+        )
     else:
         resample_rule = None
 
@@ -1091,6 +1138,30 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
         max_lag=secondary_max_lag,
         force_include_variables=force_include_variables,
     )
+
+
+def _normalize_minute_resample_rule(
+    value: object,
+    *,
+    allow_empty: bool = True,
+) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if allow_empty:
+            return None
+        raise ValueError(_RESAMPLE_MINUTES_ERROR)
+    if isinstance(value, bool):
+        raise ValueError(_RESAMPLE_MINUTES_ERROR)
+    if isinstance(value, Integral):
+        if value <= 0:
+            raise ValueError(_RESAMPLE_MINUTES_ERROR)
+        return f"{int(value)}min"
+    if not isinstance(value, str):
+        raise ValueError(_RESAMPLE_MINUTES_ERROR)
+
+    match = _MINUTE_RESAMPLE_RE.fullmatch(value.strip())
+    if match is None:
+        raise ValueError(_RESAMPLE_MINUTES_ERROR)
+    return f"{int(match.group(1))}min"
 
 
 def _normalized_resample_rule(rule: str | None) -> str:
@@ -1909,7 +1980,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <div class="row">
         <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
-        <label>重采样规则<input id="resampleRule" placeholder="可留空，例如 5min"></label>
+        <label>重采样间隔（分钟）<input id="resampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="可留空，例如 5"></label>
       </div>
       <div class="row">
         <label>预处理模式
@@ -1982,6 +2053,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="overview" class="overview-grid"></div>
+        <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>前 10 个推荐变量</h2>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
@@ -2050,7 +2122,7 @@ INDEX_HTML = r"""<!doctype html>
           <div class="help">
             <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
             <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
-            <span>原始数据表示二次验证不做重采样，但仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；在主筛查 TopK 和主筛查强制复核变量之外，可追加补充变量进入二次验证；若改用原始采样，请按原始采样间隔重新填写最大滞后点数，例如 1min 数据验证 360min 滞后，应填 360。</span>
+            <span>原始数据：不重采样；继承主筛查：使用主筛查的分钟间隔；自定义：只填写分钟整数。二次验证仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；若改用原始采样，请按原始采样间隔重新填写最大滞后点数。</span>
           </div>
           <div class="secondary-validation-params">
             <label>二次验证补充变量（白名单）
@@ -2066,8 +2138,8 @@ INDEX_HTML = r"""<!doctype html>
                 <option value="custom">自定义</option>
               </select>
             </label>
-            <label>二次验证自定义重采样规则
-              <input id="secondaryResampleRule" placeholder="例如 2min / 5min，仅自定义时使用">
+            <label>二次验证自定义重采样间隔（分钟）
+              <input id="secondaryResampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 2 或 5，仅自定义时使用">
             </label>
             <label>二次验证最大滞后点数
               <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
@@ -2490,7 +2562,7 @@ async function analyze() {
     currentRunId = data.run_id || "";
     const result = await waitForAnalysisResult(data.task_id);
     renderAnalysisResult(result);
-    setStatus(`分析完成。运行 ID：${result.run_id}`, "success");
+    setStatus(formatCompletedAnalysisStatus(result), "success");
   } catch (error) {
     setStatus(error.message || String(error), "error");
   } finally {
@@ -2521,6 +2593,25 @@ function formatTaskStatus(statusData) {
   return elapsed > 0 ? `${message}（已运行 ${elapsed.toFixed(1)} 秒）` : message;
 }
 
+function finiteAnalysisSeconds(value) {
+  if (value === null || value === undefined || value === "" || typeof value === "boolean") return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+function formatAnalysisSeconds(value) {
+  const seconds = finiteAnalysisSeconds(value);
+  return seconds === null ? "" : `${seconds.toFixed(1)} 秒`;
+}
+
+function formatCompletedAnalysisStatus(result) {
+  const runId = result && result.run_id ? result.run_id : "";
+  const elapsed = formatAnalysisSeconds(result && result.elapsed_seconds);
+  return elapsed
+    ? `分析完成。总耗时：${elapsed}。运行 ID：${runId}`
+    : `分析完成。运行 ID：${runId}`;
+}
+
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   lastRows = data.rankedFeatures || [];
@@ -2542,6 +2633,7 @@ function renderAnalysisResult(data) {
   lastXgbValidationSummary = {};
   closeDetailModal();
   renderOverview(data.overview || {});
+  renderAnalysisTimingBreakdown(data.analysis_timings || {});
   renderScreeningQualityHints(lastRows);
   tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
@@ -3746,9 +3838,28 @@ function renderOverview(overview) {
     ["有风险标签变量数量", overview.risk_tagged_count ?? overview.high_risk_count ?? ""],
     ["建议二级复核变量数量", overview.secondary_review_count ?? ""],
   ];
+  const elapsed = formatAnalysisSeconds(overview.analysis_elapsed_seconds);
+  if (elapsed) metrics.push(["初步分析总耗时", elapsed]);
   el("overview").innerHTML = metrics.map(([label, value]) =>
     `<div class="metric-card"><span class="metric-value">${escapeHtml(formatValue(value))}</span><span class="metric-label">${escapeHtml(label)}</span></div>`
   ).join("");
+}
+
+function renderAnalysisTimingBreakdown(timings) {
+  const node = el("analysisTimingBreakdown");
+  const fields = [
+    ["read_data_seconds", "读取数据"],
+    ["analysis_core_seconds", "核心分析"],
+    ["write_outputs_seconds", "写出结果"],
+    ["result_payload_seconds", "结果加载"],
+    ["task_total_seconds", "总耗时"],
+  ];
+  const parts = fields.flatMap(([field, label]) => {
+    const formatted = formatAnalysisSeconds(timings[field]);
+    return formatted ? [`${label}：${formatted}`] : [];
+  });
+  node.textContent = parts.join("｜");
+  node.hidden = parts.length === 0;
 }
 
 
@@ -4901,6 +5012,8 @@ function reset() {
   el("llmReportDownload").innerHTML = "";
   el("llmApiKey").value = "";
   el("overview").innerHTML = "";
+  el("analysisTimingBreakdown").textContent = "";
+  el("analysisTimingBreakdown").hidden = true;
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
   el("screeningQualityHints").className = "empty";

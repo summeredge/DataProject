@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from chem_ts_corr.web import (
     INDEX_HTML,
@@ -186,13 +187,45 @@ def test_secondary_config_can_use_custom_resample_rule():
         config,
         {
             "secondary_resample_mode": "custom",
-            "secondary_resample_rule": "2min",
+            "secondary_resample_rule": "2",
             "secondary_max_lag": "180",
         },
     )
 
     assert secondary.resample_rule == "2min"
     assert secondary.max_lag == 180
+
+
+def test_secondary_config_custom_resample_rule_is_required():
+    config = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+    )
+
+    with pytest.raises(ValueError, match="^重采样间隔必须是大于 0 的整数分钟$"):
+        _secondary_config_from_form(
+            config,
+            {"secondary_resample_mode": "custom", "secondary_resample_rule": ""},
+        )
+
+
+def test_secondary_config_raw_ignores_custom_resample_value():
+    config = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        resample_rule="5min",
+    )
+
+    secondary = _secondary_config_from_form(
+        config,
+        {"secondary_resample_mode": "raw", "secondary_resample_rule": "2"},
+    )
+
+    assert secondary.resample_rule is None
 
 
 def test_index_html_contains_secondary_validation_options():

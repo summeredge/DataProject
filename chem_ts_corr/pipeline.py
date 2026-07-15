@@ -1,17 +1,26 @@
 from __future__ import annotations
 
+import time
+
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import load_timeseries_csv
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_numeric_frame
 
 
-def run_analysis(config: AnalysisConfig, progress_callback=None) -> None:
+def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
+    pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
+    read_started = time.perf_counter()
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    read_data_seconds = time.perf_counter() - read_started
+
+    analysis_started = time.perf_counter()
     tables = analyze_numeric_frame(raw, config, progress_callback=progress_callback)
+    analysis_core_seconds = time.perf_counter() - analysis_started
 
     _progress(progress_callback, "正在写出结果文件")
+    write_started = time.perf_counter()
     write_outputs(
         config.output_dir,
         target=config.target,
@@ -28,7 +37,14 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> None:
         lag_peak_quality=tables.lag_peak_quality,
         rolling_corr_scores=tables.rolling_corr_scores,
     )
+    write_outputs_seconds = time.perf_counter() - write_started
     _progress(progress_callback, "分析完成")
+    return {
+        "read_data_seconds": read_data_seconds,
+        "analysis_core_seconds": analysis_core_seconds,
+        "write_outputs_seconds": write_outputs_seconds,
+        "pipeline_total_seconds": time.perf_counter() - pipeline_started,
+    }
 
 
 def _progress(progress_callback, message: str) -> None:

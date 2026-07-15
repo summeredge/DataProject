@@ -2166,6 +2166,12 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="xgbModelSummaryDownload"></div>
         <div id="xgbModelSummaryTable" class="empty">未运行 XGB 四级验证。</div>
         <h2>候选变量增量验证</h2>
+        <div class="help">
+          <span>RMSE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 RMSE 改善百分比中位数；改善率 = (baseline_error - candidate_error) / baseline_error × 100%。大于 0 表示加入该候选后预测误差下降，小于 0 表示预测误差上升。</span>
+          <span>MAE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 MAE 改善百分比中位数。大于 0 表示平均绝对误差下降。</span>
+          <span>RMSE 改善折占比：RMSE 改善百分比大于 0 的时间折数占全部验证折数的比例，范围为 0～1；例如 0.67 表示约 67% 的时间折得到改善。数值越高，跨时间段改善越稳定。</span>
+          <span>以上指标均为时间外预测增量证据，不代表工艺因果成立。</span>
+        </div>
         <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
         <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 四级验证。</div>
         <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
@@ -2730,6 +2736,7 @@ async function runXgbValidation() {
     return;
   }
   const startedAt = performance.now();
+  const timerId = startStatusTimer("正在运行 XGB 四级验证...", startedAt);
   el("runXgbValidation").disabled = true;
   el("xgbStatus").textContent = "正在运行 XGB 四级验证...";
   try {
@@ -2758,6 +2765,7 @@ async function runXgbValidation() {
     el("xgbStatus").textContent = message;
     setStatus(message, "error");
   } finally {
+    stopStatusTimer(timerId);
     updateXgbRunAvailability();
   }
 }

@@ -358,6 +358,50 @@ def test_xgb_web_surface_and_architecture_guards():
     assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML
 
 
+def _xgb_run_function_body() -> str:
+    source = web.INDEX_HTML
+    start = source.index("async function runXgbValidation()")
+    end = source.index("\n\n\nasync function testLlmConnection()", start)
+    return source[start:end]
+
+
+def test_xgb_candidate_uplift_help_and_columns_remain_explicit():
+    source = web.INDEX_HTML
+    uplift_section = source.split("<h2>候选变量增量验证</h2>", 1)[1].split(
+        'id="xgbCandidateUpliftDownload"', 1
+    )[0]
+
+    for marker in [
+        "RMSE 改善中位数", "MAE 改善中位数", "RMSE 改善折占比", "M1 基线模型",
+        "大于 0 表示加入该候选后预测误差下降", "0.67 表示约 67%", "不代表工艺因果成立",
+    ]:
+        assert marker in uplift_section
+    assert "<div class=\"help\">" in uplift_section
+    assert (
+        'return ["variable", "median_rmse_improvement_pct", '
+        '"median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];'
+    ) in source
+
+
+def test_xgb_run_uses_shared_global_status_timer_for_its_full_lifecycle():
+    function_body = _xgb_run_function_body()
+    success_body, catch_and_finally = function_body.split("  } catch (error) {", 1)
+    catch_body, finally_body = catch_and_finally.split("  } finally {", 1)
+
+    assert "const startedAt = performance.now();" in function_body
+    assert 'startStatusTimer("正在运行 XGB 四级验证...", startedAt)' in function_body
+    assert function_body.index("startStatusTimer(") < function_body.index("await postForm(")
+    assert "appendElapsed" in success_body
+    assert "appendElapsed" in catch_body
+    assert "stopStatusTimer(timerId);" in finally_body
+    assert "updateXgbRunAvailability();" in finally_body
+    assert finally_body.index("stopStatusTimer(timerId);") < finally_body.index(
+        "updateXgbRunAvailability();"
+    )
+    assert "setInterval(" not in function_body
+    assert "elapsedSeconds(" not in function_body
+
+
 def test_xgb_run_summary_uses_json_and_hides_missing_or_failed_values():
     function_body = web.INDEX_HTML.split("function renderXgbRunSummary", 1)[1].split(
         "function", 1

@@ -1,254 +1,249 @@
-# 化工装置工业时序数据筛查
+# 化工装置工业时序数据筛查平台
 
-本项目用于工业装置历史时序数据的四层筛查。用户指定一个目标变量后，程序会从大量过程变量中快速筛出相关性线索，并结合残差相关、工况稳定性、风险标签和预测提升给出候选变量排序。
+面向化工、流程工业和工业控制场景的历史时序数据分析工具。
 
-默认策略强调效率：第一阶段默认不运行 PCMCI、Transfer Entropy、XGBoost、LightGBM、全量 DTW，也默认不运行 SHAP。Granger 与模型解释保留为二阶段复核接口，不参与主评分。
+用户指定一个目标变量后，平台会从大量过程变量中逐层筛选可能具有预测价值的候选变量，并汇总滞后关系、工况稳定性、风险标签、预测增益和时间外验证结果，形成可供工艺人员进一步复核的候选清单。
 
-## 第一阶段默认分析方法（已更新）
+> 本平台用于发现数据线索和安排人工复核优先级，不自动证明工艺因果，也不会给出可直接写入控制系统的操作指令。
 
-默认只执行轻量方法：
+## 核心功能
 
-- 数据清洗：时间排序、重复时间戳处理、数值列选择、缺失插值
-- 可选重采样：例如 1min、5min、15min
-- 标准化：消除量纲影响
-- Pearson 相关：线性同步和滞后关系
-- Spearman 相关：单调非线性关系，比 Pearson 稳健
-- p 值、q 值与 r²：输出每个滞后点的统计显著性与多重比较校正（Pearson/Spearman）
-- 工况分段：可按负荷代表列切分低/中/高负荷或自定义范围
-- 去趋势/差分：减少共同趋势造成的伪相关
-- 滞后扫描：在 `[-max_lag, +max_lag]` 范围内寻找最强相关滞后
-- 残差相关：支持多列残差控制（residual control columns），对 target 与 candidate 分别多元回归残差化后再做滞后相关
-- 工况稳定性：输出低/中/高工况下的强度、符号一致性、滞后一致性及稳定性指标
-- 变量排序：综合 raw/residual 相关、工况稳定性、滚动稳定性、lag 峰值质量、model lift、风险惩罚输出候选变量
-- 方向判断：同步变化、变量领先目标、变量滞后目标
+### 1. 工业数据导入与预处理
 
-## 后续可选方法
+- 支持 CSV、TSV、TXT、XLSX、XLS 和 XLSM 文件。
+- 支持中文 Windows 常见文件编码识别。
+- 自动识别时间列和数值变量。
+- 支持按固定周期重采样，例如 1min、5min、15min。
+- 支持原始数据、滑动均值去趋势、一阶差分、去趋势后差分。
+- 支持按负荷或其他工况代表变量选择全部、低、中、高或自定义工况区间。
+- 支持缺失值、重复时间戳、异常跳变、长缺失段和信号饱和等数据质量检查。
 
-只建议在初筛后，对 Top 变量小范围启用：
+### 2. 第一层：主筛查
 
-- Granger：轻量时序预测因果候选，使用 `--enable-granger`
-- 随机森林/SHAP：变量解释，使用 `--enable-model`
+主筛查用于从大量变量中快速缩小候选范围，主要提供：
 
-暂不建议默认使用：
+- Pearson 和 Spearman 同步及滞后相关分析；
+- 正、负滞后方向识别；
+- 多重比较校正和有效样本量检查；
+- 剔除负荷、流量等共同驱动影响后的残差相关；
+- 不同工况下的强度、方向和滞后一致性比较；
+- 滚动时间窗口稳定性检查；
+- 滞后峰值是否清晰、是否触及搜索边界的质量提示；
+- 数据质量、共同负荷、闭环控制、目标领先、公式型变量等风险标签；
+- 综合候选排序和轻量遗漏候选提示。
 
-- PCMCI / PCMCI+
-- Transfer Entropy
-- XGBoost / LightGBM
-- 全量 DTW
+主筛查结果适合回答：
 
-这些方法更适合在变量数量已经大幅缩小后使用，或者有明确业务需求时单独追加。
+- 哪些变量值得进一步分析；
+- 候选变量大致领先目标多少时间；
+- 关系是否只在某个工况或某段时间成立；
+- 哪些高相关结果可能来自控制回路、共同趋势或数据质量问题。
+
+### 3. 第二层：增强验证
+
+对主筛查候选进行补充验证，包含：
+
+- **增强筛选**：检查加入候选变量后是否改善时间序列预测，并评价滚动时间稳定性；
+- **Granger 预测验证**：判断候选变量的历史信息是否增加目标变量的预测能力；
+- **随机森林/SHAP 模型解释**：识别非线性和多滞后预测线索，并提示主筛查可能遗漏的变量；
+- **补充白名单**：允许将工艺人员指定的变量强制加入二次验证。
+
+二次验证可以使用与主筛查不同的重采样周期。最大滞后参数的单位始终是“数据点数”，因此更换采样周期时应保持相同的物理时间范围：
+
+```text
+最大滞后时间 = 最大滞后点数 × 采样间隔
+```
+
+例如，主筛查使用 5min 数据、最大滞后 72 点，对应 360min；二次验证改用原始 1min 数据时，应填写 360 点。
+
+### 4. 第三层：综合复核
+
+第三层用于对少量重点候选做更严格的统计复核和证据汇总：
+
+- 条件 Granger 预测验证；
+- 在控制变量存在时评价候选变量的附加预测贡献；
+- 检查高共线性、样本不足和滞后边界等统计限制；
+- 汇总主筛查、增强筛选、Granger、模型解释和风险标签；
+- 输出逐变量综合证据复核表；
+- 形成最终人工复核优先级和建议下一步。
+
+为控制计算量，条件 Granger 默认围绕主筛查最佳滞后附近验证，也可按需要选择仅最佳滞后或全量扫描。
+
+### 5. 第四层：XGBoost 时间外验证
+
+XGBoost 验证默认关闭，只建议对第三层保留下来的少量候选运行。
+
+主要功能：
+
+- 使用按时间顺序划分的训练、验证和测试区间；
+- 比较目标历史、控制变量和候选变量加入前后的预测误差；
+- 输出 RMSE、MAE、R² 等时间外验证指标；
+- 计算每个候选变量相对基线模型的 RMSE/MAE 改善；
+- 检查正向改善是否在多个时间折中重复出现；
+- 区分增量信号、弱增量、基线冗余和跨时间不稳定等状态。
+
+XGBoost 结果只表示时间外预测增量，不会回写前三层得分和排名，也不等同于因果关系或可操作性。
+
+### 6. 趋势、散点和结果复核
+
+Web 页面提供：
+
+- 多变量趋势对比；
+- 共享或独立 Y 轴；
+- 时间范围和工况范围选择；
+- X/Y 散点矩阵；
+- 候选变量详情和风险说明；
+- 从最终推荐表直接跳转到目标与候选趋势复核；
+- 可排序、横向滚动的结果表格；
+- 术语与标签说明页。
+
+### 7. 报告与 AI 综合解读
+
+- 自动生成分析摘要和多类 CSV 结果文件；
+- 可生成适合交给大语言模型的分析 Prompt；
+- 可选调用 DeepSeek 或 OpenAI-compatible 接口生成综合报告；
+- API 密钥仅用于当次请求，不写入分析文件。
+
+## 推荐工作流
+
+1. 选择相对稳定的生产时间范围，尽量避免把开停车、牌号切换和明显异常工况混入同一次分析。
+2. 上传数据并选择时间列、目标变量和负荷/残差控制变量。
+3. 设定主筛查的重采样周期、最大物理滞后范围和候选数量。
+4. 运行主筛查，先排除目标领先、公式型变量、共同负荷和明显闭环响应等高风险结果。
+5. 对保留候选运行增强筛选、Granger 和模型解释。
+6. 将工艺上重要但未进入前列的变量通过白名单加入复核。
+7. 运行第三层综合复核，查看最终推荐、统计限制和证据冲突。
+8. 仅对少量重点候选运行 XGBoost 时间外验证。
+9. 结合工艺机理、物料路径、控制回路结构和现场趋势进行人工确认。
+
+## 结果如何理解
+
+### 滞后方向
+
+- `lag > 0`：候选变量领先目标，可能是前置信号；
+- `lag = 0`：候选变量与目标同步变化；
+- `lag < 0`：候选变量滞后目标，更可能是结果变量、反馈响应或共同扰动后的响应。
+
+滞后方向只描述数据中的时间先后关系，仍需结合采样周期、物料停留时间和控制结构解释。
+
+### 风险标签
+
+风险标签不会简单删除候选，而是提示结果的解释边界。常见风险包括：
+
+- 候选变量滞后目标；
+- 滞后峰值触及搜索边界；
+- 共同负荷或共同工况驱动；
+- 闭环控制反馈；
+- 公式计算或信号泄漏；
+- 数据质量不足；
+- 不同工况或不同时间段不稳定；
+- 高共线性导致统计检验受限。
+
+### 预测验证
+
+预测指标改善表示“加入该变量后模型预测更好”，但不自动表示：
+
+- 该变量是根本原因；
+- 该变量可以直接操纵；
+- 改变该变量一定会使目标按预测方向变化。
 
 ## 快速开始
 
-安装 Python 3.10 或以上版本后，在项目目录安装基础依赖：
+### Windows 推荐方式
+
+要求 Python 3.10 或以上版本。
+
+在项目目录安装基础依赖：
 
 ```powershell
-pip install -e .
+python -m pip install -e .
 ```
 
-## 推荐使用方式：本地 Python 服务 + 浏览器界面
-
-双击项目根目录的：
+然后双击：
 
 ```text
 start_app.bat
 ```
 
-它会自动：
+程序会检查运行环境、启动本地服务，并在服务就绪后打开：
 
-- 检查 Python
-- 检查并安装基础依赖
-- 启动本地 Python 服务
-- 打开浏览器访问 `http://127.0.0.1:8765/`
+```text
+http://127.0.0.1:8765/
+```
 
-使用流程：
-
-1. 浏览器上传 CSV、TSV、TXT 或 Excel（`.xlsx`、`.xls`、`.xlsm`）数据。
-2. 选择编码、时间列、目标列。
-3. 设置滞后、预处理、工况分段等参数。
-4. 点击“开始分析”。
-5. Python 后台处理数据。
-6. 浏览器展示候选变量排序，并提供结果文件下载。
-
-结果会保存到：
+普通分析在本机完成，结果默认保存在：
 
 ```text
 reports/web_runs/
 ```
 
-如果需要更精确的 p 值、Granger 或模型解释，安装完整依赖：
+### 可选功能依赖
+
+Granger、随机森林/SHAP 和完整统计功能：
 
 ```powershell
-pip install -e ".[full]"
+python -m pip install -e ".[full]"
 ```
 
-小数据也可用无需后台服务的静态界面：
+XGBoost 四级验证：
 
-直接用浏览器打开 `ui/index.html`。这个版本完全在浏览器内运行，适合本地快速初筛。数据较大时建议使用下面的 Python 命令行版本。
+```powershell
+python -m pip install -e ".[xgb]"
+```
 
-如果希望通过本地服务访问，也可以启动本地交互界面：
+安装新依赖后，应完全关闭并重新启动本地 Web 服务。
+
+### 手动启动 Web 服务
 
 ```powershell
 python -m chem_ts_corr.cli serve
 ```
 
-打开浏览器中的本地地址后，可以通过界面完成：
-
-- 上传 CSV、TSV、TXT 或 Excel 数据
-- 选择时间列
-- 选择目标变量
-- 设置最大滞后点数、Top K、有效数据比例、重采样规则，并可在大数据场景跳过模型提升评分/滚动稳定性评分以加速
-- 点击“开始分析”
-- 查看可调整宽度的结果表格，并下载候选变量排序、滞后明细等 CSV 结果
-
-运行轻量初筛：
-
-```powershell
-python -m chem_ts_corr.cli analyze `
-  --input examples/sample_plant_timeseries.csv `
-  --time-column timestamp `
-  --target reactor_temp `
-  --max-lag 12 `
-  --top-k 30 `
-  --output reports/demo
-```
-
-大数据建议使用 Python 命令行：
+### 命令行分析
 
 ```powershell
 python -m chem_ts_corr.cli analyze `
   --input D:\data\plant_history.csv `
-  --encoding gb18030 `
   --time-column 时间 `
   --target 目标变量 `
-  --max-lag 24 `
-  --top-k 50 `
-  --preprocess-mode detrend `
-  --detrend-window 48 `
-  --segment-column 负荷 `
-  --segment-mode mid `
-  --residual-control-columns 负荷,进料量 `
-  --force-include-variables 关键变量A,关键变量B `
-  --output reports/big_data_run
-```
-
-常用参数：
-
-- `--input`：支持 CSV、TSV、TXT 与 Excel 文件；TXT/TSV 会自动尝试分隔符，Excel 依赖 `openpyxl` / `xlrd`
-- `--encoding`：文本文件编码，中文 Windows CSV/TXT 常用 `gb18030`
-- `--preprocess-mode`：`raw`、`detrend`、`diff`、`detrend_diff`
-- `--detrend-window`：滑动均值去趋势窗口点数
-- `--segment-column`：负荷代表列（仅用于工况分段）
-- `--segment-mode`：`all`、`low`、`mid`、`high`、`custom`
-- `--segment-min / --segment-max`：自定义工况范围
-- `--residual-control-columns`：残差相关控制列（多列逗号分隔）
-- `--capacity-columns`：向后兼容别名（等价 residual control columns）
-- `--force-include-variables`：强制进入滚动稳定性复核的变量列表
-- Web 大数据加速选项：可勾选“跳过模型提升评分（大数据加速）”和“跳过滚动稳定性评分（大数据加速）”，用于缩短主筛查耗时；这两个选项不会改变 `ranked_features.final_score` 的计算公式，只会将对应模块输出标记为跳过/缺省。
-- Web 结果表格：多数结果表支持横向滚动，右下角可拖动调整表格宽度，便于查看宽表字段。
-
-如果后续要对筛选后的变量追加 Granger：
-
-```powershell
-python -m chem_ts_corr.cli analyze `
-  --input examples/sample_plant_timeseries.csv `
-  --time-column timestamp `
-  --target reactor_temp `
-  --max-lag 12 `
+  --max-lag 72 `
   --top-k 30 `
-  --enable-granger `
-  --output reports/demo_granger
+  --output reports\demo
 ```
 
-如果要追加模型解释，需要安装完整依赖：
+Web 页面是主要使用入口；命令行适合固定参数的批量运行。
 
-```powershell
-pip install -e ".[full]"
-```
+## 主要输出
 
-然后运行：
+| 输出 | 用途 |
+|---|---|
+| `summary.md` | 本次分析的总体摘要 |
+| `ranked_features.csv` | 主筛查候选变量排序 |
+| `recommended_candidates.csv` | 推荐候选及建议用途 |
+| `lag_scores.csv` | 各候选在不同滞后点的相关结果 |
+| `diagnostics.csv` | 缺失、跳变、饱和等数据质量诊断 |
+| `residual_corr_scores.csv` | 剔除共同控制变量后的残差相关 |
+| `regime_scores.csv` | 不同工况下的关系与稳定性 |
+| `rolling_corr_scores.csv` | 不同时间窗口下的稳定性 |
+| `risk_flags.csv` | 数据、统计和工艺解释风险 |
+| `enhanced_validation_summary.csv` | 增强筛选汇总结果 |
+| `granger_tests.csv` | Granger 预测验证结果 |
+| `model_variable_importance.csv` | 模型解释的变量级排序 |
+| `conditional_granger_scores.csv` | 条件 Granger 结果 |
+| `causal_review_evidence.csv` | 逐变量综合证据复核表 |
+| `final_review_summary.csv` | 最终人工复核优先级 |
+| `xgb_validation/` | XGBoost 时间外验证结果 |
+| `llm_prompt.md` / `llm_report.md` | AI 综合解读材料 |
 
-```powershell
-python -m chem_ts_corr.cli analyze `
-  --input examples/sample_plant_timeseries.csv `
-  --time-column timestamp `
-  --target reactor_temp `
-  --max-lag 12 `
-  --top-k 30 `
-  --enable-model `
-  --output reports/demo_model
-```
+## 使用边界
 
-## 输出文件
+工业时序数据中常见的伪相关来源包括：
 
-- `summary.md`：分析摘要
-- `ranked_features.csv`：候选变量排序主表
-- `recommended_candidates.csv`：推荐候选（含 `candidate_grade`、`recommended_use`）
-- `lag_scores.csv`：各变量/各滞后点明细，包含 `effective_n`、`pearson_q`、`spearman_q`、`corr_q_value`、`lag_boundary_flag`
-- `lag_peak_quality.csv`：lag 峰值质量（`best_lag`、`peak_sharpness`、`lag_quality`）
-- `diagnostics.csv`：缺失、长缺失段、异常跳变比例、饱和比例等数据质量诊断
-- `residual_corr_scores.csv`：剔除一个或多个 CAPACITY 控制列后的残差相关
-- `regime_scores.csv`：低/中/高工况相关结果与稳定性指标（含符号一致性、滞后一致性、CV 等）
-- `rolling_corr_scores.csv`：滚动相关稳定性（`rolling_corr_median`、`rolling_corr_iqr`、`rolling_sign_consistency`、`rolling_stability`）
-- `risk_flags.csv`：数据质量、公式型变量、共同驱动、闭环、目标领先、跨工况不稳定、时序不稳定、lag 边界、低提升等风险标记
-- `model_lift_scores.csv`：TimeSeriesSplit 下 AR baseline 与 AR + candidate lag features 的误差改善
-- `granger_tests.csv`：默认跳过，启用 Granger 后输出结果
-- `shap_or_importance.csv`：默认跳过，启用模型解释后输出特征级重要性明细
-- `model_variable_importance.csv`：模型解释变量排序，按变量汇总随机森林/SHAP 重要性且每个变量仅展示最强 lag；该文件不代表因果结论，不改变主筛查综合得分。
-- `model_discovered_candidates.csv`：模型解释补充候选，用于发现主筛查可能遗漏的非线性/多滞后预测线索；该文件不代表因果结论，不改变主筛查综合得分。
-- `near_miss_candidates.csv`：轻量遗漏候选，基于已有滞后相关、残差相关、峰值质量和风险标签提示主筛查 Top K 外可能遗漏的候选；该文件不代表因果结论，不改变主筛查综合得分。
+- 共同负荷和原料变化；
+- PID/APC 闭环反馈；
+- 开停车、批次和牌号切换；
+- 物料停留时间和串级传播；
+- 仪表漂移、校验和数据压缩；
+- 公式型变量或上下游计算关系。
 
-完成三层复核后，可在 Web 的“XGB 四级验证”页签中显式启用并运行时间外增量验证。该步骤默认关闭，结果独立写入 `xgb_validation/`：
-
-- `xgb_model_summary.csv`：M0、M1、M2 的跨时间折模型指标摘要
-- `xgb_candidate_uplift.csv`：逐候选变量相对 M1 的增量验证结果
-- `xgb_validation_summary.json`：本次四级验证的状态、候选数和输出文件清单
-
-XGB 四级验证不会回写主筛查得分或排名；缺少 `xgboost` 时页面会返回依赖提示，已有三层分析结果仍保持可用。
-
-详细说明见 [XGB 四级验证说明](docs/xgb_validation.md)。
-
-## 推荐工作流
-
-1. 在界面上传 CSV。
-2. 选择时间列和目标变量。
-3. 设置最大滞后窗口。
-4. 点击“开始分析”完成轻量初筛。
-5. 查看 Top 变量及其领先/滞后方向。
-6. 剔除明显由控制回路、共同趋势、开停车过程造成的伪相关。
-7. 只对剩余候选变量追加 Granger、PCMCI 或人工机理复核。
-
-## 滞后方向解释
-
-- `lag > 0`：变量领先目标，可能是目标变化的前置信号。
-- `lag = 0`：变量与目标同步变化。
-- `lag < 0`：变量滞后目标，更可能是结果变量、反馈响应或共同扰动后的响应。
-
-## 注意事项
-
-相关性初筛不能证明工艺因果。工业装置里常见的伪相关来源包括共同负荷变化、控制回路、物料停留时间、批次切换、牌号切换、开停车、仪表漂移和数据压缩策略。
-
-因此，初筛结果应作为“候选线索”，不是最终结论。
-
-## 筛选评分评价基线
-
-对已有运行目录生成当前排名的评价基线：
-
-```bash
-python -m chem_ts_corr.ranking_baseline \
-  --run-dir runs/<run_id>
-```
-
-带人工评价清单时：
-
-```bash
-python -m chem_ts_corr.ranking_baseline \
-  --run-dir runs/<run_id> \
-  --expectations ranking_expectations.csv
-```
-
-`expected_class` 可取值：
-
-- `reasonable_driver`：用户认为工艺上合理的驱动候选
-- `implausible_driver`：用户认为工艺上不合理的驱动候选
-- `neutral`：只记录、不参与合理/不合理指标
+因此，平台输出应被视为“候选线索 + 风险提示 + 复核优先级”。最终判断仍需结合工艺知识、控制结构、现场操作记录和必要的受控试验。

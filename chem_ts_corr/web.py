@@ -1010,7 +1010,7 @@ def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         model=_field(form, "model", "deepseek-chat"),
         api_key=api_key,
         temperature=_float_field(form, "temperature", 0.2),
-        max_tokens=_int_field(form, "max_tokens", 4096),
+        max_tokens=_int_field(form, "max_tokens", 15000),
     )
     try:
         result = generate_llm_report(
@@ -2198,7 +2198,7 @@ INDEX_HTML = r"""<!doctype html>
           <label>模型名称<input id="llmModel" value="deepseek-chat"></label>
           <label>API 密钥<input id="llmApiKey" type="password" autocomplete="off" placeholder="sk-..."></label>
           <label>温度参数<input id="llmTemperature" type="number" min="0" max="2" step="0.1" value="0.2"></label>
-          <label>最大输出 Token 数<input id="llmMaxTokens" type="number" min="256" max="32000" value="4096"></label>
+          <label>最大输出 Token 数<input id="llmMaxTokens" type="number" min="256" max="32000" value="15000"></label>
         </div>
         <div id="llmConnectionStatus" class="help" aria-live="polite">尚未测试 API 连接。</div>
         <div class="actions">
@@ -2815,7 +2815,7 @@ async function generateLlmReport() {
     form.append("model", el("llmModel").value || "deepseek-chat");
     form.append("api_key", el("llmApiKey").value);
     form.append("temperature", el("llmTemperature").value || "0.2");
-    form.append("max_tokens", el("llmMaxTokens").value || "4096");
+    form.append("max_tokens", el("llmMaxTokens").value || "15000");
     form.append("top_n", el("llmTopN").value || "20");
     form.append("report_type", el("llmReportType").value || "apc_advice");
     const data = await postForm("/api/llm_report", form);

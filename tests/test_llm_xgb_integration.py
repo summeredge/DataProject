@@ -97,7 +97,9 @@ def test_xgb_success_is_compactly_included_in_package_and_prompt(tmp_path: Path)
         "M1 + 单个候选变量", "改善率 = (基线误差 - 候选模型误差) / 基线误差 × 100%",
         "positive_rmse_fold_ratio", "validated_incremental_signal", "weak_incremental_value",
         "redundant_with_baseline", "unstable_out_of_time", "insufficient_features",
-        "未运行时不得编造结果",
+        "未运行时不得编造结果", "跨层证据解释规则", "建议优先进行工程复核",
+        "不得直接删除或否定候选", "只能作为补充预测线索", "降低对时间稳定性的判断",
+        "不得断言上述任一因素已经发生",
     ]:
         assert marker in prompt
 
@@ -186,7 +188,158 @@ def test_generate_llm_report_receives_xgb_package_without_api_changes(
     )
 
     assert "XGBoost 时间外增量验证" in captured["prompt"]
+    assert "跨层证据解释规则" in captured["prompt"]
     assert "xgb_out_of_time_validation" in captured["prompt"]
     assert "FEED.PV" in captured["prompt"]
     assert "median_rmse_improvement_pct" in captured["prompt"]
     assert result["package"]["xgb_out_of_time_validation"]["available"] is True
+
+
+@pytest.mark.parametrize(
+    "invalid_model",
+    [
+        "empty", "missing_m2", "duplicate_m2", "blank_model_name",
+        "all_metrics_empty", "missing_model_name", "missing_mean_rmse", "missing_fold_count",
+    ],
+)
+def test_invalid_xgb_model_summary_is_incomplete(tmp_path: Path, invalid_model: str):
+    run_dir = tmp_path / invalid_model
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    model_path = xgb_dir / "xgb_model_summary.csv"
+    model = pd.read_csv(model_path)
+    if invalid_model == "empty":
+        model = model.head(0)
+    elif invalid_model == "missing_m2":
+        model = model[model["model_name"] != "M2"]
+    elif invalid_model == "duplicate_m2":
+        model = pd.concat([model, model[model["model_name"] == "M2"]], ignore_index=True)
+    elif invalid_model == "blank_model_name":
+        model.loc[0, "model_name"] = ""
+    elif invalid_model == "all_metrics_empty":
+        metric_columns = ["mean_rmse", "median_rmse", "mean_mae", "median_mae", "mean_r2", "fold_count"]
+        model = model.assign(
+            **{
+                column: pd.Series([None] * len(model), index=model.index, dtype="object")
+                for column in metric_columns
+            }
+        )
+    else:
+        model = model.drop(columns=[invalid_model.removeprefix("missing_")])
+    model.to_csv(model_path, index=False, encoding="utf-8-sig")
+
+    xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "incomplete_outputs"
+    assert xgb["available"] is False
+    assert xgb["model_comparison"] == []
+    assert xgb["candidate_uplift"] == []
+
+
+def test_empty_candidate_uplift_is_invalid_when_summary_has_candidates(tmp_path: Path):
+    run_dir = tmp_path / "empty-candidates"
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    candidate_path = xgb_dir / "xgb_candidate_uplift.csv"
+    pd.read_csv(candidate_path).head(0).to_csv(candidate_path, index=False, encoding="utf-8-sig")
+
+    xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "incomplete_outputs"
+    assert xgb["available"] is False
+
+
+def test_empty_candidate_uplift_is_valid_when_summary_has_no_candidates(tmp_path: Path):
+    run_dir = tmp_path / "no-candidates"
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    summary_path = xgb_dir / "xgb_validation_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["candidate_count"] = 0
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
+    candidate_path = xgb_dir / "xgb_candidate_uplift.csv"
+    pd.read_csv(candidate_path).head(0).to_csv(candidate_path, index=False, encoding="utf-8-sig")
+
+    xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "success"
+    assert xgb["available"] is True
+    assert xgb["candidate_uplift"] == []
+
+
+@pytest.mark.parametrize(
+    ("invalid_candidate", "value"),
+    [
+        ("missing_variable", None),
+        ("empty_variable", None),
+        ("missing_validation_status", None),
+        ("missing_positive_rmse_fold_ratio", None),
+        ("missing_median_rmse_improvement_pct", None),
+        ("unknown_validation_status", "unknown_status"),
+        ("invalid_ratio", -0.1),
+        ("invalid_ratio", 1.1),
+    ],
+)
+def test_invalid_xgb_candidate_uplift_is_incomplete(
+    tmp_path: Path, invalid_candidate: str, value: object
+):
+    run_dir = tmp_path / f"{invalid_candidate}-{value}"
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    candidate_path = xgb_dir / "xgb_candidate_uplift.csv"
+    candidates = pd.read_csv(candidate_path)
+    if invalid_candidate.startswith("missing_"):
+        candidates = candidates.drop(columns=[invalid_candidate.removeprefix("missing_")])
+    elif invalid_candidate == "empty_variable":
+        candidates.loc[:, "variable"] = ""
+    elif invalid_candidate == "unknown_validation_status":
+        candidates.loc[0, "validation_status"] = value
+    else:
+        candidates.loc[0, "positive_rmse_fold_ratio"] = value
+    candidates.to_csv(candidate_path, index=False, encoding="utf-8-sig")
+
+    xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "incomplete_outputs"
+    assert xgb["available"] is False
+    assert xgb["model_comparison"] == []
+    assert xgb["candidate_uplift"] == []
+
+
+def test_insufficient_features_allows_missing_improvement_values(tmp_path: Path):
+    run_dir = tmp_path / "insufficient"
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    candidate_path = xgb_dir / "xgb_candidate_uplift.csv"
+    candidates = pd.read_csv(candidate_path).head(1)
+    candidates.loc[0, "validation_status"] = "insufficient_features"
+    candidates.loc[0, "fold_count"] = 0
+    for column in [
+        "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
+        "median_mae_improvement_pct", "mean_rmse_improvement_pct",
+        "mean_mae_improvement_pct", "worst_fold_rmse_improvement_pct",
+    ]:
+        candidates.loc[0, column] = None
+    candidates.to_csv(candidate_path, index=False, encoding="utf-8-sig")
+
+    xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "success"
+    assert xgb["available"] is True
+    assert xgb["candidate_uplift"][0]["validation_status"] == "insufficient_features"
+
+
+def test_invalid_utf8_xgb_summary_fails_closed(tmp_path: Path):
+    run_dir = tmp_path / "invalid-utf8"
+    run_dir.mkdir()
+    xgb_dir = _write_xgb_outputs(run_dir)
+    (xgb_dir / "xgb_validation_summary.json").write_bytes(b"\xff\xfe\x00\x80")
+
+    package = build_llm_analysis_package(run_dir)
+    xgb = package["xgb_out_of_time_validation"]
+
+    assert xgb["status"] == "invalid_summary"
+    assert xgb["available"] is False
+    assert xgb["model_comparison"] == []
+    assert xgb["candidate_uplift"] == []
+    assert "invalid_summary" in build_llm_prompt(package)

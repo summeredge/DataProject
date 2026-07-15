@@ -152,6 +152,12 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - validation_status 的边界：validated_incremental_signal 表示多个时间折支持正向预测增量但仍不是因果结论；weak_incremental_value 表示存在一定预测增量但强度或跨折一致性不足；redundant_with_baseline 表示候选没有明显超过目标历史和控制变量基线，不等于工艺上无关；unstable_out_of_time 表示时间折方向不一致，应检查工况变化、漂移或数据分布变化但不得断言具体原因；insufficient_features 表示当前滞后或数据条件下特征不足，不能据此否定变量。
 - 当 xgb_out_of_time_validation.available=false 时，必须按其 status 明确说明 XGB 未运行、运行失败、摘要无效或输出不完整；未运行时不得编造结果，不得编造 RMSE、MAE、R² 或候选验证结论。
 
+### 跨层证据解释规则
+- 当前三层证据较强且 XGB 为 validated_incremental_signal 时，只能表述为“统计筛查、因果复核和时间外预测增量方向一致，建议优先进行工程复核。”不得据此声称变量导致目标变化、是根本原因、可直接作为 APC 操纵变量或可直接投用控制。
+- 当前三层证据较强但 XGB 为 redundant_with_baseline 时，应说明可能是目标变量自身历史已解释大部分波动、M1 中的控制变量已包含相同或相近信息、候选变量与基线特征存在信息冗余，或候选在时间外数据中的泛化增量不足。这些只是可能解释，不得断言具体原因，不得直接删除或否定候选；应降级为“工程复核仍有价值，但预测增量有限”。
+- 当前三层证据较弱但 XGB 显示正向增量时，只能作为补充预测线索；必须继续检查滞后方向、目标泄漏或公式型变量、共同负荷驱动、闭环控制响应、工况/批次/数据分布偏差、工艺机理解释和工程可操作性。不得因 XGB 正向改善直接提升为因果候选或控制候选。
+- 当 XGB 为 unstable_out_of_time 时，必须说明不同时间折中的预测增量方向或幅度不一致，应降低对时间稳定性的判断；建议检查负荷、工况、批次、牌号、仪表漂移和数据分布变化，但不得断言上述任一因素已经发生。
+
 ## 风险解释必须覆盖
 common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
 
@@ -160,7 +166,7 @@ common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_l
 2. 与目标变量高度相关的过程变量
 3. 最需要关注的变量
 4. 相关性与因果复核证据靠前的变量
-5. XGBoost 时间外增量验证：报告是否实际运行成功，解释 M0、M1、M2 总体比较和逐候选增量结果，区分正向增量、弱增量、基线冗余、跨时间不稳定和特征不足；与前三层证据交叉核对但不改变前三层排序，也不写成工艺因果结论。
+5. XGBoost 时间外增量验证：先说明是否成功运行，分别解释 M0、M1、M2 总体比较和逐候选增量结果；与前三层证据交叉核对，遇到冲突时按跨层证据解释规则保守说明，不改变前三层排序、不生成新的综合分数，也不写成工艺因果结论或直接控制依据。
 6. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量
 7. 主要风险与解释限制
 8. 下一步工程验证动作
@@ -184,7 +190,7 @@ def _read_csv(path: Path) -> pd.DataFrame:
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -229,7 +235,12 @@ def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
 
     model_summary = _read_required_csv(xgb_dir / "xgb_model_summary.csv")
     candidate_uplift = _read_required_csv(xgb_dir / "xgb_candidate_uplift.csv")
-    if model_summary is None or candidate_uplift is None:
+    if (
+        model_summary is None
+        or candidate_uplift is None
+        or not _validate_xgb_model_summary(model_summary)
+        or not _validate_xgb_candidate_uplift(candidate_uplift, summary)
+    ):
         return {"status": "incomplete_outputs", **empty, "summary": compact_summary}
 
     return {
@@ -262,6 +273,66 @@ def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
         ],
         "evidence_scope": empty["evidence_scope"],
     }
+
+
+def _validate_xgb_model_summary(frame: pd.DataFrame) -> bool:
+    required = {
+        "model_name", "mean_rmse", "median_rmse", "mean_mae", "median_mae",
+        "mean_r2", "fold_count",
+    }
+    if frame.empty or not required.issubset(frame.columns):
+        return False
+    names = frame["model_name"]
+    if names.isna().any() or names.astype(str).str.strip().eq("").any():
+        return False
+    normalized_names = names.astype(str).str.strip()
+    if normalized_names.duplicated().any() or not {"M0", "M1", "M2"}.issubset(
+        set(normalized_names)
+    ):
+        return False
+    metric_columns = [
+        "mean_rmse", "median_rmse", "mean_mae", "median_mae", "mean_r2", "fold_count",
+    ]
+    return frame[metric_columns].notna().any().any()
+
+
+def _validate_xgb_candidate_uplift(
+    frame: pd.DataFrame, summary: dict[str, Any]
+) -> bool:
+    required = {
+        "variable", "fold_count", "positive_rmse_fold_count", "positive_mae_fold_count",
+        "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
+        "median_mae_improvement_pct", "mean_rmse_improvement_pct",
+        "mean_mae_improvement_pct", "worst_fold_rmse_improvement_pct", "validation_status",
+    }
+    if not required.issubset(frame.columns):
+        return False
+    try:
+        candidate_count = int(summary.get("candidate_count") or 0)
+    except (TypeError, ValueError):
+        return False
+    if frame.empty:
+        return candidate_count == 0
+    variables = frame["variable"]
+    statuses = frame["validation_status"]
+    if (
+        variables.isna().any()
+        or variables.astype(str).str.strip().eq("").any()
+        or statuses.isna().any()
+        or statuses.astype(str).str.strip().eq("").any()
+    ):
+        return False
+    allowed_statuses = {
+        "validated_incremental_signal", "weak_incremental_value", "redundant_with_baseline",
+        "unstable_out_of_time", "insufficient_features",
+    }
+    if not set(statuses.astype(str).str.strip()).issubset(allowed_statuses):
+        return False
+    ratios = pd.to_numeric(frame["positive_rmse_fold_ratio"], errors="coerce")
+    present_ratios = frame["positive_rmse_fold_ratio"].notna()
+    if ratios[present_ratios].isna().any() or ((ratios.dropna() < 0) | (ratios.dropna() > 1)).any():
+        return False
+    return True
 
 
 def _xgb_available_files(xgb_validation: dict[str, Any]) -> list[str]:

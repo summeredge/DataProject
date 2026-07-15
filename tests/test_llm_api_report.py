@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -42,6 +43,18 @@ def test_build_prompt_can_feed_llm_report_call(tmp_path: Path, monkeypatch):
     assert "prompt" in result
     assert result["usage"]["prompt_tokens"] == 10
     assert (run_dir / "llm_report.md").exists()
+
+
+def test_llm_max_output_tokens_default_is_15000():
+    from chem_ts_corr import web
+    from chem_ts_corr.llm_api import LLMCallConfig
+
+    assert LLMCallConfig().max_tokens == 15000
+    assert 'id="llmMaxTokens" type="number" min="256" max="32000" value="15000"' in web.INDEX_HTML
+    assert 'max_tokens=_int_field(form, "max_tokens", 15000)' in inspect.getsource(
+        web._llm_report_response
+    )
+    assert 'form.append("max_tokens", el("llmMaxTokens").value || "15000")' in web.INDEX_HTML
 
 
 def test_web_exposes_llm_report_ui_and_download():

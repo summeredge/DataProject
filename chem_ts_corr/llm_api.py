@@ -16,7 +16,7 @@ class LLMCallConfig:
     model: str = "deepseek-chat"
     api_key: str = ""
     temperature: float = 0.2
-    max_tokens: int = 4096
+    max_tokens: int = 15000
     timeout: float = 120.0
 
 

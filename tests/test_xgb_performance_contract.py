@@ -305,7 +305,24 @@ def test_xgb_hard_limits_and_benchmark_script_contract():
     validation_source = Path("chem_ts_corr/xgb_validation.py").read_text(encoding="utf-8")
     assert "automatic_count < DEFAULT_XGB_TOP_N" not in validation_source
     assert "automatic_count < MAX_XGB_AUTO_TOP_N" in validation_source
+    assert "len(result[\"variable\"].drop_duplicates())" not in validation_source
+    assert validation_source.count("_validate_total_xgb_candidate_count(") == 3
     assert "assert elapsed <" not in benchmark
+
+
+def test_xgb_documentation_describes_all_candidate_limits_and_failure_behavior():
+    documentation = Path("docs/xgb_validation.md").read_text(encoding="utf-8")
+
+    for marker in [
+        "默认自动候选数量为 8",
+        "自动候选数量调整到最多 10",
+        "总候选数量最多为 12",
+        "超过 12 会返回 `invalid_input`",
+        "不会静默截断",
+        "`C` 为最终实际候选数量",
+    ]:
+        assert marker in documentation
+    assert "默认最多选择 8 个自动候选，白名单候选可在自动候选之外强制加入" not in documentation
 
 
 def test_xgb_documentation_has_required_sections_and_readme_link():

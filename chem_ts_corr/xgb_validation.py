@@ -194,6 +194,9 @@ def build_xgb_candidate_pool(
 
     summary = final_review_summary.copy(deep=True)
     ranked = ranked_features.copy(deep=True) if ranked_features is not None else pd.DataFrame()
+    normalized_target = _text(target)
+    summary["variable"] = summary["variable"].map(_text)
+    summary = summary[summary["variable"].ne("")]
     summary = summary.drop_duplicates(subset=["variable"], keep="first").reset_index(drop=True)
     ranked_by_variable = _rows_by_variable(ranked)
     controls = {_text(value) for value in control_columns or [] if _text(value)}
@@ -201,28 +204,32 @@ def build_xgb_candidate_pool(
     rows: list[dict[str, object]] = []
     for _, source in summary.iterrows():
         row = _candidate_metadata(source.to_dict(), ranked_by_variable)
-        reasons = _auto_exclusion_reasons(row, target=target, control_columns=controls)
+        reasons = _auto_exclusion_reasons(
+            row, target=normalized_target, control_columns=controls
+        )
         row["auto_eligible"] = not reasons
         row["auto_exclusion_reasons"] = ";".join(reasons)
         row["_source_order"] = len(rows)
         rows.append(row)
 
-    candidates = pd.DataFrame(rows)
-    rank_sort = pd.to_numeric(candidates["final_rank"], errors="coerce")
-    candidates["_rank_missing"] = rank_sort.isna()
-    candidates["_rank_sort"] = rank_sort
-    eligible = candidates[candidates["auto_eligible"]].sort_values(
-        ["_rank_missing", "_rank_sort", "_source_order"], kind="mergesort"
-    )
-    selected = eligible.head(resolved_top_n).copy()
-    selected["selection_source"] = "final_review"
-    selected["force_included"] = False
+    selected_rows: list[dict[str, object]] = []
+    if rows:
+        candidates = pd.DataFrame(rows)
+        rank_sort = pd.to_numeric(candidates["final_rank"], errors="coerce")
+        candidates["_rank_missing"] = rank_sort.isna()
+        candidates["_rank_sort"] = rank_sort
+        eligible = candidates[candidates["auto_eligible"]].sort_values(
+            ["_rank_missing", "_rank_sort", "_source_order"], kind="mergesort"
+        )
+        selected = eligible.head(resolved_top_n).copy()
+        selected["selection_source"] = "final_review"
+        selected["force_included"] = False
+        selected_rows = selected.to_dict("records")
 
-    selected_rows = selected.to_dict("records")
     selected_positions = {_text(row.get("variable")): index for index, row in enumerate(selected_rows)}
     summary_by_variable = _rows_by_variable(summary)
     for variable in _clean_whitelist(whitelist):
-        if variable == target:
+        if variable == normalized_target:
             continue
         if variable in selected_positions:
             row = selected_rows[selected_positions[variable]]
@@ -232,7 +239,9 @@ def build_xgb_candidate_pool(
 
         source = summary_by_variable.get(variable, {"variable": variable})
         row = _candidate_metadata(source, ranked_by_variable)
-        reasons = _auto_exclusion_reasons(row, target=target, control_columns=controls)
+        reasons = _auto_exclusion_reasons(
+            row, target=normalized_target, control_columns=controls
+        )
         row["auto_eligible"] = not reasons
         row["auto_exclusion_reasons"] = ";".join(reasons)
         row["selection_source"] = "whitelist"
@@ -243,8 +252,10 @@ def build_xgb_candidate_pool(
     if not selected_rows:
         return pd.DataFrame(columns=XGB_CANDIDATE_COLUMNS)
     result = pd.DataFrame(selected_rows)
-    if len(result["variable"].drop_duplicates()) > MAX_XGB_TOTAL_CANDIDATES:
-        raise ValueError("XGB total candidate count including whitelist must not exceed 12")
+    result["variable"] = result["variable"].map(_text)
+    if result["variable"].eq("").any() or not result["variable"].is_unique:
+        raise ValueError("XGB candidate variables must be non-empty and unique")
+    _validate_total_xgb_candidate_count(result["variable"])
     result["candidate_order"] = range(1, len(result) + 1)
     return result.loc[:, XGB_CANDIDATE_COLUMNS].reset_index(drop=True)
 
@@ -340,6 +351,11 @@ def validate_xgb_top_n(top_n: object) -> int:
     if not 1 <= resolved <= MAX_XGB_AUTO_TOP_N:
         raise ValueError("top_n must be an integer between 1 and 10")
     return resolved
+
+
+def _validate_total_xgb_candidate_count(variables: Sequence[str]) -> None:
+    if len(variables) > MAX_XGB_TOTAL_CANDIDATES:
+        raise ValueError("XGB total candidate count including whitelist must not exceed 12")
 
 
 def build_xgb_feature_sets(
@@ -619,6 +635,8 @@ def run_candidate_uplift_validation(
     params: dict[str, object] | None = None,
     early_stopping_rounds: int = DEFAULT_EARLY_STOPPING_ROUNDS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
+    candidates = _bounded_uplift_candidates(pool)
     _require_xgb_dependency()
     if not splits:
         raise ValueError("No time splits provided")
@@ -627,8 +645,6 @@ def run_candidate_uplift_validation(
     if not feature_sets.features.index.equals(feature_sets.target.index):
         raise ValueError("XGB features and target must use the same index")
 
-    pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
-    candidates = _bounded_uplift_candidates(pool)
     available = set(feature_sets.features.columns)
     m1_features = tuple(feature_sets.m1_features)
     if not set(m1_features).issubset(available):
@@ -1035,6 +1051,7 @@ def _bounded_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
             selected.append(variable)
             if not force_included:
                 automatic_count += 1
+    _validate_total_xgb_candidate_count(selected)
     return selected
 
 
@@ -1122,7 +1139,7 @@ def _rows_by_variable(frame: pd.DataFrame) -> dict[str, dict[str, object]]:
     rows: dict[str, dict[str, object]] = {}
     for _, row in frame.iterrows():
         variable = _text(row.get("variable"))
-        if variable not in rows:
+        if variable and variable not in rows:
             rows[variable] = row.to_dict()
     return rows
 

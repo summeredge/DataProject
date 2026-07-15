@@ -346,6 +346,83 @@ def test_total_candidate_limit_counts_unique_non_target_variables_only():
     assert bool(result.loc[result["variable"].eq("x1"), "force_included"].item()) is True
 
 
+def test_auto_candidates_are_normalized_before_stable_deduplication():
+    result = build_xgb_candidate_pool(
+        _summary(
+            [
+                {"variable": "FIC001.PV", "final_rank": 2},
+                {"variable": " FIC001.PV ", "final_rank": 1},
+                {"variable": "FIC002.PV", "final_rank": 3},
+            ]
+        ),
+        target="Y",
+        top_n=2,
+    )
+
+    assert result["variable"].tolist() == ["FIC001.PV", "FIC002.PV"]
+    assert result["variable"].is_unique
+    assert len(result) == result["variable"].nunique()
+    assert result["candidate_order"].tolist() == [1, 2]
+
+
+def test_empty_normalized_variables_do_not_consume_auto_top_n():
+    result = build_xgb_candidate_pool(
+        _summary(
+            [
+                {"variable": "", "final_rank": 1},
+                {"variable": "   ", "final_rank": 2},
+                {"variable": None, "final_rank": 3},
+                {"variable": "X1", "final_rank": 4},
+                {"variable": "X2", "final_rank": 5},
+            ]
+        ),
+        target="Y",
+        top_n=2,
+    )
+
+    assert result["variable"].tolist() == ["X1", "X2"]
+    assert result["candidate_order"].tolist() == [1, 2]
+
+
+def test_normalized_whitelist_deduplicates_overlaps_and_excludes_target():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "X1", "final_rank": 1}]),
+        target="Y",
+        top_n=1,
+        whitelist=[" X1 ", "X1", " X2 ", "X2", " Y "],
+    )
+
+    assert result["variable"].tolist() == ["X1", "X2"]
+    assert result["variable"].is_unique
+    assert result["candidate_order"].tolist() == [1, 2]
+    assert result.loc[0, "selection_source"] == "final_review+whitelist"
+    assert bool(result.loc[0, "force_included"]) is True
+
+
+def test_normalized_duplicates_can_reduce_raw_rows_to_twelve_candidates():
+    summary = _summary(
+        [
+            *[
+                {"variable": f"auto{number}", "final_rank": number}
+                for number in range(1, 11)
+            ],
+            {"variable": " auto1 ", "final_rank": 11},
+            {"variable": "auto2 ", "final_rank": 12},
+        ]
+    )
+
+    result = build_xgb_candidate_pool(
+        summary,
+        target="Y",
+        top_n=10,
+        whitelist=["manual1", " manual1 ", "manual2"],
+    )
+
+    assert len(result) == 12
+    assert result["variable"].is_unique
+    assert result["candidate_order"].tolist() == list(range(1, 13))
+
+
 def test_auto_and_whitelist_overlap_is_one_forced_row_in_auto_position():
     result = build_xgb_candidate_pool(
         _summary([{"variable": "a", "final_rank": 1}, {"variable": "b", "final_rank": 2}]),

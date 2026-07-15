@@ -561,6 +561,40 @@ def test_candidate_limit_uses_first_ten_in_candidate_order(
     assert len([call for call in calls if call["model_name"] == "CANDIDATE"]) == 10
 
 
+def test_direct_uplift_allows_twelve_normalized_unique_candidates(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    pool = _pool([*[f"c{number}" for number in range(10)], " c10 ", "c10", "c11"])
+    pool["force_included"] = [False] * 10 + [True, True, True]
+
+    metrics, summary = run_candidate_uplift_validation(
+        _feature_sets(12), [_splits()[0]], pool
+    )
+
+    assert metrics["variable"].tolist() == [f"c{number}" for number in range(12)]
+    assert set(summary["variable"]) == {f"c{number}" for number in range(12)}
+    assert len([call for call in calls if call["model_name"] == "M1"]) == 1
+    assert len([call for call in calls if call["model_name"] == "CANDIDATE"]) == 12
+
+
+def test_direct_uplift_rejects_thirteen_candidates_before_any_fit(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    pool = _pool([f"c{number}" for number in range(13)])
+    pool["force_included"] = [False] * 10 + [True] * 3
+
+    with pytest.raises(
+        ValueError, match="XGB total candidate count including whitelist must not exceed 12"
+    ):
+        run_candidate_uplift_validation(_feature_sets(13), [_splits()[0]], pool)
+
+    assert calls == []
+
+
 def test_repeated_inputs_produce_identical_results(
     fake_dependency, monkeypatch: pytest.MonkeyPatch
 ):

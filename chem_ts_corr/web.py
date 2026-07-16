@@ -1858,12 +1858,18 @@ INDEX_HTML = r"""<!doctype html>
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
     .trend-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:start; }
     .trend-stats.empty { display:block; color:var(--muted); font-size:var(--font-sm); }
-    .trend-stat-card { border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:10px; }
+    .trend-stat-card { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:10px; }
     .trend-stat-card h3 { margin:0 0 8px; font-size:var(--font-sm); overflow-wrap:anywhere; }
     .trend-stat-card dl { display:grid; gap:4px; margin:0; }
     .trend-stat-card dl div { display:grid; grid-template-columns:80px 1fr; gap:8px; font-size:var(--font-xs); }
     .trend-stat-card dt { color:var(--muted); }
     .trend-stat-card dd { margin:0; color:var(--text); text-align:right; font-variant-numeric:tabular-nums; }
+    .trend-histogram { width:100%; min-width:0; margin-top:10px; }
+    .trend-histogram-title { margin-bottom:4px; color:var(--muted); font-size:var(--font-xs); }
+    .trend-histogram-bars { display:flex; align-items:flex-end; gap:2px; width:100%; min-width:0; height:72px; border-bottom:1px solid var(--line); }
+    .trend-histogram-bar { flex:1 1 0; min-width:0; border-radius:2px 2px 0 0; }
+    .trend-histogram-labels { display:flex; justify-content:space-between; gap:8px; margin-top:3px; color:var(--muted); font-size:var(--font-xs); font-variant-numeric:tabular-nums; }
+    .trend-histogram-empty { display:grid; place-items:center; width:100%; min-width:0; height:72px; color:var(--muted); font-size:var(--font-xs); border:1px dashed var(--line); border-radius:4px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
     .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
@@ -3550,6 +3556,44 @@ function clearTrendStats() {
   node.textContent = "选择数据并点击“显示趋势”后显示统计摘要。";
 }
 
+function trendHistogram(points, requestedBinCount = 12) {
+  const values = (points || [])
+    .map((point) => Number(point.y))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) return { bins: [], min: NaN, max: NaN, count: 0 };
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min === max) return { bins: [{ min, max, count: values.length }], min, max, count: values.length };
+  const binCount = Math.min(requestedBinCount, Math.max(1, Math.ceil(Math.sqrt(values.length))));
+  const binWidth = (max - min) / binCount;
+  const counts = Array(binCount).fill(0);
+  for (const value of values) {
+    const index = Math.min(binCount - 1, Math.floor(((value - min) / (max - min)) * binCount));
+    counts[index] += 1;
+  }
+  const bins = counts.map((count, index) => ({
+    min: min + index * binWidth,
+    max: index === binCount - 1 ? max : min + (index + 1) * binWidth,
+    count,
+  }));
+  return { bins, min, max, count: values.length };
+}
+
+function renderTrendHistogram(points, color, variableName) {
+  const histogram = trendHistogram(points);
+  const safeName = escapeHtml(variableName);
+  if (!histogram.bins.length) {
+    return `<div class="trend-histogram"><div class="trend-histogram-title">数值分布</div><div class="trend-histogram-empty" role="img" aria-label="${safeName} 数值分布：无有效数据">无有效数据</div></div>`;
+  }
+  const maxCount = Math.max(...histogram.bins.map((bin) => bin.count));
+  const bars = histogram.bins.map((bin) => {
+    const height = bin.count ? Math.max(3, (bin.count / maxCount) * 100) : 0;
+    const title = `${formatAxisValue(bin.min)} – ${formatAxisValue(bin.max)}：${bin.count}`;
+    return `<span class="trend-histogram-bar" style="height:${height}%;background:${color}" title="${title}"></span>`;
+  }).join("");
+  return `<div class="trend-histogram"><div class="trend-histogram-title">数值分布</div><div class="trend-histogram-bars" role="img" aria-label="${safeName} 数值分布，共 ${histogram.count} 个有效点，${histogram.bins.length} 个箱">${bars}</div><div class="trend-histogram-labels"><span>${formatAxisValue(histogram.min)}</span><span>${formatAxisValue(histogram.max)}</span></div></div>`;
+}
+
 function renderTrendStats(series) {
   const node = el("trendStats");
   if (!series.length) {
@@ -3566,10 +3610,11 @@ function renderTrendStats(series) {
     ["有效点数/占比", "countRatio"],
   ];
   node.className = "trend-stats";
-  node.innerHTML = series.map((item) => {
+  node.innerHTML = series.map((item, index) => {
     const stats = trendStats(item.points || []);
     const rows = statRows.map(([label, key]) => `<div><dt>${label}</dt><dd>${key === "countRatio" ? formatCountRatio(stats.count, stats.ratio) : formatAxisValue(stats[key])}</dd></div>`).join("");
-    return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl></div>`;
+    const histogram = renderTrendHistogram(item.points || [], trendColors[index % trendColors.length], item.name);
+    return `<div class="trend-stat-card"><h3>${escapeHtml(item.name)}</h3><dl>${rows}</dl>${histogram}</div>`;
   }).join("");
 }
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -48,15 +50,22 @@ def _corr_p_value(r: float, n: int) -> float:
     return float(2 * student_t.sf(t_stat, df))
 
 
-def compute_lag_scores(frame: pd.DataFrame, target: str, max_lag: int) -> pd.DataFrame:
+def compute_lag_scores(
+    frame: pd.DataFrame,
+    target: str,
+    max_lag: int,
+    lag_values: Iterable[int] | None = None,
+) -> pd.DataFrame:
     rows: list[dict[str, float | int | str | bool]] = []
     target_series = frame[target]
+    scan_lags = tuple(range(-max_lag, max_lag + 1)) if lag_values is None else tuple(lag_values)
 
     for variable in frame.columns:
         if variable == target:
             continue
         series = frame[variable]
-        for lag in range(-max_lag, max_lag + 1):
+        for lag in scan_lags:
+            lag = int(lag)
             shifted = series.shift(lag)
             pearson = _safe_corr_stats(shifted, target_series, "pearson")
             spearman = _safe_corr_stats(shifted, target_series, "spearman")

@@ -116,9 +116,21 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     residual_controls = config.residual_control_columns or config.capacity_columns
 
     _progress(progress_callback, "正在计算残差相关")
-    residual = residual_corr_scores(scaled, config.target, residual_controls, config.max_lag)
+    residual = residual_corr_scores(
+        scaled,
+        config.target,
+        residual_controls,
+        config.max_lag,
+        best_lags=best_lags,
+    )
     _progress(progress_callback, "正在计算工况稳定性")
-    regime, stability = regime_scores(scaled, config.target, config.segment_column, config.max_lag)
+    regime, stability = regime_scores(
+        scaled,
+        config.target,
+        config.segment_column,
+        config.max_lag,
+        best_lags=best_lags,
+    )
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
     if config.skip_model_lift:

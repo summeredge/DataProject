@@ -149,7 +149,13 @@ def diagnostics(frame: pd.DataFrame, roles: dict[str, str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: list[str] | None, max_lag: int) -> pd.DataFrame:
+def residual_corr_scores(
+    frame: pd.DataFrame,
+    target: str,
+    capacity_columns: list[str] | None,
+    max_lag: int,
+    best_lags: Mapping[str, int] | None = None,
+) -> pd.DataFrame:
     out_cols = ["variable", "lag", "residual_corr", "residual_p_value", "residual_r2", "direction", "residual_method", "condition_number", "used_control_columns"]
     capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
     if not capacity_columns:
@@ -163,12 +169,19 @@ def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: lis
         pair = pd.DataFrame({target: target_residual, column: candidate_residual}).dropna()
         if len(pair) < max(10, max_lag + 5):
             continue
-        scores_for_candidate = compute_lag_scores(pair, target, max_lag)
-        if not scores_for_candidate.empty:
-            all_scores.append(scores_for_candidate)
+        best = _best_lag_review_scores(
+            pair,
+            target,
+            max_lag,
+            (best_lags or {}).get(column),
+        )
+        if not best.empty:
+            all_scores.append(best)
     if not all_scores:
         return pd.DataFrame(columns=out_cols)
-    scores = summarize_best_lags(pd.concat(all_scores, ignore_index=True))
+    scores = pd.concat(all_scores, ignore_index=True).sort_values(
+        "score", ascending=False
+    ).reset_index(drop=True)
     if scores.empty:
         return pd.DataFrame(columns=out_cols)
     out = scores.rename(columns={"score": "residual_corr", "p_value": "residual_p_value", "r2": "residual_r2"})
@@ -181,7 +194,13 @@ def residual_corr_scores(frame: pd.DataFrame, target: str, capacity_columns: lis
     return out[out_cols]
 
 
-def regime_scores(frame: pd.DataFrame, target: str, capacity_column: str | None, max_lag: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+def regime_scores(
+    frame: pd.DataFrame,
+    target: str,
+    capacity_column: str | None,
+    max_lag: int,
+    best_lags: Mapping[str, int] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     score_cols = ["variable", "regime", "regime_row_count", "score", "signed_corr", "lag", "direction", "p_value", "r2"]
     if not capacity_column or capacity_column not in frame.columns:
         return pd.DataFrame(columns=score_cols), pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
@@ -199,18 +218,79 @@ def regime_scores(frame: pd.DataFrame, target: str, capacity_column: str | None,
     for name, subset in regimes.items():
         if len(subset) < max(10, max_lag + 5):
             continue
-        best = summarize_best_lags(compute_lag_scores(subset, target, max_lag))
-        if best.empty:
-            continue
-        best["signed_corr"] = np.where(best["method"].eq("pearson"), best["pearson"], best["spearman"])
-        best = best.assign(regime=name, regime_row_count=len(subset))
-        all_rows.append(best[score_cols])
+        regime_rows: list[pd.DataFrame] = []
+        for column in subset.columns:
+            if column == target:
+                continue
+            best = _best_lag_review_scores(
+                subset[[target, column]],
+                target,
+                max_lag,
+                (best_lags or {}).get(column),
+            )
+            if best.empty:
+                continue
+            best["signed_corr"] = np.where(best["method"].eq("pearson"), best["pearson"], best["spearman"])
+            best = best.assign(regime=name, regime_row_count=len(subset))
+            regime_rows.append(best[score_cols])
+        if regime_rows:
+            all_rows.append(
+                pd.concat(regime_rows, ignore_index=True)
+                .sort_values("score", ascending=False)
+                .reset_index(drop=True)
+            )
 
     if not all_rows:
         return pd.DataFrame(columns=score_cols), pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
 
     scores = pd.concat(all_rows, ignore_index=True)
     return scores, _summarize_regime_robustness(scores, max_lag)
+
+
+def _best_lag_review_scores(
+    pair: pd.DataFrame,
+    target: str,
+    max_lag: int,
+    primary_best_lag,
+) -> pd.DataFrame:
+    limit = max(0, int(max_lag))
+    if limit == 0:
+        return summarize_best_lags(compute_lag_scores(pair, target, limit, lag_values=[0]))
+
+    primary_lag = _valid_primary_lag(primary_best_lag, limit)
+    if primary_lag is None or abs(primary_lag) == limit:
+        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+
+    radius = min(limit, max(3, int(np.ceil(limit * 0.05))))
+    lower = max(-limit, primary_lag - radius)
+    upper = min(limit, primary_lag + radius)
+    best = summarize_best_lags(
+        compute_lag_scores(pair, target, max_lag, lag_values=range(lower, upper + 1))
+    )
+    if best.empty:
+        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+
+    best_lag = int(best.iloc[0]["lag"])
+    touches_local_boundary = (
+        (best_lag == lower and lower != -limit)
+        or (best_lag == upper and upper != limit)
+    )
+    if touches_local_boundary:
+        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+    return best
+
+
+def _valid_primary_lag(value, max_lag: int) -> int | None:
+    if value is None or isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric) or not numeric.is_integer():
+        return None
+    lag = int(numeric)
+    return lag if abs(lag) <= max_lag else None
 
 
 def _summarize_regime_robustness(scores: pd.DataFrame, max_lag: int) -> pd.DataFrame:

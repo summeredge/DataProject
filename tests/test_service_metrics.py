@@ -91,6 +91,8 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
     )
     captured = {}
     original_prepare = screening.prepare_best_lag_evidence
+    original_residual = screening.residual_corr_scores
+    original_regime = screening.regime_scores
     original_rolling = screening.rolling_corr_scores
 
     def capture_prepare(frame, *args, ranked_source_frame=None, **kwargs):
@@ -111,7 +113,17 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
             **kwargs,
         )
 
+    def capture_residual(*args, best_lags=None, **kwargs):
+        captured["residual_best_lags"] = best_lags
+        return original_residual(*args, best_lags=best_lags, **kwargs)
+
+    def capture_regime(*args, best_lags=None, **kwargs):
+        captured["regime_best_lags"] = best_lags
+        return original_regime(*args, best_lags=best_lags, **kwargs)
+
     monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_prepare)
+    monkeypatch.setattr(screening, "residual_corr_scores", capture_residual)
+    monkeypatch.setattr(screening, "regime_scores", capture_regime)
     monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
     monkeypatch.setattr(
         screening,
@@ -124,6 +136,11 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
     analyze_numeric_frame(frame, config)
 
     assert captured["evidence"]
+    expected_best_lags = {
+        variable: item["best_lag"] for variable, item in captured["evidence"].items()
+    }
+    assert captured["residual_best_lags"] == expected_best_lags
+    assert captured["regime_best_lags"] == expected_best_lags
     assert captured["frame"] is captured["ranked_source_frame"]
     assert set(captured["evidence"]) == {"x1", "x2"}
     assert {item["source"] for item in captured["evidence"].values()} == {"ranked"}

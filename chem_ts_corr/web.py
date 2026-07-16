@@ -1866,8 +1866,10 @@ INDEX_HTML = r"""<!doctype html>
     .trend-stat-card dd { margin:0; color:var(--text); text-align:right; font-variant-numeric:tabular-nums; }
     .trend-histogram { width:100%; min-width:0; margin-top:10px; }
     .trend-histogram-title { margin-bottom:4px; color:var(--muted); font-size:var(--font-xs); }
-    .trend-histogram-bars { display:flex; align-items:flex-end; gap:2px; width:100%; min-width:0; height:72px; border-bottom:1px solid var(--line); }
-    .trend-histogram-bar { flex:1 1 0; min-width:0; border-radius:2px 2px 0 0; }
+    .trend-histogram-bars { position:relative; display:flex; align-items:flex-end; gap:2px; width:100%; min-width:0; height:72px; overflow:hidden; border-bottom:1px solid var(--line); }
+    .trend-histogram-bar { position:relative; z-index:1; flex:1 1 0; min-width:0; opacity:.58; border-radius:2px 2px 0 0; }
+    .trend-histogram-curve { position:absolute; inset:0; z-index:2; width:100%; min-width:0; height:100%; pointer-events:none; }
+    .trend-histogram-curve polyline { fill:none; stroke-width:2; vector-effect:non-scaling-stroke; }
     .trend-histogram-labels { display:flex; justify-content:space-between; gap:8px; margin-top:3px; color:var(--muted); font-size:var(--font-xs); font-variant-numeric:tabular-nums; }
     .trend-histogram-empty { display:grid; place-items:center; width:100%; min-width:0; height:72px; color:var(--muted); font-size:var(--font-xs); border:1px dashed var(--line); border-radius:4px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
@@ -3560,10 +3562,12 @@ function trendHistogram(points, requestedBinCount = 12) {
   const values = (points || [])
     .map((point) => Number(point.y))
     .filter((value) => Number.isFinite(value));
-  if (!values.length) return { bins: [], min: NaN, max: NaN, count: 0 };
+  if (!values.length) return { bins: [], min: NaN, max: NaN, mean: NaN, stddev: NaN, count: 0 };
   const min = Math.min(...values);
   const max = Math.max(...values);
-  if (min === max) return { bins: [{ min, max, count: values.length }], min, max, count: values.length };
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const stddev = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length);
+  if (min === max) return { bins: [{ min, max, count: values.length }], min, max, mean, stddev, count: values.length };
   const binCount = Math.min(requestedBinCount, Math.max(1, Math.ceil(Math.sqrt(values.length))));
   const binWidth = (max - min) / binCount;
   const counts = Array(binCount).fill(0);
@@ -3576,7 +3580,19 @@ function trendHistogram(points, requestedBinCount = 12) {
     max: index === binCount - 1 ? max : min + (index + 1) * binWidth,
     count,
   }));
-  return { bins, min, max, count: values.length };
+  return { bins, min, max, mean, stddev, count: values.length };
+}
+
+function trendNormalCurve(histogram, sampleCount = 40) {
+  if (!Number.isFinite(histogram.mean) || !Number.isFinite(histogram.stddev) || histogram.stddev <= 0 || histogram.min === histogram.max) return "";
+  const peakDensity = 1 / (histogram.stddev * Math.sqrt(2 * Math.PI));
+  return Array.from({ length: sampleCount + 1 }, (_, index) => {
+    const ratio = index / sampleCount;
+    const value = histogram.min + (histogram.max - histogram.min) * ratio;
+    const z = (value - histogram.mean) / histogram.stddev;
+    const density = peakDensity * Math.exp(-0.5 * z ** 2);
+    return `${(ratio * 100).toFixed(2)},${(100 - (density / peakDensity) * 100).toFixed(2)}`;
+  }).join(" ");
 }
 
 function renderTrendHistogram(points, color, variableName) {
@@ -3591,7 +3607,10 @@ function renderTrendHistogram(points, color, variableName) {
     const title = `${formatAxisValue(bin.min)} – ${formatAxisValue(bin.max)}：${bin.count}`;
     return `<span class="trend-histogram-bar" style="height:${height}%;background:${color}" title="${title}"></span>`;
   }).join("");
-  return `<div class="trend-histogram"><div class="trend-histogram-title">数值分布</div><div class="trend-histogram-bars" role="img" aria-label="${safeName} 数值分布，共 ${histogram.count} 个有效点，${histogram.bins.length} 个箱">${bars}</div><div class="trend-histogram-labels"><span>${formatAxisValue(histogram.min)}</span><span>${formatAxisValue(histogram.max)}</span></div></div>`;
+  const curvePoints = trendNormalCurve(histogram);
+  const curve = curvePoints ? `<svg class="trend-histogram-curve" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${curvePoints}" stroke="${color}"/></svg>` : "";
+  const curveLabel = curvePoints ? "，含拟合正态分布曲线" : "";
+  return `<div class="trend-histogram"><div class="trend-histogram-title">数值分布</div><div class="trend-histogram-bars" role="img" aria-label="${safeName} 数值分布，共 ${histogram.count} 个有效点，${histogram.bins.length} 个箱${curveLabel}">${bars}${curve}</div><div class="trend-histogram-labels"><span>${formatAxisValue(histogram.min)}</span><span>${formatAxisValue(histogram.max)}</span></div></div>`;
 }
 
 function renderTrendStats(series) {

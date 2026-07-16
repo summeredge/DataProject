@@ -22,6 +22,7 @@ def test_trend_stats_and_axis_helpers_are_present():
     required = [
         'trendStats',
         'trendHistogram',
+        'trendNormalCurve',
         'renderTrendHistogram',
         'renderTrendStats',
         'trend-stat-card',
@@ -83,7 +84,7 @@ def test_each_trend_stat_card_contains_histogram_from_item_points_and_line_color
 
 
 def test_trend_histogram_filters_numeric_finite_values():
-    source = _function_source("trendHistogram", "renderTrendHistogram")
+    source = _function_source("trendHistogram", "trendNormalCurve")
 
     assert "(points || [])" in source
     assert ".map((point) => Number(point.y))" in source
@@ -91,7 +92,7 @@ def test_trend_histogram_filters_numeric_finite_values():
 
 
 def test_trend_histogram_handles_empty_constant_and_max_value_boundaries():
-    source = _function_source("trendHistogram", "renderTrendHistogram")
+    source = _function_source("trendHistogram", "trendNormalCurve")
     render_source = _function_source("renderTrendHistogram", "renderTrendStats")
 
     assert "if (!values.length)" in source
@@ -106,6 +107,19 @@ def test_trend_histogram_handles_empty_constant_and_max_value_boundaries():
     assert "requestedBinCount = 12" in INDEX_HTML
 
 
+def test_trend_normal_curve_uses_fitted_mean_and_population_stddev():
+    histogram_source = _function_source("trendHistogram", "trendNormalCurve")
+    curve_source = _function_source("trendNormalCurve", "renderTrendHistogram")
+
+    assert "const mean = values.reduce" in histogram_source
+    assert "(value - mean) ** 2" in histogram_source
+    assert "histogram.stddev <= 0" in curve_source
+    assert "histogram.min === histogram.max" in curve_source
+    assert "Math.sqrt(2 * Math.PI)" in curve_source
+    assert "Math.exp(-0.5 * z ** 2)" in curve_source
+    assert "sampleCount = 40" in INDEX_HTML
+
+
 def test_trend_histogram_has_safe_accessible_labels_and_formatted_bounds():
     source = _function_source("renderTrendHistogram", "renderTrendStats")
 
@@ -116,12 +130,16 @@ def test_trend_histogram_has_safe_accessible_labels_and_formatted_bounds():
     assert "formatAxisValue(histogram.min)" in source
     assert "formatAxisValue(histogram.max)" in source
     assert 'title="${title}"' in source
+    assert 'class="trend-histogram-curve"' in source
+    assert '<polyline points="${curvePoints}" stroke="${color}"/>' in source
+    assert "含拟合正态分布曲线" in source
 
 
 def test_trend_histogram_width_and_flex_contract():
     histogram_rule = _css_rule(".trend-histogram")
     bars_rule = _css_rule(".trend-histogram-bars")
     bar_rule = _css_rule(".trend-histogram-bar")
+    curve_rule = _css_rule(".trend-histogram-curve")
     card_rule = _css_rule(".trend-stat-card")
 
     assert "width:100%" in histogram_rule
@@ -131,6 +149,10 @@ def test_trend_histogram_width_and_flex_contract():
     assert "display:flex" in bars_rule
     assert "height:72px" in bars_rule
     assert "flex:1 1 0" in bar_rule
+    assert "position:absolute" in curve_rule
+    assert "width:100%" in curve_rule
+    assert "min-width:0" in curve_rule
+    assert "height:100%" in curve_rule
     assert "min-width:0" in card_rule
     assert "overflow:hidden" in card_rule
 
@@ -140,7 +162,6 @@ def test_trend_histogram_uses_native_markup_without_new_api_or_dependency():
 
     assert "fetch(" not in source
     assert "canvas" not in source
-    assert "<svg" not in source
     assert "/api/" not in source
     for dependency in ["plotly", "chart.js", "echarts", "d3.js"]:
         assert dependency not in INDEX_HTML.lower()

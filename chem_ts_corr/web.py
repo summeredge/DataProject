@@ -1765,14 +1765,12 @@ INDEX_HTML = r"""<!doctype html>
     section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; }
     .controls { display:grid; gap:10px; align-content:start; font-size:80%; }
     .control-group { display:grid; gap:8px; padding:10px; border:1px solid var(--line-soft); border-radius:8px; background:var(--surface-muted); }
-    .card { display:grid; gap:10px; border:1px solid var(--line); border-radius:8px; padding:10px; background:var(--surface-muted); }
     .grid { display:grid; grid-template-columns:repeat(2, minmax(160px, 1fr)); gap:10px; align-items:end; }
-    .secondary-validation-params { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:end; }
+    .secondary-validation-params, .causal-review-params { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; align-items:end; }
     .control-group-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-    .causal-review-params { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; }
     label.checkbox-row { display:flex; align-items:center; align-self:end; gap:8px; min-height:31px; }
     label.checkbox-row input[type="checkbox"] { width:auto; margin:0; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
@@ -2125,34 +2123,32 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
-        <div class="card">
-          <h3>二次验证参数</h3>
-          <div class="help">
-            <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
-            <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
-            <span>原始数据：不重采样；继承主筛查：使用主筛查的分钟间隔；自定义：只填写分钟整数。二次验证仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；若改用原始采样，请按原始采样间隔重新填写最大滞后点数。</span>
-          </div>
-          <div class="secondary-validation-params">
-            <label>二次验证补充变量（白名单）
-              <details id="secondaryIncludeDropdown" class="multi-dropdown">
-                <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
-                <div id="secondaryIncludeOptions" class="multi-options"></div>
-              </details>
-            </label>
-            <label>二次验证重采样
-              <select id="secondaryResampleMode">
-                <option value="raw" selected>原始数据（不重采样）</option>
-                <option value="inherit">继承主筛查</option>
-                <option value="custom">自定义</option>
-              </select>
-            </label>
-            <label>二次验证自定义重采样间隔（分钟）
-              <input id="secondaryResampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 2 或 5，仅自定义时使用">
-            </label>
-            <label>二次验证最大滞后点数
-              <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
-            </label>
-          </div>
+        <h2>二次验证</h2>
+        <div class="help">
+          <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
+          <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
+          <span>原始数据：不重采样；继承主筛查：使用主筛查的分钟间隔；自定义：只填写分钟整数。二次验证仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；若改用原始采样，请按原始采样间隔重新填写最大滞后点数。</span>
+        </div>
+        <div class="secondary-validation-params">
+          <label>二次验证补充变量（白名单）
+            <details id="secondaryIncludeDropdown" class="multi-dropdown">
+              <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
+              <div id="secondaryIncludeOptions" class="multi-options"></div>
+            </details>
+          </label>
+          <label>二次验证重采样
+            <select id="secondaryResampleMode">
+              <option value="raw" selected>原始数据（不重采样）</option>
+              <option value="inherit">继承主筛查</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <label>二次验证自定义重采样间隔（分钟）
+            <input id="secondaryResampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 2 或 5，仅自定义时使用">
+          </label>
+          <label>二次验证最大滞后点数
+            <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
+          </label>
         </div>
         <div class="actions">
           <button id="runEnhancedScreening" disabled>运行增强筛选</button>
@@ -2204,13 +2200,8 @@ INDEX_HTML = r"""<!doctype html>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>保守复核报告</h2>
-        <div class="help">旧版保守复核报告用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
-        <div class="download-buttons" id="causalReportDownload"></div>
-        <div id="causalReviewTable" class="empty">未运行 三层复核。</div>
         <h2>最终推荐摘要</h2>
         <div class="help">该表基于逐变量综合证据复核表生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
-        <div class="help">旧版保守复核报告仍保留在下载文件 causal_review_report.csv 中，主要用于调试和规则对照；页面优先展示逐变量综合证据复核表和最终推荐摘要。</div>
         <div class="download-buttons" id="finalReviewSummaryDownload"></div>
         <h3>最终推荐结果质检总览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
@@ -2325,7 +2316,6 @@ let lastEnhancedSummaryRows = [];
 let lastEnhancedLiftRows = [];
 let lastEnhancedRollingRows = [];
 let lastConditionalRows = [];
-let lastCausalReportRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
 let lastXgbModelSummaryRows = [];
@@ -2633,7 +2623,6 @@ function renderAnalysisResult(data) {
   lastEnhancedLiftRows = hasEnhancedScreening ? (data.modelLiftScores || []) : [];
   lastEnhancedRollingRows = hasEnhancedScreening ? (data.rollingCorrScores || []) : [];
   lastConditionalRows = [];
-  lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
@@ -2794,7 +2783,6 @@ async function runCausalReview() {
     form.append("conditional_baseline_maxlag", el("conditionalBaselineMaxlag").value);
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
-    lastCausalReportRows = data.causalReviewReport || [];
     lastCausalEvidenceRows = data.causalReviewEvidence || [];
     lastFinalReviewSummaryRows = data.finalReviewSummary || [];
     tableSortStates["finalReviewSummaryTable"] = { column: "final_rank", direction: "asc" };
@@ -4300,7 +4288,6 @@ function missingText(targetId) {
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示补充候选。";
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
-  if (targetId === "causalReviewTable") return "未运行 三层复核。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
@@ -4393,10 +4380,6 @@ function renderXgbRunSummary(summary) {
   ).join("");
 }
 
-function causalReviewColumns() {
-  return ["variable", "candidate_grade", "final_score", "review_tier", "review_priority", "final_review_decision", "final_review_reason", "predictive_contribution", "risk_flags", "conditional_granger_status", "conditional_best_lag", "conditional_min_p_value", "conditional_fdr_q_value", "interpretation"];
-}
-
 const FINAL_SUMMARY_CORE_COLUMNS = [
   "final_rank",
   "variable",
@@ -4479,41 +4462,6 @@ function renderCausalReviewEvidenceTable(rows) {
   });
 }
 
-function renderCausalReviewTable(targetId, rows) {
-  const container = el(targetId);
-  if (!container) return;
-  if (!rows.length) {
-    container.className = "empty";
-    container.textContent = missingText(targetId);
-    return;
-  }
-  const columns = causalReviewColumns().filter((column) => column in rows[0]);
-  ensureTableSortState(targetId, columns[0]);
-  const displayRows = sortedRowsForTable(targetId, rows);
-  const table = document.createElement("table");
-  const header = document.createElement("thead");
-  header.innerHTML = `<tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr>`;
-  table.appendChild(header);
-  const body = document.createElement("tbody");
-  for (const row of displayRows) {
-    const tr = document.createElement("tr");
-    for (const column of columns) {
-      const td = document.createElement("td");
-      td.className = tableCellClass(column, row[column]);
-      td.innerHTML = formatReviewCell(column, row[column]);
-      tr.appendChild(td);
-    }
-    body.appendChild(tr);
-  }
-  table.appendChild(body);
-  attachSortableHeaders(table, targetId, () => renderCausalReviewTable(targetId, rows));
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-  wrap.appendChild(table);
-  container.className = "";
-  container.replaceChildren(wrap);
-}
-
 function cellHtml(column, value, formatter = null) {
   const rendered = formatter ? formatter(column, value) : escapeHtml(formatCellValue(column, value));
   const title = cellTitle(column, value);
@@ -4525,15 +4473,6 @@ function cellTitle(column, value) {
     return "数据证据强，但统计检验受到高共线性、闭环、共同负荷或滞后边界限制；应优先人工复核，但不是因果结论。";
   }
   return "";
-}
-
-function formatReviewCell(column, value) {
-  if (column === "final_review_decision") {
-    const raw = String(value || "");
-    return `<span class="decision-badge decision-${escapeHtml(raw)}">${escapeHtml(formatCellValue(column, raw))}</span>`;
-  }
-  if (column === "risk_flags") return escapeHtml(formatRiskFlags(value));
-  return escapeHtml(formatCellValue(column, value));
 }
 
 function formatCellValue(column, value) {
@@ -4588,7 +4527,6 @@ function formatCellValue(column, value) {
 
 function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
-  renderDownloadTarget("causalReportDownload", downloads, "causal_review_report.csv");
   renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
 }
@@ -5026,7 +4964,6 @@ function reset() {
   lastEnhancedLiftRows = [];
   lastEnhancedRollingRows = [];
   lastConditionalRows = [];
-  lastCausalReportRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
@@ -5107,7 +5044,6 @@ function reset() {
   el("enhancedRollingTable").className = "empty";
   el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
   resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
-  resetOptionalTable("causalReviewTable", "未运行 三层复核。");
   clearOptionalElement("finalReviewQualityOverview");
   resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
   closeDetailModal();

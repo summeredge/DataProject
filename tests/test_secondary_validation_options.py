@@ -730,7 +730,7 @@ def test_secondary_max_lag_does_not_fallback_to_primary_max_lag_in_frontend():
     assert 'secondaryMaxLag").value || el("maxLag").value' not in function_body
 
 
-def test_index_html_defines_secondary_validation_card_grid_styles():
-    assert ".card {" in INDEX_HTML
+def test_index_html_defines_secondary_validation_grid_styles():
+    assert ".secondary-validation-params, .causal-review-params" in INDEX_HTML
     assert ".grid {" in INDEX_HTML
     assert "grid-template-columns:repeat(2, minmax(160px, 1fr))" in INDEX_HTML

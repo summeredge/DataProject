@@ -17,14 +17,33 @@ def test_report_page_hides_prompt_controls_and_raw_editor():
         assert marker not in INDEX_HTML
 
 
-def test_report_page_keeps_rendered_report_download_area():
-    """The cleanup must keep the rendered report table and report download target."""
+def test_three_layer_review_keeps_formal_result_download_areas():
+    """The cleanup must keep the formal result tables and download targets."""
     kept_markup = [
-        'id="causalReviewTable"',
-        'id="causalReportDownload"',
-        "renderCausalReviewTable",
+        'id="conditionalGrangerTable"',
+        'id="finalReviewSummaryTable"',
+        'id="causalReviewEvidenceTable"',
+        'id="conditionalDownload"',
+        'id="finalReviewSummaryDownload"',
+        'id="causalEvidenceDownload"',
         "renderReviewDownloads",
     ]
 
     for marker in kept_markup:
         assert marker in INDEX_HTML
+
+
+def test_validation_headers_match_and_legacy_review_ui_is_removed():
+    assert '<h2>二次验证</h2>' in INDEX_HTML
+    assert '<h2>三层复核</h2>' in INDEX_HTML
+    assert ".secondary-validation-params, .causal-review-params" in INDEX_HTML
+
+    removed_markup = [
+        "二次验证" + "参数",
+        "保守复核" + "报告",
+        "旧版保守复核" + "报告",
+        'id="causalReviewTable"',
+        'id="causalReportDownload"',
+    ]
+    for marker in removed_markup:
+        assert marker not in INDEX_HTML

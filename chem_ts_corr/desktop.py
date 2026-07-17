@@ -6,17 +6,17 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
-from pathlib import Path
 from typing import NoReturn
 from urllib.request import urlopen
+
+from chem_ts_corr.paths import desktop_log_path
 
 
 HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 15
 SERVICE_START_ATTEMPTS = 3
-SERVICE_LOG_PATH = Path(tempfile.gettempdir()) / "chem-ts-corr" / "desktop-launcher.log"
+SERVICE_LOG_PATH = desktop_log_path()
 
 
 def _available_port() -> int:
@@ -34,22 +34,27 @@ def _start_service(port: int) -> subprocess.Popen[bytes]:
     else:
         kwargs["start_new_session"] = True
     SERVICE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        "--desktop-service",
+        "--host",
+        HOST,
+        "--port",
+        str(port),
+    ] if getattr(sys, "frozen", False) else [
+        sys.executable,
+        "-m",
+        "chem_ts_corr.cli",
+        "serve",
+        "--host",
+        HOST,
+        "--port",
+        str(port),
+        "--no-open",
+    ]
     with SERVICE_LOG_PATH.open("wb") as log_file:
         kwargs["stdout"] = log_file
-        return subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "chem_ts_corr.cli",
-                "serve",
-                "--host",
-                HOST,
-                "--port",
-                str(port),
-                "--no-open",
-            ],
-            **kwargs,
-        )
+        return subprocess.Popen(command, **kwargs)
 
 
 def _service_error(process: subprocess.Popen[bytes]) -> str:
@@ -140,4 +145,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 6 and sys.argv[1] == "--desktop-service":
+        from chem_ts_corr.web import run_server
+
+        run_server(host=sys.argv[3], port=int(sys.argv[5]), open_browser=False)
+    else:
+        main()

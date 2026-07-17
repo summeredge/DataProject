@@ -5,10 +5,11 @@ The web page is embedded in chem_ts_corr.web.INDEX_HTML, so this project has no
 runtime template/static/config data directories to add to datas.
 """
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 
 datas = []
+binaries = collect_dynamic_libs("xgboost")
 hiddenimports = (
     collect_submodules("webview")
     + collect_submodules("sklearn")
@@ -16,6 +17,12 @@ hiddenimports = (
     + collect_submodules("matplotlib")
     + collect_submodules("shap")
     + collect_submodules("xgboost")
+    + [
+        "openpyxl",
+        "xlrd",
+        "pandas.io.excel._openpyxl",
+        "pandas.io.excel._xlrd",
+    ]
 )
 datas += collect_data_files("matplotlib")
 datas += collect_data_files("shap")
@@ -24,7 +31,7 @@ datas += collect_data_files("xgboost")
 a = Analysis(
     ["chem_ts_corr/desktop.py"],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

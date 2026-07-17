@@ -12,7 +12,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 & python --version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& python -c "import PyInstaller, webview, sklearn, statsmodels, matplotlib, shap, xgboost"
+& python -c "import PyInstaller, webview, sklearn, statsmodels, matplotlib, shap, xgboost, openpyxl, xlrd"
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'Packaging dependencies are missing. Run: python -m pip install -e .[full,xgb] pyinstaller'
     exit $LASTEXITCODE
@@ -28,4 +28,20 @@ if (-not (Test-Path (Join-Path $Release 'ChemTsCorr.exe'))) {
     Write-Error "Build did not produce $Release\ChemTsCorr.exe"
     exit 1
 }
+
+$XgboostDlls = Get-ChildItem -Path $Release -Filter '*xgboost*.dll' -Recurse -File
+if (-not $XgboostDlls) {
+    Write-Error "Packaged XGBoost DLL is missing from $Release"
+    exit 1
+}
+Write-Host "XGBoost DLL check passed: $($XgboostDlls.FullName -join ', ')"
+
+& (Join-Path $Release 'ChemTsCorr.exe') --module-check
+if ($LASTEXITCODE -ne 0) {
+    Write-Error 'Packaged module check failed (XGBoost, SHAP, openpyxl, or xlrd).'
+    exit $LASTEXITCODE
+}
+
+$ReleaseSize = (Get-ChildItem -Path $Release -Recurse -File | Measure-Object -Property Length -Sum).Sum
+Write-Host ('Release size: {0:N2} MB' -f ($ReleaseSize / 1MB))
 Write-Host "Build succeeded. Release directory: $Release"

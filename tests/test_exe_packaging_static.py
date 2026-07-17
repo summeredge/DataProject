@@ -27,5 +27,17 @@ def test_smoke_script_uses_sufficient_data_and_validates_desktop_readiness():
     assert "0..49" in smoke_script
     assert "Wait-ForDesktopService" in smoke_script
     assert "Wait-ForUrl \"$baseUrl/\"" in smoke_script
-    assert "Wait-ForProcessExit $service.ProcessId" in smoke_script
-    assert "Desktop service port $($service.Port) is still in use" in smoke_script
+    assert "CloseMainWindow" in smoke_script
+    assert "Wait-ForProcessExit $desktop 'Desktop main process'" in smoke_script
+    assert "Wait-ForDesktopServiceExit $service" in smoke_script
+    assert "Desktop service dynamic port $($service.Port) was released" in smoke_script
+    assert "$samplePath = $null" in smoke_script
+    assert "$downloadPath = $null" in smoke_script
+
+    normal_desktop = smoke_script.split("function Test-NormalDesktop", 1)[1].split("& $ExePath --module-check", 1)[0]
+    normal_shutdown, normal_finally = normal_desktop.split("} finally {", 1)
+    assert "CloseMainWindow" in normal_shutdown
+    assert "Wait-ForProcessExit $desktop 'Desktop main process'" in normal_shutdown
+    assert "Wait-ForDesktopServiceExit $service" in normal_shutdown
+    assert "taskkill" not in normal_shutdown
+    assert "taskkill" in normal_finally

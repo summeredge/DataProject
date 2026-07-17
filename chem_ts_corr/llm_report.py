@@ -9,8 +9,9 @@ from typing import Any
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_RUNS_DIR = PROJECT_ROOT / "reports" / "web_runs"
+from chem_ts_corr.paths import user_data_dir
+
+DEFAULT_RUNS_DIR = user_data_dir() / "web_runs"
 
 PACKAGE_KEYS = [
     "meta",

@@ -20,6 +20,33 @@ def test_available_port_is_loopback_only():
     assert desktop.HOST == "127.0.0.1"
 
 
+def test_frozen_launcher_starts_packaged_service_mode(monkeypatch, tmp_path):
+    captured = {}
+
+    class Process:
+        pass
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "C:/ChemTsCorr/ChemTsCorr.exe")
+    monkeypatch.setattr(desktop, "SERVICE_LOG_PATH", tmp_path / "desktop-launcher.log")
+    monkeypatch.setattr(
+        desktop.subprocess,
+        "Popen",
+        lambda command, **kwargs: captured.update(command=command, kwargs=kwargs) or Process(),
+    )
+
+    desktop._start_service(43210)
+
+    assert captured["command"] == [
+        "C:/ChemTsCorr/ChemTsCorr.exe",
+        "--desktop-service",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "43210",
+    ]
+
+
 def test_main_stops_service_after_window_closes(monkeypatch):
     calls = []
     webview = SimpleNamespace(

@@ -31,6 +31,7 @@ from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
+from chem_ts_corr.paths import user_data_dir
 
 
 def AnalysisConfig(
@@ -49,9 +50,9 @@ def AnalysisConfig(
     )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RUNS_DIR = PROJECT_ROOT / "reports" / "web_runs"
-UPLOADS_DIR = PROJECT_ROOT / "reports" / "uploads"
+USER_DATA_DIR = user_data_dir()
+RUNS_DIR = USER_DATA_DIR / "web_runs"
+UPLOADS_DIR = USER_DATA_DIR / "uploads"
 DOWNLOAD_FILES = {
     "summary.md",
     "ranked_features.csv",

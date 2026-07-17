@@ -49,13 +49,19 @@ function Wait-ForProcessExit([System.Diagnostics.Process]$Process, [string]$Desc
     throw "$Description (PID $($Process.Id)) did not exit."
 }
 
+function Get-MatchingDesktopService($Service) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)" -ErrorAction SilentlyContinue
+    if ($process -and $process.ProcessId -eq $Service.ProcessId -and $process.Name -eq $Service.Name -and
+        $process.CreationDate -eq $Service.CreationDate -and $process.CommandLine -eq $Service.CommandLine) {
+        return $process
+    }
+    return $null
+}
+
 function Wait-ForDesktopServiceExit($Service) {
     $deadline = (Get-Date).AddSeconds(10)
     do {
-        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)" -ErrorAction SilentlyContinue
-        if (-not $process -or $process.Name -ne $Service.Name -or $process.CreationDate -ne $Service.CreationDate -or $process.CommandLine -ne $Service.CommandLine) {
-            return
-        }
+        if (-not (Get-MatchingDesktopService $Service)) { return }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
     throw "Desktop service (PID $($Service.ProcessId)) did not exit."
@@ -64,6 +70,8 @@ function Wait-ForDesktopServiceExit($Service) {
 function Test-NormalDesktop {
     $desktop = Start-Process -FilePath $ExePath -PassThru
     $service = $null
+    $originalFailure = $null
+    $cleanupFailure = $null
     try {
         $service = Wait-ForDesktopService $desktop
         $baseUrl = "http://127.0.0.1:$($service.Port)"
@@ -80,13 +88,46 @@ function Test-NormalDesktop {
             throw "Desktop service port $($service.Port) is still in use after normal desktop shutdown."
         }
         Write-Host "Desktop service dynamic port $($service.Port) was released."
+    } catch {
+        $originalFailure = $_
     } finally {
         if (-not $desktop.HasExited) {
-            Write-Host 'Desktop normal shutdown failed; forced process-tree cleanup executed.'
-            & taskkill /PID $desktop.Id /T /F | Out-Null
-            Wait-ForProcessExit $desktop 'Desktop main process after forced cleanup'
+            try {
+                Write-Host 'Desktop normal shutdown failed; forced process-tree cleanup executed.'
+                & taskkill /PID $desktop.Id /T /F | Out-Null
+                Wait-ForProcessExit $desktop 'Desktop main process after forced cleanup'
+            } catch {
+                $cleanupFailure = $_
+                Write-Host "Desktop main process cleanup failed: $($_.Exception.Message)"
+            }
+        }
+        if ($service) {
+            $matchingService = Get-MatchingDesktopService $service
+            if ($matchingService) {
+                try {
+                    Write-Host '发现残留桌面服务，执行单独兜底清理。'
+                    & taskkill /PID $service.ProcessId /T /F | Out-Null
+                    Wait-ForDesktopServiceExit $service
+                } catch {
+                    $cleanupFailure = $_
+                    Write-Host "Desktop service cleanup failed: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Host 'Desktop service PID was reused or its identity changed; skipping cleanup.'
+            }
+            try {
+                if (Get-NetTCPConnection -LocalPort $service.Port -State Listen -ErrorAction SilentlyContinue) {
+                    throw "Desktop service port $($service.Port) is still in use after fallback cleanup."
+                }
+                Write-Host "Desktop service dynamic port $($service.Port) was released after fallback cleanup."
+            } catch {
+                $cleanupFailure = $_
+                Write-Host "Desktop service port cleanup check failed: $($_.Exception.Message)"
+            }
         }
     }
+    if ($originalFailure) { throw $originalFailure }
+    if ($cleanupFailure) { throw $cleanupFailure }
 }
 
 & $ExePath --module-check

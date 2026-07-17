@@ -41,3 +41,38 @@ def test_smoke_script_uses_sufficient_data_and_validates_desktop_readiness():
     assert "Wait-ForDesktopServiceExit $service" in normal_shutdown
     assert "taskkill" not in normal_shutdown
     assert "taskkill" in normal_finally
+
+
+def test_desktop_fallback_cleanup_matches_service_identity_and_preserves_failure():
+    smoke_script = Path("smoke_exe.ps1").read_text(encoding="utf-8")
+
+    matcher = smoke_script.split("function Get-MatchingDesktopService", 1)[1].split(
+        "function Wait-ForDesktopServiceExit", 1
+    )[0]
+    for field in ("ProcessId", "Name", "CreationDate", "CommandLine"):
+        assert f"$process.{field}" in matcher
+        assert f"$Service.{field}" in matcher
+    assert 'Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)"' in matcher
+
+    service_exit = smoke_script.split("function Wait-ForDesktopServiceExit", 1)[1].split(
+        "function Test-NormalDesktop", 1
+    )[0]
+    assert "Get-MatchingDesktopService $Service" in service_exit
+
+    normal_desktop = smoke_script.split("function Test-NormalDesktop", 1)[1].split(
+        "& $ExePath --module-check", 1
+    )[0]
+    normal_shutdown, normal_finally = normal_desktop.split("} finally {", 1)
+    assert "taskkill" not in normal_shutdown
+    assert "if (-not $desktop.HasExited)" in normal_finally
+    assert "if ($service)" in normal_finally
+    assert normal_finally.index("if ($service)") > normal_finally.index("if (-not $desktop.HasExited)")
+    assert "Get-MatchingDesktopService $service" in normal_finally
+    assert "& taskkill /PID $service.ProcessId /T /F" in normal_finally
+    assert "Wait-ForDesktopServiceExit $service" in normal_finally
+    assert "skipping cleanup" in normal_finally
+    assert normal_finally.index("Get-NetTCPConnection -LocalPort $service.Port") > normal_finally.index(
+        "Wait-ForDesktopServiceExit $service"
+    )
+    assert "$originalFailure = $_" in normal_desktop
+    assert "if ($originalFailure) { throw $originalFailure }" in normal_desktop

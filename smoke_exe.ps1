@@ -19,6 +19,24 @@ function Wait-ForUrl([string]$Url) {
     throw "Timed out waiting for $Url"
 }
 
+function Wait-ForMainWindow(
+    [System.Diagnostics.Process]$Process,
+    [int]$TimeoutSeconds = 30
+) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        if ($Process.HasExited) {
+            throw 'Desktop EXE exited before creating its main window.'
+        }
+        $Process.Refresh()
+        if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw "Desktop main window was not created within $TimeoutSeconds seconds."
+}
+
 function Wait-ForDesktopService([System.Diagnostics.Process]$Desktop) {
     $deadline = (Get-Date).AddSeconds(30)
     do {
@@ -49,10 +67,18 @@ function Wait-ForProcessExit([System.Diagnostics.Process]$Process, [string]$Desc
     throw "$Description (PID $($Process.Id)) did not exit."
 }
 
+function Get-DesktopServiceProcessById($Service) {
+    Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)" -ErrorAction SilentlyContinue
+}
+
+function Test-DesktopServiceIdentity($Service, $Process) {
+    return $Process -and $Process.ProcessId -eq $Service.ProcessId -and $Process.Name -eq $Service.Name -and
+        $Process.CreationDate -eq $Service.CreationDate -and $Process.CommandLine -eq $Service.CommandLine
+}
+
 function Get-MatchingDesktopService($Service) {
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)" -ErrorAction SilentlyContinue
-    if ($process -and $process.ProcessId -eq $Service.ProcessId -and $process.Name -eq $Service.Name -and
-        $process.CreationDate -eq $Service.CreationDate -and $process.CommandLine -eq $Service.CommandLine) {
+    $process = Get-DesktopServiceProcessById $Service
+    if (Test-DesktopServiceIdentity $Service $process) {
         return $process
     }
     return $null
@@ -76,6 +102,8 @@ function Test-NormalDesktop {
         $service = Wait-ForDesktopService $desktop
         $baseUrl = "http://127.0.0.1:$($service.Port)"
         Wait-ForUrl "$baseUrl/"
+        Wait-ForMainWindow $desktop
+        Write-Host "Desktop main window became ready (handle $($desktop.MainWindowHandle))."
         if (-not $desktop.CloseMainWindow()) {
             throw 'User-style desktop window close request was rejected.'
         }
@@ -102,10 +130,12 @@ function Test-NormalDesktop {
             }
         }
         if ($service) {
-            $matchingService = Get-MatchingDesktopService $service
-            if ($matchingService) {
+            $serviceProcess = Get-DesktopServiceProcessById $service
+            if (-not $serviceProcess) {
+                Write-Host 'Desktop service already exited; no fallback cleanup was required.'
+            } elseif (Test-DesktopServiceIdentity $service $serviceProcess) {
                 try {
-                    Write-Host '发现残留桌面服务，执行单独兜底清理。'
+                    Write-Host 'Leftover desktop service detected; executing identity-verified fallback cleanup.'
                     & taskkill /PID $service.ProcessId /T /F | Out-Null
                     Wait-ForDesktopServiceExit $service
                 } catch {

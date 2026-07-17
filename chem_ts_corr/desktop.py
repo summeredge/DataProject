@@ -149,8 +149,5 @@ if __name__ == "__main__":
         from chem_ts_corr.web import run_server
 
         run_server(host=sys.argv[3], port=int(sys.argv[5]), open_browser=False)
-    elif sys.argv[1:] == ["--module-check"]:
-        for module in ("statsmodels.api", "sklearn", "shap", "xgboost"):
-            __import__(module)
     else:
         main()

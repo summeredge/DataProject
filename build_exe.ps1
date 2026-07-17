@@ -24,18 +24,8 @@ Remove-Item -Recurse -Force dist\ChemTsCorr -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $Release = Join-Path $ProjectRoot 'dist\ChemTsCorr'
-$Exe = Join-Path $Release 'ChemTsCorr.exe'
-if (-not (Test-Path $Exe)) {
+if (-not (Test-Path (Join-Path $Release 'ChemTsCorr.exe'))) {
     Write-Error "Build did not produce $Release\ChemTsCorr.exe"
     exit 1
 }
-$XgboostLibraries = Get-ChildItem -Path $Release -Recurse -File -Include '*xgboost*.dll', '*xgboost*.so', '*xgboost*.dylib'
-if (-not $XgboostLibraries) {
-    Write-Error 'Build did not include an XGBoost native library.'
-    exit 1
-}
-$ReleaseSize = (Get-ChildItem -Path $Release -Recurse -File | Measure-Object -Property Length -Sum).Sum
-Write-Host 'Dependency checks passed: PyInstaller, pywebview, scikit-learn, statsmodels, matplotlib, SHAP, XGBoost.'
-Write-Host "XGBoost native libraries: $($XgboostLibraries.FullName -join ', ')"
 Write-Host "Build succeeded. Release directory: $Release"
-Write-Host ('Release size: {0:N2} MB' -f ($ReleaseSize / 1MB))

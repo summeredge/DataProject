@@ -19,18 +19,47 @@ function Wait-ForUrl([string]$Url) {
     throw "Timed out waiting for $Url"
 }
 
+function Wait-ForDesktopService([System.Diagnostics.Process]$Desktop) {
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        if ($Desktop.HasExited) { throw 'Desktop EXE exited before opening its window.' }
+        $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($Desktop.Id)" |
+            Where-Object { $_.CommandLine -match '--desktop-service' } |
+            Select-Object -First 1
+        if ($child -and $child.CommandLine -match '--port\s+"?(\d+)"?') {
+            return [PSCustomObject]@{ ProcessId = $child.ProcessId; Port = [int]$Matches[1] }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw 'Desktop EXE did not start a local service with a dynamic port within 30 seconds.'
+}
+
+function Wait-ForProcessExit([int]$ProcessId) {
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw "Process $ProcessId did not exit after the desktop EXE was closed."
+}
+
 function Test-NormalDesktop {
     $desktop = Start-Process -FilePath $ExePath -PassThru
+    $service = $null
     try {
-        Start-Sleep -Seconds 3
-        if ($desktop.HasExited) { throw 'Desktop EXE exited before opening its window.' }
-        $child = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($desktop.Id)" |
-            Where-Object { $_.CommandLine -match '--desktop-service' }
-        if (-not $child) { throw 'Desktop EXE did not create its local service child process.' }
-        Write-Host "Normal desktop launch passed (PID $($desktop.Id), service PID $($child.ProcessId))."
+        $service = Wait-ForDesktopService $desktop
+        $baseUrl = "http://127.0.0.1:$($service.Port)"
+        Wait-ForUrl "$baseUrl/"
+        Write-Host "Normal desktop launch passed (PID $($desktop.Id), service PID $($service.ProcessId), port $($service.Port))."
     } finally {
-        & taskkill /PID $desktop.Id /T /F | Out-Null
-        Start-Sleep -Seconds 1
+        if (-not $desktop.HasExited) { & taskkill /PID $desktop.Id /T /F | Out-Null }
+        Wait-ForProcessExit $desktop.Id
+        if ($service) {
+            Wait-ForProcessExit $service.ProcessId
+            if (Get-NetTCPConnection -LocalPort $service.Port -State Listen -ErrorAction SilentlyContinue) {
+                throw "Desktop service port $($service.Port) is still in use after the EXE was closed."
+            }
+        }
     }
 }
 
@@ -46,15 +75,10 @@ try {
     Wait-ForUrl "$baseUrl/"
 
     $samplePath = Join-Path ([System.IO.Path]::GetTempPath()) 'chem-ts-corr-smoke.csv'
-    @'
-timestamp,target,driver
-2025-01-01 00:00:00,1,2
-2025-01-01 01:00:00,2,3
-2025-01-01 02:00:00,3,4
-2025-01-01 03:00:00,4,5
-2025-01-01 04:00:00,5,6
-2025-01-01 05:00:00,6,7
-'@ | Set-Content -Path $samplePath -Encoding utf8
+    @('timestamp,target,driver') + (0..49 | ForEach-Object {
+        $timestamp = (Get-Date '2025-01-01 00:00:00').AddHours($_).ToString('yyyy-MM-dd HH:mm:ss')
+        "$timestamp,$($_ + 1),$($_ + 2)"
+    }) | Set-Content -Path $samplePath -Encoding utf8
 
     $upload = & curl.exe --silent --show-error --fail -F "file=@$samplePath" "$baseUrl/api/upload" | ConvertFrom-Json
     if (-not $upload.file_id) { throw 'Upload response did not contain file_id.' }

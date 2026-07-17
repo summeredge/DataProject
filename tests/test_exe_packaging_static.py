@@ -19,3 +19,13 @@ def test_build_and_smoke_scripts_verify_packaged_requirements():
     assert "Release size:" in build_script
     for marker in ("--module-check", "/api/upload", "/api/columns", "/api/analyze", "/download", "Test-NormalDesktop"):
         assert marker in smoke_script
+
+
+def test_smoke_script_uses_sufficient_data_and_validates_desktop_readiness():
+    smoke_script = Path("smoke_exe.ps1").read_text(encoding="utf-8")
+
+    assert "0..49" in smoke_script
+    assert "Wait-ForDesktopService" in smoke_script
+    assert "Wait-ForUrl \"$baseUrl/\"" in smoke_script
+    assert "Wait-ForProcessExit $service.ProcessId" in smoke_script
+    assert "Desktop service port $($service.Port) is still in use" in smoke_script

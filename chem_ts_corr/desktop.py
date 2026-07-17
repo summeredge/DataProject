@@ -163,6 +163,6 @@ if __name__ == "__main__":
     elif len(sys.argv) == 6 and sys.argv[1] == "--desktop-service":
         from chem_ts_corr.web import run_server
 
-        run_server(host=sys.argv[3], port=int(sys.argv[5]), open_browser=False)
+        run_server(host=HOST, port=int(sys.argv[5]), open_browser=False)
     else:
         main()

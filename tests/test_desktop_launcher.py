@@ -1,5 +1,6 @@
 import sys
 import socket
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.request import urlopen
 
@@ -161,3 +162,10 @@ def test_service_starts_serves_homepage_and_releases_port(tmp_path, monkeypatch)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind((desktop.HOST, port))
+
+
+def test_packaged_service_mode_forces_loopback_host():
+    source = (Path(desktop.__file__)).read_text(encoding="utf-8")
+
+    assert "run_server(host=HOST, port=int(sys.argv[5]), open_browser=False)" in source
+    assert "run_server(host=sys.argv[3]" not in source

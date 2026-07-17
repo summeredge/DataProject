@@ -6,13 +6,17 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import NoReturn
 from urllib.request import urlopen
 
 
 HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 15
+SERVICE_START_ATTEMPTS = 3
+SERVICE_LOG_PATH = Path(tempfile.gettempdir()) / "chem-ts-corr" / "desktop-launcher.log"
 
 
 def _available_port() -> int:
@@ -23,32 +27,42 @@ def _available_port() -> int:
 
 def _start_service(port: int) -> subprocess.Popen[bytes]:
     kwargs: dict[str, object] = {
-        "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
     }
     if os.name == "nt":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "chem_ts_corr.cli",
-            "serve",
-            "--host",
-            HOST,
-            "--port",
-            str(port),
-            "--no-open",
-        ],
-        **kwargs,
-    )
+    SERVICE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with SERVICE_LOG_PATH.open("wb") as log_file:
+        kwargs["stdout"] = log_file
+        return subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "chem_ts_corr.cli",
+                "serve",
+                "--host",
+                HOST,
+                "--port",
+                str(port),
+                "--no-open",
+            ],
+            **kwargs,
+        )
 
 
 def _service_error(process: subprocess.Popen[bytes]) -> str:
-    output = process.stdout.read().decode("utf-8", errors="replace") if process.stdout else ""
-    return output.strip() or f"服务进程以退出码 {process.returncode} 退出。"
+    try:
+        output = SERVICE_LOG_PATH.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        output = ""
+    return output or f"服务进程以退出码 {process.returncode} 退出。"
+
+
+def _is_port_conflict(message: str) -> bool:
+    text = message.lower()
+    return "address already in use" in text or "winerror 10048" in text
 
 
 def _wait_until_ready(url: str, process: subprocess.Popen[bytes]) -> None:
@@ -97,18 +111,32 @@ def _show_error(webview: object, message: str) -> NoReturn:
 def main() -> None:
     import webview
 
-    port = _available_port()
-    url = f"http://{HOST}:{port}/"
-    process = _start_service(port)
+    process: subprocess.Popen[bytes] | None = None
     try:
-        _wait_until_ready(url, process)
+        for attempt in range(SERVICE_START_ATTEMPTS):
+            port = _available_port()
+            url = f"http://{HOST}:{port}/"
+            process = _start_service(port)
+            try:
+                _wait_until_ready(url, process)
+                break
+            except RuntimeError as exc:
+                _stop_service(process)
+                process = None
+                if _is_port_conflict(str(exc)) and attempt < SERVICE_START_ATTEMPTS - 1:
+                    continue
+                raise
+        else:
+            raise RuntimeError("本地服务未能启动。")
         webview.create_window("化工时序相关性分析", url, width=1440, height=900)
         webview.start()
     except Exception as exc:
-        _stop_service(process)
-        _show_error(webview, str(exc))
+        if process is not None:
+            _stop_service(process)
+        _show_error(webview, f"{exc}\n\n启动日志：{SERVICE_LOG_PATH}")
     else:
-        _stop_service(process)
+        if process is not None:
+            _stop_service(process)
 
 
 if __name__ == "__main__":

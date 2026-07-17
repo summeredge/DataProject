@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import importlib
 import os
 import signal
 import socket
@@ -17,6 +18,12 @@ HOST = "127.0.0.1"
 STARTUP_TIMEOUT_SECONDS = 15
 SERVICE_START_ATTEMPTS = 3
 SERVICE_LOG_PATH = desktop_log_path()
+MODULE_CHECKS = (
+    "xgboost",
+    "shap",
+    "openpyxl",
+    "xlrd",
+)
 
 
 def _available_port() -> int:
@@ -113,6 +120,12 @@ def _show_error(webview: object, message: str) -> NoReturn:
     raise SystemExit(1)
 
 
+def _module_check() -> None:
+    for module in MODULE_CHECKS:
+        importlib.import_module(module)
+        print(f"Module check passed: {module}")
+
+
 def main() -> None:
     import webview
 
@@ -145,7 +158,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 6 and sys.argv[1] == "--desktop-service":
+    if sys.argv[1:] == ["--module-check"]:
+        _module_check()
+    elif len(sys.argv) == 6 and sys.argv[1] == "--desktop-service":
         from chem_ts_corr.web import run_server
 
         run_server(host=sys.argv[3], port=int(sys.argv[5]), open_browser=False)

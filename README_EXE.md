@@ -17,7 +17,7 @@ python -m pip install pyinstaller
 .\build_exe.ps1
 ```
 
-脚本会检查 Python、PyInstaller 及 `scikit-learn`、`statsmodels`、`matplotlib`、`shap`、`xgboost` 和 `pywebview`，清理旧 `build/` 与 `dist/ChemTsCorr/`，并使用 `ChemTsCorr.spec` 构建。失败时会返回非零退出码。
+脚本会检查 Python、PyInstaller 及 `scikit-learn`、`statsmodels`、`matplotlib`、`shap`、`xgboost`、`openpyxl`、`xlrd` 和 `pywebview`，清理旧 `build/` 与 `dist/ChemTsCorr/`，并使用 `ChemTsCorr.spec` 构建。构建后会确认发布目录存在 XGBoost DLL、启动 EXE 导入 XGBoost/SHAP/Excel 引擎，并输出 `Release size:`。任一步失败都会返回非零退出码。
 
 发布目录为 `dist\ChemTsCorr\`；分发整个目录，不能只复制 `ChemTsCorr.exe`。双击 `ChemTsCorr.exe` 启动。
 
@@ -33,7 +33,16 @@ python -m pip install pyinstaller
 .\smoke_exe.ps1
 ```
 
-该脚本用 EXE 的内部服务模式检查 EXE 存在、启动进程、访问本地首页，并在关闭后检查 8765 端口已释放；正常用户启动不需要任何参数。
+该脚本先验证 EXE 的 XGBoost、SHAP、`openpyxl` 和 `xlrd` 导入；随后无参数启动桌面模式，检查桌面主进程及其本地服务子进程；最后用内部服务模式执行上传、列识别、最小分析、结果查询和下载，并在关闭后检查 8765 端口已释放。正常用户启动不需要任何参数。
+
+## 人工验收清单
+
+在一台**未安装 Python** 的 Windows 电脑上，将整个 `dist\ChemTsCorr\` 目录复制到包含中文和空格的路径（例如 `C:\测试 发布\ChemTsCorr`），然后逐项确认：
+
+1. 双击 `ChemTsCorr.exe` 能打开桌面窗口；关闭窗口后，任务管理器中不再保留 `ChemTsCorr.exe` 或本地服务子进程。
+2. 分别上传 CSV 和 XLSX 文件，能识别时间列及数值列，并完成主筛查。
+3. 对上传数据分别运行 Granger、SHAP/模型解释和 XGBoost 验证，确认页面展示结果且下载区可下载生成的文件。
+4. 若机器缺少 Microsoft Edge WebView2 Runtime，按系统提示安装 WebView2 Runtime 后重新启动；若仍失败，收集 `%LOCALAPPDATA%\ChemTsCorr\logs\desktop-launcher.log`。
 
 ## 常见错误
 

@@ -15,6 +15,7 @@ dependencies = [
   "xlrd>=2.0",
   "PyYAML>=6.0",
   "scipy>=1.10",
+  "pywebview>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ xgb = [
 [project.scripts]
 chem-ts-corr = "chem_ts_corr.cli:main"
 chem-ts-corr-web = "chem_ts_corr.web:main"
+chem-ts-corr-desktop = "chem_ts_corr.desktop:main"
 
 [tool.setuptools.packages.find]
 include = ["chem_ts_corr*"]

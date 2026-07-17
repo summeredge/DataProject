@@ -27,20 +27,38 @@ function Wait-ForDesktopService([System.Diagnostics.Process]$Desktop) {
             Where-Object { $_.CommandLine -match '--desktop-service' } |
             Select-Object -First 1
         if ($child -and $child.CommandLine -match '--port\s+"?(\d+)"?') {
-            return [PSCustomObject]@{ ProcessId = $child.ProcessId; Port = [int]$Matches[1] }
+            return [PSCustomObject]@{
+                ProcessId = $child.ProcessId
+                Port = [int]$Matches[1]
+                Name = $child.Name
+                CreationDate = $child.CreationDate
+                CommandLine = $child.CommandLine
+            }
         }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
     throw 'Desktop EXE did not start a local service with a dynamic port within 30 seconds.'
 }
 
-function Wait-ForProcessExit([int]$ProcessId) {
+function Wait-ForProcessExit([System.Diagnostics.Process]$Process, [string]$Description) {
     $deadline = (Get-Date).AddSeconds(10)
     do {
-        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return }
+        if ($Process.HasExited) { return }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
-    throw "Process $ProcessId did not exit after the desktop EXE was closed."
+    throw "$Description (PID $($Process.Id)) did not exit."
+}
+
+function Wait-ForDesktopServiceExit($Service) {
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($Service.ProcessId)" -ErrorAction SilentlyContinue
+        if (-not $process -or $process.Name -ne $Service.Name -or $process.CreationDate -ne $Service.CreationDate -or $process.CommandLine -ne $Service.CommandLine) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw "Desktop service (PID $($Service.ProcessId)) did not exit."
 }
 
 function Test-NormalDesktop {
@@ -50,15 +68,23 @@ function Test-NormalDesktop {
         $service = Wait-ForDesktopService $desktop
         $baseUrl = "http://127.0.0.1:$($service.Port)"
         Wait-ForUrl "$baseUrl/"
-        Write-Host "Normal desktop launch passed (PID $($desktop.Id), service PID $($service.ProcessId), port $($service.Port))."
+        if (-not $desktop.CloseMainWindow()) {
+            throw 'User-style desktop window close request was rejected.'
+        }
+        Write-Host 'User-style desktop window close request succeeded.'
+        Wait-ForProcessExit $desktop 'Desktop main process'
+        Write-Host 'Desktop main process exited normally.'
+        Wait-ForDesktopServiceExit $service
+        Write-Host 'Desktop service exited normally.'
+        if (Get-NetTCPConnection -LocalPort $service.Port -State Listen -ErrorAction SilentlyContinue) {
+            throw "Desktop service port $($service.Port) is still in use after normal desktop shutdown."
+        }
+        Write-Host "Desktop service dynamic port $($service.Port) was released."
     } finally {
-        if (-not $desktop.HasExited) { & taskkill /PID $desktop.Id /T /F | Out-Null }
-        Wait-ForProcessExit $desktop.Id
-        if ($service) {
-            Wait-ForProcessExit $service.ProcessId
-            if (Get-NetTCPConnection -LocalPort $service.Port -State Listen -ErrorAction SilentlyContinue) {
-                throw "Desktop service port $($service.Port) is still in use after the EXE was closed."
-            }
+        if (-not $desktop.HasExited) {
+            Write-Host 'Desktop normal shutdown failed; forced process-tree cleanup executed.'
+            & taskkill /PID $desktop.Id /T /F | Out-Null
+            Wait-ForProcessExit $desktop 'Desktop main process after forced cleanup'
         }
     }
 }
@@ -69,8 +95,11 @@ Write-Host 'XGBoost, SHAP, openpyxl, and xlrd module checks passed.'
 
 Test-NormalDesktop
 
-$process = Start-Process -FilePath $ExePath -ArgumentList '--desktop-service', '--host', '127.0.0.1', '--port', $Port -PassThru
+$process = $null
+$samplePath = $null
+$downloadPath = $null
 try {
+    $process = Start-Process -FilePath $ExePath -ArgumentList '--desktop-service', '--host', '127.0.0.1', '--port', $Port -PassThru
     $baseUrl = "http://127.0.0.1:$Port"
     Wait-ForUrl "$baseUrl/"
 
@@ -107,9 +136,27 @@ try {
     if (-not (Test-Path $downloadPath)) { throw 'Result download failed.' }
     Write-Host 'Upload, columns, analysis, result query, and download checks passed.'
 } finally {
-    if (-not $process.HasExited) { & taskkill /PID $process.Id /T /F | Out-Null }
-    Remove-Item $samplePath, $downloadPath -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+    if ($process -and -not $process.HasExited) {
+        if ($process.CloseMainWindow()) {
+            try {
+                Wait-ForProcessExit $process 'Internal service process'
+            } catch {
+                Write-Host 'Internal service did not stop normally; forced process-tree cleanup executed.'
+                & taskkill /PID $process.Id /T /F | Out-Null
+                Wait-ForProcessExit $process 'Internal service process after forced cleanup'
+            }
+        } else {
+            Write-Host 'Internal service has no normal window shutdown; forced process-tree cleanup executed.'
+            & taskkill /PID $process.Id /T /F | Out-Null
+            Wait-ForProcessExit $process 'Internal service process after forced cleanup'
+        }
+    }
+    if ($samplePath) {
+        Remove-Item $samplePath -Force -ErrorAction SilentlyContinue
+    }
+    if ($downloadPath) {
+        Remove-Item $downloadPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {

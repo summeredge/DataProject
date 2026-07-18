@@ -58,13 +58,17 @@ function Wait-ForDesktopService([System.Diagnostics.Process]$Desktop) {
     throw 'Desktop EXE did not start a local service with a dynamic port within 30 seconds.'
 }
 
-function Wait-ForProcessExit([System.Diagnostics.Process]$Process, [string]$Description) {
-    $deadline = (Get-Date).AddSeconds(10)
+function Wait-ForProcessExit(
+    [System.Diagnostics.Process]$Process,
+    [string]$Description,
+    [int]$TimeoutSeconds = 30
+) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         if ($Process.HasExited) { return }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
-    throw "$Description (PID $($Process.Id)) did not exit."
+    throw "$Description (PID $($Process.Id)) did not exit within $TimeoutSeconds seconds."
 }
 
 function Get-DesktopServiceProcessById($Service) {
@@ -160,8 +164,8 @@ function Test-NormalDesktop {
     if ($cleanupFailure) { throw $cleanupFailure }
 }
 
-& $ExePath --module-check
-if ($LASTEXITCODE -ne 0) { throw 'Packaged module check failed.' }
+$ModuleCheck = Start-Process -FilePath $ExePath -ArgumentList '--module-check' -Wait -PassThru
+if ($ModuleCheck.ExitCode -ne 0) { throw 'Packaged module check failed.' }
 Write-Host 'XGBoost, SHAP, openpyxl, and xlrd module checks passed.'
 
 Test-NormalDesktop

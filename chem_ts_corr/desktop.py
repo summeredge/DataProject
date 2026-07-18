@@ -126,6 +126,23 @@ def _module_check() -> None:
         print(f"Module check passed: {module}")
 
 
+def _run_packaged_service(port: int) -> int:
+    try:
+        from chem_ts_corr.web import run_server
+
+        run_server(host=HOST, port=port, open_browser=False)
+    except Exception as exc:
+        message = f"Service startup failed: {type(exc).__name__}: {exc}\n"
+        try:
+            SERVICE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with SERVICE_LOG_PATH.open("a", encoding="utf-8") as log_file:
+                log_file.write(message)
+        except OSError:
+            pass
+        return 1
+    return 0
+
+
 def main() -> None:
     import webview
 
@@ -161,8 +178,6 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--module-check"]:
         _module_check()
     elif len(sys.argv) == 6 and sys.argv[1] == "--desktop-service":
-        from chem_ts_corr.web import run_server
-
-        run_server(host=HOST, port=int(sys.argv[5]), open_browser=False)
+        raise SystemExit(_run_packaged_service(int(sys.argv[5])))
     else:
         main()

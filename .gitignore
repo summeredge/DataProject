@@ -7,4 +7,5 @@ venv/
 reports/
 dist/
 build/
+release-output/
 *.egg-info/

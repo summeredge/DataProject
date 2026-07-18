@@ -167,5 +167,21 @@ def test_service_starts_serves_homepage_and_releases_port(tmp_path, monkeypatch)
 def test_packaged_service_mode_forces_loopback_host():
     source = (Path(desktop.__file__)).read_text(encoding="utf-8")
 
-    assert "run_server(host=HOST, port=int(sys.argv[5]), open_browser=False)" in source
+    assert "run_server(host=HOST, port=port, open_browser=False)" in source
+    assert "_run_packaged_service(int(sys.argv[5]))" in source
     assert "run_server(host=sys.argv[3]" not in source
+
+
+def test_packaged_service_startup_failure_is_logged_and_returns_nonzero(monkeypatch, tmp_path):
+    log_path = tmp_path / "desktop-launcher.log"
+
+    def fail_server(**kwargs):
+        raise OSError("address already in use")
+
+    monkeypatch.setitem(sys.modules, "chem_ts_corr.web", SimpleNamespace(run_server=fail_server))
+    monkeypatch.setattr(desktop, "SERVICE_LOG_PATH", log_path)
+
+    assert desktop._run_packaged_service(8765) == 1
+    assert log_path.read_text(encoding="utf-8") == (
+        "Service startup failed: OSError: address already in use\n"
+    )

@@ -1,0 +1,27 @@
+{
+  "manifest_scope": "archive-internal",
+  "product": "ChemTsCorr",
+  "version": "",
+  "build_time": "",
+  "git_commit": "",
+  "git_branch": "exe-packaging",
+  "python_version": "",
+  "pyinstaller_version": "",
+  "architecture": "windows-x64",
+  "package_type": "onedir",
+  "exe_sha256": "",
+  "key_file_sha256": {},
+  "zip_sha256": null,
+  "archive_name": null,
+  "release_size_bytes": 0,
+  "tests": {
+    "pytest": "Not Tested",
+    "static_packaging_tests": "Not Tested",
+    "ruff": "Not Tested",
+    "build_exe": "Not Tested",
+    "smoke_exe": "Not Tested",
+    "target_pc": "Not Tested",
+    "defender_directory": "Not Tested",
+    "defender_zip": "Not Tested"
+  }
+}

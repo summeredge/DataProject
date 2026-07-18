@@ -16,7 +16,9 @@ hiddenimports = (
     + collect_submodules("statsmodels")
     + collect_submodules("matplotlib")
     + collect_submodules("shap")
-    + collect_submodules("xgboost")
+    + collect_submodules(
+        "xgboost", filter=lambda name: not name.startswith("xgboost.testing")
+    )
     + [
         "openpyxl",
         "xlrd",

@@ -36,10 +36,11 @@ if (-not $XgboostDlls) {
 }
 Write-Host "XGBoost DLL check passed: $($XgboostDlls.FullName -join ', ')"
 
-& (Join-Path $Release 'ChemTsCorr.exe') --module-check
-if ($LASTEXITCODE -ne 0) {
+$ModuleCheck = Start-Process -FilePath (Join-Path $Release 'ChemTsCorr.exe') `
+    -ArgumentList '--module-check' -Wait -PassThru
+if ($ModuleCheck.ExitCode -ne 0) {
     Write-Error 'Packaged module check failed (XGBoost, SHAP, openpyxl, or xlrd).'
-    exit $LASTEXITCODE
+    exit $ModuleCheck.ExitCode
 }
 
 $ReleaseSize = (Get-ChildItem -Path $Release -Recurse -File | Measure-Object -Property Length -Sum).Sum

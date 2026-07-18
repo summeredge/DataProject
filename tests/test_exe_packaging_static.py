@@ -10,6 +10,8 @@ def test_spec_collects_xgboost_native_libraries_and_excel_engines():
 
     assert "collect_dynamic_libs" in spec
     assert 'binaries = collect_dynamic_libs("xgboost")' in spec
+    assert '"xgboost", filter=lambda name:' in spec
+    assert 'not name.startswith("xgboost.testing")' in spec
     assert "binaries=binaries" in spec
     for module in ("pandas.io.excel._openpyxl", "pandas.io.excel._xlrd", "openpyxl", "xlrd"):
         assert module in spec
@@ -21,6 +23,10 @@ def test_build_and_smoke_scripts_verify_packaged_requirements():
 
     assert "*xgboost*.dll" in build_script
     assert "Release size:" in build_script
+    assert "Start-Process -FilePath (Join-Path $Release 'ChemTsCorr.exe')" in build_script
+    assert "$ModuleCheck.ExitCode" in build_script
+    assert "Start-Process -FilePath $ExePath -ArgumentList '--module-check' -Wait -PassThru" in smoke_script
+    assert "& $ExePath --module-check" not in smoke_script
     for marker in ("--module-check", "/api/upload", "/api/columns", "/api/analyze", "/download", "Test-NormalDesktop"):
         assert marker in smoke_script
 
@@ -46,6 +52,9 @@ def test_smoke_script_waits_for_real_desktop_main_window_before_closing():
     assert "Wait-ForProcessExit $desktop 'Desktop main process'" in normal_shutdown
     assert "Wait-ForDesktopServiceExit $service" in normal_shutdown
     assert "Desktop service dynamic port $($service.Port) was released" in normal_shutdown
+    process_exit = function_body(smoke_script, "Wait-ForProcessExit", "Get-DesktopServiceProcessById")
+    assert "[int]$TimeoutSeconds = 30" in process_exit
+    assert "AddSeconds($TimeoutSeconds)" in process_exit
 
 
 def test_desktop_fallback_cleanup_distinguishes_service_states_and_preserves_failure():

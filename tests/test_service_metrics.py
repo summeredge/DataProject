@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+from chem_ts_corr import service
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.service import analyze_numeric_frame
 
@@ -149,4 +151,94 @@ def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, 
         item["pair_alignment_key"]
         == screening.pair_alignment_key(captured["frame"][["target", variable]].dropna())
         for variable, item in captured["evidence"].items()
+    )
+
+
+def test_innovation_peak_in_opposite_direction_is_not_verified(monkeypatch):
+    captured: dict[str, list[int]] = {}
+    raw_ranked = pd.DataFrame(
+        [
+            {
+                "variable": "x",
+                "lag": 1,
+                "direction": "variable leads target",
+                "score": 0.90,
+                "method": "pearson",
+                "pearson": 0.90,
+                "spearman": 0.80,
+            }
+        ]
+    )
+
+    def capture_scan(frame, target, max_lag, lag_values=None):
+        captured["lag_values"] = list(lag_values or [])
+        return pd.DataFrame({"placeholder": [1]})
+
+    monkeypatch.setattr(service, "compute_lag_scores", capture_scan)
+    monkeypatch.setattr(
+        service,
+        "summarize_best_lags",
+        lambda scores: pd.DataFrame(
+            [
+                {
+                    "variable": "x",
+                    "lag": -1,
+                    "direction": "target leads variable",
+                    "score": 0.85,
+                    "method": "pearson",
+                    "pearson": 0.85,
+                    "spearman": 0.75,
+                }
+            ]
+        ),
+    )
+
+    result = service._innovation_evidence(
+        pd.DataFrame({"target": range(20), "x": range(20)}),
+        "target",
+        6,
+        raw_ranked,
+        "raw",
+    ).iloc[0]
+
+    assert captured["lag_values"] == [-1, 0, 1, 2, 3]
+    assert result["innovation_lag"] == -1
+    assert result["innovation_direction"] == "target leads variable"
+    assert result["innovation_sign"] == 1
+    assert result["innovation_status"] == "innovation_lag_conflict"
+    assert pd.isna(result["innovation_score"])
+
+
+@pytest.mark.parametrize(
+    "extra_columns",
+    [
+        {},
+        {"constant": np.ones(80)},
+    ],
+    ids=["target_only", "all_candidates_filtered"],
+)
+def test_analyze_numeric_frame_returns_empty_schema_when_no_candidates(tmp_path, extra_columns):
+    frame = pd.DataFrame(
+        {"target": np.sin(np.arange(80) / 5), **extra_columns},
+        index=pd.date_range("2025-01-01", periods=80, freq="min"),
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "unused.csv",
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=4,
+        top_k=2,
+        enable_model=False,
+    )
+
+    tables = analyze_numeric_frame(frame, config)
+
+    assert tables.ranked_features.empty
+    assert {"variable", "driver_rank", "driver_priority_score"}.issubset(
+        tables.ranked_features.columns
+    )
+    assert tables.lag_scores.empty
+    assert {"variable", "lag", "abs_pearson", "abs_spearman"}.issubset(
+        tables.lag_scores.columns
     )

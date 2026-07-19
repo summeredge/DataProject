@@ -15,6 +15,17 @@ from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardi
 from chem_ts_corr.xgb_runner import XGBRunResult, run_xgb_validation
 
 
+INNOVATION_LAG_RADIUS = 2
+INNOVATION_COLUMNS = [
+    "variable",
+    "innovation_score",
+    "innovation_lag",
+    "innovation_direction",
+    "innovation_sign",
+    "innovation_status",
+]
+
+
 @dataclass(frozen=True)
 class AnalysisTables:
     ranked_features: pd.DataFrame
@@ -109,13 +120,15 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)
     _progress(progress_callback, "正在计算变化量关联")
-    if config.preprocess_mode in {"diff", "detrend_diff"}:
-        innovation_ranked = raw_ranked[["variable", "score"]].copy()
-    else:
-        innovation_scores = compute_lag_scores(scaled.diff().dropna(), config.target, config.max_lag)
-        innovation_ranked = summarize_best_lags(innovation_scores)[["variable", "score"]]
+    innovation_ranked = _innovation_evidence(
+        scaled,
+        config.target,
+        config.max_lag,
+        raw_ranked,
+        config.preprocess_mode,
+    )
     raw_ranked = raw_ranked.merge(
-        innovation_ranked.rename(columns={"score": "innovation_score"}),
+        innovation_ranked,
         on="variable",
         how="left",
     )
@@ -215,6 +228,97 @@ def _best_lag_map(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
         return {}
     return {str(row["variable"]): int(row["lag"]) for _, row in ranked[["variable", "lag"]].dropna().iterrows()}
+
+
+def _innovation_evidence(
+    frame: pd.DataFrame,
+    target: str,
+    max_lag: int,
+    raw_ranked: pd.DataFrame,
+    preprocess_mode: str,
+) -> pd.DataFrame:
+    if raw_ranked.empty:
+        return pd.DataFrame(columns=INNOVATION_COLUMNS)
+
+    rows: list[dict[str, object]] = []
+    already_differenced = preprocess_mode in {"diff", "detrend_diff"}
+    innovation_frame = frame if already_differenced else frame.diff().dropna()
+    for _, raw_row in raw_ranked.iterrows():
+        variable = str(raw_row["variable"])
+        raw_lag = int(raw_row["lag"])
+        if already_differenced:
+            innovation_row = raw_row
+        else:
+            lower = max(-max_lag, raw_lag - INNOVATION_LAG_RADIUS)
+            upper = min(max_lag, raw_lag + INNOVATION_LAG_RADIUS)
+            scores = compute_lag_scores(
+                innovation_frame[[target, variable]],
+                target,
+                max_lag,
+                lag_values=range(lower, upper + 1),
+            )
+            best = summarize_best_lags(scores)
+            if best.empty:
+                rows.append(
+                    {
+                        "variable": variable,
+                        "innovation_score": np.nan,
+                        "innovation_lag": pd.NA,
+                        "innovation_direction": pd.NA,
+                        "innovation_sign": pd.NA,
+                        "innovation_status": "not_computed",
+                    }
+                )
+                continue
+            innovation_row = best.iloc[0]
+
+        innovation_lag = int(innovation_row["lag"])
+        innovation_sign = _correlation_sign(innovation_row)
+        raw_sign = _correlation_sign(raw_row)
+        lag_consistent = (
+            abs(innovation_lag - raw_lag) <= INNOVATION_LAG_RADIUS
+            and np.sign(innovation_lag) == np.sign(raw_lag)
+        )
+        if already_differenced:
+            status = "innovation_verified"
+        elif not lag_consistent:
+            status = "innovation_lag_conflict"
+        elif raw_sign is None or innovation_sign is None:
+            status = "innovation_sign_unknown"
+        elif innovation_sign != raw_sign:
+            status = "innovation_sign_conflict"
+        else:
+            status = "innovation_verified"
+        rows.append(
+            {
+                "variable": variable,
+                "innovation_score": (
+                    float(innovation_row["score"])
+                    if status == "innovation_verified"
+                    else np.nan
+                ),
+                "innovation_lag": innovation_lag,
+                "innovation_direction": innovation_row.get("direction", pd.NA),
+                "innovation_sign": innovation_sign if innovation_sign is not None else pd.NA,
+                "innovation_status": status,
+            }
+        )
+    return pd.DataFrame(rows, columns=INNOVATION_COLUMNS)
+
+
+def _correlation_sign(row: pd.Series) -> int | None:
+    method = str(row.get("method", ""))
+    value = row.get(method, np.nan) if method in {"pearson", "spearman"} else np.nan
+    if pd.isna(value):
+        candidates = [
+            candidate
+            for candidate in [row.get("pearson", np.nan), row.get("spearman", np.nan)]
+            if pd.notna(candidate)
+        ]
+        if not candidates:
+            return None
+        value = max(candidates, key=lambda candidate: abs(float(candidate)))
+    return int(np.sign(float(value)))
 
 
 def _progress(progress_callback, message: str) -> None:

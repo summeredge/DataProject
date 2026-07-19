@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,7 @@ import pytest
 from chem_ts_corr.screening import (
     INDUSTRIAL_SCORE_WEIGHT_PROFILES,
     final_ranked_features,
+    model_lift_scores,
     risk_flags,
 )
 
@@ -51,6 +53,57 @@ def _ranked(variable: str, score: float, lag: int = 0) -> dict[str, object]:
 def test_v1_fixed_weights_are_replaced_by_robust_profiles():
     assert len(INDUSTRIAL_SCORE_WEIGHT_PROFILES) > 10
     assert all(sum(profile.values()) == pytest.approx(1.0) for profile in INDUSTRIAL_SCORE_WEIGHT_PROFILES)
+
+
+@pytest.mark.parametrize("best_lag", [0, -3])
+def test_non_positive_best_lag_has_no_synchronous_prediction_score(best_lag: int):
+    n = 100
+    frame = pd.DataFrame(
+        {
+            "target": np.sin(np.arange(n) / 5),
+            "x": np.cos(np.arange(n) / 5),
+        }
+    )
+
+    row = model_lift_scores(
+        frame,
+        "target",
+        ["x"],
+        max_lag=6,
+        best_lags={"x": best_lag},
+    ).iloc[0]
+
+    assert row["status"] == "non_predictive_lag"
+    assert pd.isna(row["model_lift_score"])
+    assert pd.isna(row["model_lift"])
+
+
+def test_model_lift_source_restricts_candidate_features_to_historical_lags():
+    source = inspect.getsource(model_lift_scores)
+
+    assert '"non_predictive_lag"' in source
+    assert "if lag >= 1" in source
+
+
+def test_innovation_conflict_metadata_survives_without_false_verification():
+    ranked = _ranked("x", 0.9, lag=1)
+    ranked.update(
+        {
+            "innovation_score": np.nan,
+            "innovation_lag": -1,
+            "innovation_direction": "target leads variable",
+            "innovation_sign": 1,
+            "innovation_status": "innovation_lag_conflict",
+        }
+    )
+
+    row = _evaluate([ranked]).iloc[0]
+
+    assert row["innovation_lag"] == -1
+    assert row["innovation_direction"] == "target leads variable"
+    assert row["innovation_sign"] == 1
+    assert row["innovation_status"] == "innovation_lag_conflict"
+    assert row["correlation_evidence_status"] == "association_only"
 
 
 def test_verified_residual_uses_fixed_family_formula():

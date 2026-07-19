@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -14,6 +15,7 @@ from chem_ts_corr.screening import (
     final_ranked_features,
     risk_flags,
 )
+from chem_ts_corr.web import _overview_payload
 
 
 def _ranked(rows: list[tuple[str, float, int]]) -> pd.DataFrame:
@@ -79,6 +81,25 @@ def test_main_order_is_driver_rank_not_final_score():
     assert indexed.loc["b", "driver_priority_score"] > indexed.loc["a", "driver_priority_score"]
     assert indexed.loc["b", "driver_rank"] < indexed.loc["a", "driver_rank"]
     assert result["variable"].tolist() == ["b", "a"]
+
+
+def test_overview_payload_prefers_driver_rank_when_final_score_is_higher_later():
+    ranked = pd.DataFrame(
+        [
+            {"variable": "risky", "driver_rank": 2, "driver_priority_score": 0.40, "final_score": 0.90},
+            {"variable": "safe", "driver_rank": 1, "driver_priority_score": 0.70, "final_score": 0.70},
+        ]
+    )
+
+    overview = _overview_payload(
+        ranked,
+        pd.DataFrame(),
+        SimpleNamespace(target="target"),
+        {},
+    )
+
+    assert [row["variable"] for row in overview["top10"]] == ["safe", "risky"]
+    assert overview["top10"][1]["final_score"] > overview["top10"][0]["final_score"]
 
 
 def test_topk_selects_smallest_driver_rank():

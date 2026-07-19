@@ -8,6 +8,15 @@ import pandas as pd
 from chem_ts_corr.common import benjamini_hochberg
 
 
+LAG_SCORE_COLUMNS = [
+    "variable", "lag", "pearson", "pearson_p", "pearson_r2", "spearman",
+    "spearman_p", "spearman_r2", "n", "abs_pearson", "abs_spearman",
+    "lag_boundary_flag", "pearson_q", "spearman_q", "p_value",
+    "corr_q_value", "p_value_status",
+]
+BEST_LAG_COLUMNS = LAG_SCORE_COLUMNS + ["score", "method", "r2", "direction"]
+
+
 LAG_PEAK_QUALITY_COLUMNS = [
     "variable",
     "best_lag",
@@ -88,7 +97,7 @@ def compute_lag_scores(
                 }
             )
 
-    result = pd.DataFrame(rows)
+    result = pd.DataFrame(rows, columns=LAG_SCORE_COLUMNS)
     if not result.empty:
         result["pearson_q"] = benjamini_hochberg(result["pearson_p"])
         result["spearman_q"] = benjamini_hochberg(result["spearman_p"])
@@ -101,11 +110,11 @@ def compute_lag_scores(
 
 def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
     if lag_scores.empty:
-        return lag_scores
+        return pd.DataFrame(columns=BEST_LAG_COLUMNS)
     ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
     ranked = ranked.dropna(subset=["score"])
     if ranked.empty:
-        return pd.DataFrame(columns=list(lag_scores.columns) + ["score", "method", "p_value", "r2", "corr_q_value", "direction"])
+        return pd.DataFrame(columns=BEST_LAG_COLUMNS)
     idx = ranked.groupby("variable")["score"].idxmax()
     best = ranked.loc[idx].sort_values("score", ascending=False).reset_index(drop=True)
     use_pearson = best["abs_pearson"] >= best["abs_spearman"]

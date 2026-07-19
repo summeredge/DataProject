@@ -1508,8 +1508,13 @@ def _overview_payload(
 ) -> dict[str, Any]:
     high_risk = int((risk.get("risk_count", pd.Series(dtype=float)) > 0).sum()) if not risk.empty else 0
     review = int((ranked.get("recommended_use", pd.Series(dtype=str)).astype(str) == "prediction_candidate").sum()) if not ranked.empty else 0
+    overview_ranked = (
+        ranked.sort_values("driver_rank", ascending=True, kind="stable")
+        if "driver_rank" in ranked.columns
+        else ranked
+    )
     return {
-        "top10": _records(ranked.head(10)),
+        "top10": _records(overview_ranked.head(10)),
         "effective_variables": int(len(ranked)),
         "risk_tagged_count": high_risk,
         "high_risk_count": high_risk,
@@ -2636,7 +2641,7 @@ function renderAnalysisResult(data) {
   renderScreeningQualityHints(lastRows);
   tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
-  tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };
+  tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -3919,7 +3924,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "final_score", "evidence_confidence", "lag", "direction", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "driver_rank", "driver_priority_score", "final_score", "evidence_confidence", "lag", "direction", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -4779,6 +4784,15 @@ function formatValue(value) {
 }
 
 function columnLabel(column) {
+  const addedLabels = {
+    driver_rank: "驱动优先排名",
+    driver_priority_score: "驱动优先得分",
+    innovation_lag: "变化量滞后",
+    innovation_direction: "变化量方向",
+    innovation_sign: "变化量符号",
+    innovation_status: "变化量验证状态",
+  };
+  if (addedLabels[column]) return addedLabels[column];
   const labels = {
     variable: "变量",
     trend_action: "趋势验证",

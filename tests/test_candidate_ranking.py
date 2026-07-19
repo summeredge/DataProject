@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    CLASS_PRIORITY_ADJUSTMENT,
+    CLASS_PRIORITY_FACTORS,
     classify_candidate,
     final_ranked_features,
     risk_flags,
@@ -28,14 +28,16 @@ def _evaluate(
         columns=["variable", "risk_flags"],
     )
     empty = pd.DataFrame(columns=["variable"])
+    ranked["innovation_score"] = ranked["score"]
+    complete = ranked[["variable", "score"]]
     return final_ranked_features(
         ranked=ranked,
         residual=empty,
         stability=empty,
-        model_lift=empty,
+        model_lift=complete.rename(columns={"score": "model_lift_score"}).assign(status="ok"),
         risks=risks,
-        lag_peak_quality=empty,
-        rolling_corr_scores=empty,
+        lag_peak_quality=complete.rename(columns={"score": "lag_quality"}),
+        rolling_corr_scores=complete.rename(columns={"score": "rolling_stability"}),
         top_k=top_k,
     )
 
@@ -138,8 +140,8 @@ def test_upstream_class_is_reachable_through_production_risk_pipeline():
     assert result.loc[0, "candidate_class"] == "upstream_driver_candidate"
 
 
-@pytest.mark.parametrize("candidate_class", CLASS_PRIORITY_ADJUSTMENT)
-def test_driver_priority_score_uses_fixed_class_adjustment(candidate_class: str):
+@pytest.mark.parametrize("candidate_class", CLASS_PRIORITY_FACTORS)
+def test_driver_priority_score_uses_class_factor(candidate_class: str):
     risk_by_class = {
         "downstream_response": "target_leads_variable",
         "closed_loop_related": "closed_loop_suspect",
@@ -154,19 +156,19 @@ def test_driver_priority_score_uses_fixed_class_adjustment(candidate_class: str)
     ).iloc[0]
 
     assert result["candidate_class"] == candidate_class
-    expected = min(1.0, max(0.0, result["final_score"] + CLASS_PRIORITY_ADJUSTMENT[candidate_class]))
+    expected = result["final_score"] * CLASS_PRIORITY_FACTORS[candidate_class]
     assert result["driver_priority_score"] == pytest.approx(expected)
 
 
-def test_shadow_fields_do_not_change_final_score_or_legacy_behavior():
+def test_complete_balanced_v2_evidence_keeps_candidate_behavior():
     result = _evaluate(
         [_row("a", 0.9, -1), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
     ).set_index("variable")
 
-    assert result.loc["a", "final_score"] == pytest.approx(0.59)
+    assert result.loc["a", "final_score"] == pytest.approx(0.9)
     assert result.loc["b", "final_score"] == pytest.approx(0.8)
-    assert result.loc["a", "candidate_grade"] == "C"
+    assert result.loc["a", "candidate_grade"] == "A"
     assert result.loc["a", "recommended_use"] == "state_indicator"
 
 

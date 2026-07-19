@@ -8,8 +8,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    CLASS_PRIORITY_ADJUSTMENT,
-    EVIDENCE_COMPONENT_WEIGHTS,
+    CLASS_PRIORITY_FACTORS,
     PRIMARY_RANK_COLUMN,
     PRIMARY_SCORE_COLUMN,
     final_ranked_features,
@@ -42,14 +41,17 @@ def _run_ranked(
     control_columns: list[str] | None = None,
 ) -> pd.DataFrame:
     empty = pd.DataFrame(columns=["variable"])
+    ranked = _ranked(rows)
+    ranked["innovation_score"] = ranked["score"]
+    complete = ranked[["variable", "score"]]
     return final_ranked_features(
-        ranked=_ranked(rows),
+        ranked=ranked,
         residual=empty,
         stability=empty,
-        model_lift=empty,
+        model_lift=complete.rename(columns={"score": "model_lift_score"}).assign(status="ok"),
         risks=_risks(flags),
-        lag_peak_quality=empty,
-        rolling_corr_scores=empty,
+        lag_peak_quality=complete.rename(columns={"score": "lag_quality"}),
+        rolling_corr_scores=complete.rename(columns={"score": "rolling_stability"}),
         top_k=top_k,
         force_include_variables=force_include_variables,
         control_columns=control_columns,
@@ -92,15 +94,15 @@ def test_association_and_driver_ranks_keep_distinct_semantics():
     assert result.loc["b", "driver_rank"] < result.loc["a", "driver_rank"]
 
 
-def test_final_score_and_candidate_grade_are_unchanged_by_sort_switch():
+def test_engineering_direction_changes_priority_not_evidence_score():
     row = _reversal().set_index("variable").loc["a"]
 
     assert row["evidence_score"] == pytest.approx(0.90)
-    assert row["risk_penalty"] == pytest.approx(0.10)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
-    assert row["final_score"] == pytest.approx(0.59)
-    assert row["driver_priority_score"] == pytest.approx(0.29)
-    assert row["candidate_grade"] == "C"
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["final_score"] == pytest.approx(0.90)
+    assert row["driver_priority_score"] == pytest.approx(0.90 * 0.45)
+    assert row["candidate_grade"] == "A"
 
 
 def test_equal_driver_scores_keep_input_order():
@@ -181,28 +183,27 @@ def test_topk_does_not_compress_global_driver_rank():
     assert result["driver_rank"].tolist() == [1, 2, 5]
 
 
-def test_risk_penalty_affects_formal_driver_rank():
+def test_engineering_class_factor_affects_formal_driver_rank():
     result = _run_ranked(
         [("safe", 0.8, 1), ("risky", 0.8, -1)],
         {"safe": "", "risky": "target_leads_variable"},
     ).set_index("variable")
 
-    assert result.loc["safe", "final_score"] > result.loc["risky", "final_score"]
+    assert result.loc["safe", "final_score"] == result.loc["risky", "final_score"]
     assert result.loc["safe", "driver_priority_score"] > result.loc["risky", "driver_priority_score"]
     assert result.loc["safe", "driver_rank"] < result.loc["risky", "driver_rank"]
 
 
-def test_class_adjustments_determine_formal_order_at_equal_final_score():
+def test_class_factors_determine_formal_order():
     result = _run_ranked(
-        [("up", 0.59, 1), ("sync", 0.59, 0), ("capacity", 0.71, 1), ("down", 0.90, -1)],
+        [("up", 0.59, 1), ("sync", 0.59, 0), ("capacity", 0.70, 1), ("down", 0.90, -1)],
         {"capacity": "common_capacity_driver", "down": "target_leads_variable"},
     )
 
     assert result["variable"].tolist() == ["up", "sync", "capacity", "down"]
-    assert result["final_score"].tolist() == pytest.approx([0.59] * 4)
     for _, row in result.iterrows():
         assert row["driver_priority_score"] == pytest.approx(
-            row["final_score"] + CLASS_PRIORITY_ADJUSTMENT[row["candidate_class"]]
+            row["final_score"] * CLASS_PRIORITY_FACTORS[row["candidate_class"]]
         )
 
 
@@ -220,9 +221,8 @@ def test_direction_semantics_survive_production_risk_pipeline():
     assert result.loc["sync", "candidate_class"] == "synchronous_association"
 
 
-def test_pr5_and_pr6_scoring_guards_remain_active():
+def test_missing_regime_remains_missing_without_reviving_v1_weight_normalization():
     source = inspect.getsource(final_ranked_features)
-    parts = source.split("parts = {", 1)[1].split("}", 1)[0]
     insufficient = pd.DataFrame(
         [{"variable": "x", "regime_stability_final": np.nan, "regime_evidence_status": "insufficient_regimes"}]
     )
@@ -232,9 +232,8 @@ def test_pr5_and_pr6_scoring_guards_remain_active():
         variable_only, variable_only, variable_only,
     ).iloc[0]
 
-    assert parts.count('"correlation":') == 1
-    assert '"raw":' not in parts and '"residual":' not in parts
-    assert EVIDENCE_COMPONENT_WEIGHTS["regime"] == pytest.approx(0.15)
+    assert "EVIDENCE_COMPONENT_WEIGHTS" not in source
+    assert "den.replace(0" not in source
     assert pd.isna(result["regime_stability_final"])
     assert result["regime_status"] == "insufficient_regimes"
 

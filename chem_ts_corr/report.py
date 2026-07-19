@@ -113,7 +113,7 @@ def build_markdown_summary(
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","evidence_score","association_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","lag_quality","lag_quality_status","model_lift_score","model_lift_status","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","association_score","innovation_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","data_quality_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
     lines.extend(_table_lines(ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()))
 
     lines.extend(["", "## 预测候选", ""])
@@ -167,7 +167,7 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 使用动态权重：未计算项不参与评分，剩余已计算项按原始权重重归一；risk_penalty 按风险 token 的固定权重累计扣减，总扣分受上限约束，部分高风险还会触发 risk_score_cap。",
+            "- final_score 使用工业稳健 V2：在多组合理工程权重下汇总变化量关联、增量预测、稳定性和滞后质量；缺失证据降低完整度与置信度，不再放大剩余证据。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",

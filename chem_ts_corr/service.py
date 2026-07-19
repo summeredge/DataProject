@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from chem_ts_corr.causality import run_granger_tests
@@ -107,10 +108,30 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     _progress(progress_callback, "正在计算滞后相关")
     lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
     raw_ranked = summarize_best_lags(lag_scores)
+    _progress(progress_callback, "正在计算变化量关联")
+    if config.preprocess_mode in {"diff", "detrend_diff"}:
+        innovation_ranked = raw_ranked[["variable", "score"]].copy()
+    else:
+        innovation_scores = compute_lag_scores(scaled.diff().dropna(), config.target, config.max_lag)
+        innovation_ranked = summarize_best_lags(innovation_scores)[["variable", "score"]]
+    raw_ranked = raw_ranked.merge(
+        innovation_ranked.rename(columns={"score": "innovation_score"}),
+        on="variable",
+        how="left",
+    )
     excluded_controls = set()
     if config.exclude_control_columns_from_candidates:
         excluded_controls = set(config.residual_control_columns or []) | set(config.capacity_columns or [])
-    topk = raw_ranked.head(config.top_k)["variable"].tolist() if not raw_ranked.empty else []
+    if raw_ranked.empty:
+        topk = []
+    else:
+        preliminary_score = np.sqrt(
+            raw_ranked["score"].clip(0, 1)
+            * raw_ranked["innovation_score"].fillna(0.0).clip(0, 1)
+        )
+        topk = raw_ranked.assign(_preliminary_score=preliminary_score).nlargest(
+            config.top_k, "_preliminary_score"
+        )["variable"].tolist()
     candidate_variables, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns), excluded_controls)
     best_lags = _best_lag_map(raw_ranked)
     residual_controls = config.residual_control_columns or config.capacity_columns
@@ -202,7 +223,10 @@ def _progress(progress_callback, message: str) -> None:
 
 
 def _skipped_model_lift_scores(candidate_variables: list[str]) -> pd.DataFrame:
-    cols = ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"]
+    cols = [
+        "variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift",
+        "median_fold_lift", "positive_fold_ratio", "model_lift_score",
+    ]
     return pd.DataFrame(
         [
             {
@@ -211,6 +235,9 @@ def _skipped_model_lift_scores(candidate_variables: list[str]) -> pd.DataFrame:
                 "ar_baseline_rmse": pd.NA,
                 "candidate_rmse": pd.NA,
                 "model_lift": pd.NA,
+                "median_fold_lift": pd.NA,
+                "positive_fold_ratio": pd.NA,
+                "model_lift_score": pd.NA,
             }
             for variable in candidate_variables
         ],

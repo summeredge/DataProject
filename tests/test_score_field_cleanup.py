@@ -19,6 +19,7 @@ def _frame(values: dict[str, object] | None = None) -> pd.DataFrame:
 def _result(
     raw: float = 0.8,
     *,
+    innovation: object = None,
     residual: object = None,
     rolling: object = None,
     lag_quality: object = None,
@@ -26,7 +27,7 @@ def _result(
     regime: object = None,
     risk_flags: str = "",
 ) -> pd.Series:
-    ranked = pd.DataFrame([{"variable": "x", "score": raw, "lag": 1, "direction": "变量领先目标"}])
+    ranked = pd.DataFrame([{"variable": "x", "score": raw, "innovation_score": innovation, "lag": 1, "direction": "变量领先目标"}])
     residual_frame = _frame() if residual is None else _frame({"variable": "x", "residual_corr": residual})
     rolling_frame = _frame() if rolling is None else _frame({"variable": "x", "rolling_stability": rolling})
     lag_frame = _frame() if lag_quality is None else _frame({"variable": "x", "lag_quality": lag_quality})
@@ -109,31 +110,24 @@ def test_real_half_optional_evidence_is_preserved():
     assert row["lag_quality_status"] == "ok"
 
 
-@pytest.mark.parametrize(
-    ("kwargs", "expected"),
-    [
-        ({}, 0.8),
-        ({"lag_quality": 0.6}, (0.50 * 0.8 + 0.10 * 0.6) / 0.60),
-        (
-            {"residual": 0.4, "rolling": 0.7, "lag_quality": 0.6, "model_lift": 0.3, "regime": 0.5},
-            0.50 * (0.40 * 0.8 + 0.60 * 0.4) + 0.15 * 0.5 + 0.15 * 0.7 + 0.10 * 0.6 + 0.10 * 0.3,
-        ),
-        ({"rolling": 0.7}, (0.50 * 0.8 + 0.15 * 0.7) / 0.65),
-        ({"model_lift": 0.3}, (0.50 * 0.8 + 0.10 * 0.3) / 0.60),
-    ],
-)
-def test_evidence_score_formula_is_unchanged(kwargs: dict[str, object], expected: float):
-    assert _result(**kwargs)["evidence_score"] == pytest.approx(expected)
+def test_v2_complete_balanced_evidence_preserves_common_scale():
+    row = _result(
+        raw=0.8, innovation=0.8, rolling=0.8, lag_quality=0.8, model_lift=0.8
+    )
+
+    assert row["score_method"] == "industrial_robust_v2"
+    assert row["evidence_completeness"] == 1.0
+    assert row["evidence_score"] == pytest.approx(0.8)
 
 
-def test_risk_adjustment_grade_and_driver_rank_are_unchanged():
-    row = _result(raw=0.9, risk_flags="target_leads_variable")
+def test_direction_risk_changes_driver_priority_without_reducing_evidence():
+    row = _result(raw=0.9, innovation=0.9, rolling=0.9, lag_quality=0.9, model_lift=0.9, risk_flags="target_leads_variable")
 
-    assert row["risk_penalty"] == pytest.approx(0.10)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
-    assert row["risk_cap_reason"] == "target_leads_variable"
-    assert row["final_score"] == pytest.approx(0.59)
-    assert row["candidate_grade"] == "C"
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["risk_cap_reason"] == ""
+    assert row["final_score"] == pytest.approx(0.9)
+    assert row["candidate_grade"] == "A"
     assert row["driver_rank"] == 1
 
 
@@ -147,12 +141,17 @@ def test_ranking_and_topk_stay_driver_rank_based():
         {"variable": "b", "risk_flags": ""},
     ])
     empty = _frame()
-    result = final_ranked_features(ranked, empty, empty, empty, risks, empty, empty)
-    top = final_ranked_features(ranked, empty, empty, empty, risks, empty, empty, top_k=1)
+    ranked["innovation_score"] = ranked["score"]
+    complete = ranked[["variable", "score"]]
+    model = complete.rename(columns={"score": "model_lift_score"}).assign(status="ok")
+    lag = complete.rename(columns={"score": "lag_quality"})
+    rolling = complete.rename(columns={"score": "rolling_stability"})
+    result = final_ranked_features(ranked, empty, empty, model, risks, lag, rolling)
+    top = final_ranked_features(ranked, empty, empty, model, risks, lag, rolling, top_k=1)
 
     assert result["variable"].tolist() == ["b", "a"]
-    assert result["final_score"].tolist() == pytest.approx([0.58, 0.59])
-    assert result["driver_priority_score"].tolist() == pytest.approx([0.58, 0.29])
+    assert result["final_score"].tolist() == pytest.approx([0.58, 0.9])
+    assert result["driver_priority_score"].tolist() == pytest.approx([0.58, 0.9 * 0.45])
     assert result["driver_rank"].tolist() == [1, 2]
     assert top["variable"].tolist() == ["b"]
     assert top.loc[0, "driver_rank"] == 1
@@ -191,9 +190,9 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
 def test_report_risk_and_regime_explanations_are_current():
     markdown = build_markdown_summary("target", _summary_frame(), pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame())
 
-    for text in ["风险 token", "固定权重", "risk_score_cap", "工况覆盖度"]:
+    for text in ["工业稳健 V2", "缺失证据降低完整度", "risk_score_cap", "工况覆盖度"]:
         assert text in markdown
-    assert "按强/弱风险扣减" not in markdown
+    assert "剩余已计算项按原始权重重归一" not in markdown
 
 
 def test_web_uses_formal_score_labels_and_keeps_driver_sort():

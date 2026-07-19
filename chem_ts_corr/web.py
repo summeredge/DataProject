@@ -399,8 +399,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
-        skip_model_lift=True,
-        skip_rolling_corr=True,
+        skip_model_lift=False,
+        skip_rolling_corr=False,
     )
     task_id = uuid.uuid4().hex
     now = time.time()
@@ -2062,6 +2062,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>前 10 个推荐变量</h2>
+        <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低完整度与置信度，不会放大其他分项。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
@@ -2635,6 +2636,7 @@ function renderAnalysisResult(data) {
   renderScreeningQualityHints(lastRows);
   tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
+  tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -3789,7 +3791,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "final_score", "lag", "direction", "raw_corr", "residual_corr", "risk_flags", "recommended_use", "recommended_action"];
+  return ["variable", "final_score", "evidence_confidence", "lag", "direction", "raw_corr", "innovation_score", "prediction_score", "stability_score", "risk_flags", "recommended_use", "recommended_action"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -3917,14 +3919,14 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "final_score", "lag", "direction", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "final_score", "evidence_confidence", "lag", "direction", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
   importanceTable: ["variable", "importance", "importance_rank", "feature", "lag", "method"],
   modelDiscoveredTable: ["variable", "max_importance", "importance_rank", "best_model_lag", "recommended_use", "discovery_reason"],
   enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
-  enhancedLiftTable: ["variable", "status", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
+  enhancedLiftTable: ["variable", "status", "model_lift_score", "median_fold_lift", "positive_fold_ratio", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
   conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
   xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
@@ -4327,7 +4329,7 @@ function enhancedSummaryColumns() {
 }
 
 function modelLiftColumns() {
-  return ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"];
+  return ["variable", "status", "model_lift_score", "median_fold_lift", "positive_fold_ratio", "ar_baseline_rmse", "candidate_rmse", "model_lift"];
 }
 
 function rollingCorrColumns() {
@@ -4780,15 +4782,25 @@ function columnLabel(column) {
   const labels = {
     variable: "变量",
     trend_action: "趋势验证",
-    final_score: "综合得分",
+    final_score: "稳健综合得分",
     lag: "滞后",
     direction: "方向",
     raw_corr: "原始相关",
     association_score: "原始关联规范化得分",
+    innovation_score: "变化量关联得分",
     residual_corr: "残差相关",
     independent_signal_score: "独立残差信号得分",
     correlation_evidence_score: "关联证据综合得分",
     correlation_evidence_status: "关联证据状态",
+    prediction_score: "增量预测得分",
+    stability_score: "综合稳定性",
+    data_quality_score: "数据质量得分",
+    evidence_strength: "证据强度",
+    evidence_completeness: "证据完整度",
+    evidence_confidence: "证据置信度",
+    evidence_score_low: "证据得分下界",
+    evidence_score_high: "证据得分上界",
+    score_method: "评分方法",
     residual_status: "残差状态",
     risk_flags: "风险标签",
     recommended_use: "建议用途",
@@ -4834,8 +4846,11 @@ function columnLabel(column) {
     lag_quality_status: "滞后峰值质量状态",
     model_lift: "模型提升",
     model_lift_score: "模型提升得分",
+    median_fold_lift: "分段提升中位数",
+    positive_fold_ratio: "正提升分段比例",
     model_lift_status: "模型提升状态",
     risk_penalty: "风险惩罚",
+    risk_penalty_rate: "风险相对扣减率",
     force_included: "强制纳入",
     ar_baseline_rmse: "自回归基准RMSE",
     candidate_rmse: "候选变量模型RMSE",

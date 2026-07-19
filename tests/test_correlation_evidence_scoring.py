@@ -7,8 +7,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    CORRELATION_EVIDENCE_WEIGHTS,
-    EVIDENCE_COMPONENT_WEIGHTS,
+    INDUSTRIAL_SCORE_WEIGHT_PROFILES,
     final_ranked_features,
     risk_flags,
 )
@@ -46,21 +45,12 @@ def _evaluate(
 
 
 def _ranked(variable: str, score: float, lag: int = 0) -> dict[str, object]:
-    return {"variable": variable, "score": score, "lag": lag, "direction": "同步变化"}
+    return {"variable": variable, "score": score, "innovation_score": score, "lag": lag, "direction": "同步变化"}
 
 
-def test_fixed_correlation_and_evidence_weights():
-    assert CORRELATION_EVIDENCE_WEIGHTS == {"association": 0.40, "independent_signal": 0.60}
-    assert EVIDENCE_COMPONENT_WEIGHTS == {
-        "correlation": 0.50,
-        "regime": 0.15,
-        "rolling": 0.15,
-        "lag_quality": 0.10,
-        "model_lift": 0.10,
-    }
-    assert sum(CORRELATION_EVIDENCE_WEIGHTS.values()) == pytest.approx(1.0)
-    assert sum(EVIDENCE_COMPONENT_WEIGHTS.values()) == pytest.approx(1.0)
-    assert CORRELATION_EVIDENCE_WEIGHTS["independent_signal"] > CORRELATION_EVIDENCE_WEIGHTS["association"]
+def test_v1_fixed_weights_are_replaced_by_robust_profiles():
+    assert len(INDUSTRIAL_SCORE_WEIGHT_PROFILES) > 10
+    assert all(sum(profile.values()) == pytest.approx(1.0) for profile in INDUSTRIAL_SCORE_WEIGHT_PROFILES)
 
 
 def test_verified_residual_uses_fixed_family_formula():
@@ -68,14 +58,12 @@ def test_verified_residual_uses_fixed_family_formula():
         [_ranked("x", 0.9)],
         residual=_frame({"variable": "x", "residual_corr": 0.3}),
     ).iloc[0]
-    expected = 0.40 * 0.9 + 0.60 * 0.3
+    expected = np.sqrt(0.9 * 0.3)
 
     assert row["association_score"] == pytest.approx(0.9)
     assert row["independent_signal_score"] == pytest.approx(0.3)
     assert row["correlation_evidence_score"] == pytest.approx(expected)
-    assert row["correlation_evidence_status"] == "independent_verified"
-    assert row["evidence_score"] == pytest.approx(expected)
-    assert row["final_score"] == pytest.approx(expected)
+    assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
 
 
 def test_missing_residual_uses_association_only():
@@ -84,7 +72,7 @@ def test_missing_residual_uses_association_only():
     assert row["association_score"] == pytest.approx(0.85)
     assert pd.isna(row["independent_signal_score"])
     assert row["correlation_evidence_score"] == pytest.approx(0.85)
-    assert row["correlation_evidence_status"] == "association_only"
+    assert row["correlation_evidence_status"] == "innovation_verified"
 
 
 def test_zero_residual_is_valid_independent_signal():
@@ -94,13 +82,13 @@ def test_zero_residual_is_valid_independent_signal():
     ).iloc[0]
 
     assert row["independent_signal_score"] == 0.0
-    assert row["correlation_evidence_status"] == "independent_verified"
-    assert row["correlation_evidence_score"] == pytest.approx(0.40 * 0.8)
+    assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
+    assert row["correlation_evidence_score"] == 0.0
 
 
 @pytest.mark.parametrize(
     ("raw", "residual", "expected"),
-    [(0.7, 0.7, 0.7), (0.4, 0.8, 0.40 * 0.4 + 0.60 * 0.8)],
+    [(0.7, 0.7, 0.7), (0.4, 0.8, np.sqrt(0.4 * 0.8))],
 )
 def test_family_formula_handles_equal_or_higher_residual(raw: float, residual: float, expected: float):
     row = _evaluate(
@@ -136,21 +124,27 @@ def test_all_evidence_uses_fixed_component_budget():
         lag_peak=_frame({"variable": "x", "lag_quality": 0.5}),
         model_lift=_frame({"variable": "x", "model_lift": 0.4}),
     ).iloc[0]
-    correlation = 0.40 * 0.9 + 0.60 * 0.3
-    expected = 0.50 * correlation + 0.15 * 0.7 + 0.15 * 0.6 + 0.10 * 0.5 + 0.10 * 0.4
+    correlation = np.sqrt(0.9 * 0.3)
+    stability_score = np.sqrt(0.7 * 0.6)
+    expected = np.median([
+        profile["association"] * correlation
+        + profile["prediction"] * 0.4
+        + profile["stability"] * stability_score
+        + profile["lag_quality"] * 0.5
+        for profile in INDUSTRIAL_SCORE_WEIGHT_PROFILES
+    ])
 
     assert row["evidence_score"] == pytest.approx(expected)
 
 
-def test_dynamic_weight_normalization_is_preserved():
+def test_missing_evidence_is_not_renormalized():
     row = _evaluate(
         [_ranked("x", 0.8)],
         residual=_frame({"variable": "x", "residual_corr": 0.4}),
         lag_peak=_frame({"variable": "x", "lag_quality": 0.6}),
     ).iloc[0]
-    correlation = 0.40 * 0.8 + 0.60 * 0.4
-
-    assert row["evidence_score"] == pytest.approx((0.50 * correlation + 0.10 * 0.6) / 0.60)
+    assert row["evidence_completeness"] == pytest.approx(0.5)
+    assert row["evidence_score"] < row["correlation_evidence_score"]
 
 
 def test_pr3_risk_penalty_and_cap_are_unchanged():
@@ -159,9 +153,9 @@ def test_pr3_risk_penalty_and_cap_are_unchanged():
         risks=_frame({"variable": "x", "risk_flags": "target_leads_variable"}),
     ).iloc[0]
 
-    assert row["risk_penalty"] == pytest.approx(0.10)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
-    assert row["final_score"] == pytest.approx(min(max(row["evidence_score"] - 0.10, 0.0), 0.59))
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["final_score"] == pytest.approx(row["evidence_score"])
 
 
 def test_pr4_direction_classes_survive_production_risk_pipeline():
@@ -216,8 +210,8 @@ def test_force_include_keeps_adjusted_low_rank_variable():
     assert "forced" in result.index
     assert bool(result.loc["forced", "force_included"]) is True
     assert result.loc["forced", "correlation_evidence_score"] == pytest.approx(0.9)
-    assert result.loc["forced", "risk_penalty"] == pytest.approx(0.10)
-    assert result.loc["forced", "risk_score_cap"] == pytest.approx(0.59)
+    assert result.loc["forced", "risk_penalty"] == 0.0
+    assert result.loc["forced", "risk_score_cap"] == 1.0
 
 
 def test_output_uses_formal_correlation_evidence_fields():
@@ -259,7 +253,7 @@ def test_empty_or_nan_residual_is_association_only(residual: pd.DataFrame):
     row = _evaluate([_ranked("x", 0.8)], residual=residual).iloc[0]
 
     assert pd.isna(row["independent_signal_score"])
-    assert row["correlation_evidence_status"] == "association_only"
+    assert row["correlation_evidence_status"] == "innovation_verified"
     assert row["correlation_evidence_score"] == pytest.approx(0.8)
 
 
@@ -280,11 +274,9 @@ def test_all_scores_stay_in_range():
 
 def test_old_double_counting_source_pattern_is_absent():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
-    parts_source = source.split("parts = {", 1)[1].split("}", 1)[0]
 
     assert '"raw_corr_score"' not in source
     assert '"residual": (residual_score, 0.25)' not in source
     assert "residual_score =" not in source
-    assert parts_source.count('"correlation":') == 1
-    assert 'final["association_score"]' not in parts_source
-    assert "residual_score" not in parts_source
+    assert "EVIDENCE_COMPONENT_WEIGHTS" not in source
+    assert "CORRELATION_EVIDENCE_WEIGHTS" not in source

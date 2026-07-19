@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    EVIDENCE_COMPONENT_WEIGHTS,
     MIN_REGIMES_FOR_STABILITY,
     REGIME_CONSISTENCY_WEIGHTS,
     REGIME_NAMES,
@@ -39,15 +38,17 @@ def _summary(scores: pd.DataFrame, max_lag: int = 20) -> pd.Series:
 
 
 def _final(stability: pd.DataFrame, *, lag_quality: float | None = None) -> pd.Series:
-    ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "lag": 1, "direction": "变量领先目标"}])
+    ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "innovation_score": 0.8, "lag": 1, "direction": "变量领先目标"}])
     variable_only = pd.DataFrame(columns=["variable"])
+    model = pd.DataFrame([{"variable": "x", "model_lift_score": 0.8, "status": "ok"}])
+    rolling = pd.DataFrame([{"variable": "x", "rolling_stability": 0.8}])
     lag_peak = (
         pd.DataFrame([{"variable": "x", "lag_quality": lag_quality}])
         if lag_quality is not None
         else variable_only
     )
     return final_ranked_features(
-        ranked, variable_only, stability, variable_only, variable_only, lag_peak, variable_only
+        ranked, variable_only, stability, model, variable_only, lag_peak, rolling
     ).iloc[0]
 
 
@@ -224,11 +225,11 @@ def test_final_output_does_not_fill_missing_regime_with_half(stability: pd.DataF
     assert row["regime_status"] == expected_status
 
 
-def test_missing_regime_is_excluded_from_dynamic_weight_denominator():
+def test_missing_regime_does_not_replace_time_stability_or_trigger_v1_renormalization():
     row = _final(pd.DataFrame(), lag_quality=0.6)
-    expected = (0.50 * 0.8 + 0.10 * 0.6) / 0.60
 
-    assert row["evidence_score"] == pytest.approx(expected)
+    assert row["stability_score"] == pytest.approx(0.8)
+    assert row["evidence_completeness"] == 1.0
 
 
 def test_partial_regime_evidence_enters_total_score():
@@ -236,14 +237,14 @@ def test_partial_regime_evidence_enters_total_score():
         _scores(regimes=("low", "high"), scores=(0.8, 0.8), signs=(1, 1), lags=(1, 1)), 20
     )
     row = _final(stability)
-    expected = (0.50 * 0.8 + 0.15 * (2 / 3)) / 0.65
 
     assert row["regime_status"] == "partial_coverage"
-    assert row["evidence_score"] == pytest.approx(expected)
+    assert row["stability_score"] == pytest.approx(np.sqrt(0.8 * (2 / 3)))
 
 
-def test_regime_component_weight_remains_fifteen_percent():
-    assert EVIDENCE_COMPONENT_WEIGHTS["regime"] == pytest.approx(0.15)
+def test_v1_regime_component_weight_is_absent():
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+    assert "EVIDENCE_COMPONENT_WEIGHTS" not in source
 
 
 def test_pr3_risk_penalty_and_cap_remain_active():
@@ -255,8 +256,8 @@ def test_pr3_risk_penalty_and_cap_remain_active():
         force_include_variables=["x"], top_k=0,
     ).iloc[0]
 
-    assert row["risk_penalty"] == pytest.approx(0.10)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
     assert bool(row["force_included"]) is True
 
 
@@ -277,13 +278,13 @@ def test_pr4_direction_and_driver_rank_sort_remain_active():
     assert result["driver_rank"].is_monotonic_increasing
 
 
-def test_pr5_parts_keep_single_correlation_entry():
+def test_v2_components_keep_single_association_family_entry():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
-    parts = source.split("parts = {", 1)[1].split("}", 1)[0]
+    components = source.split("components = {", 1)[1].split("}", 1)[0]
 
-    assert parts.count('"correlation":') == 1
-    assert '"raw":' not in parts
-    assert '"residual":' not in parts
+    assert components.count('"association":') == 1
+    assert '"raw":' not in components
+    assert '"residual":' not in components
 
 
 def test_summarizer_and_final_inputs_are_not_modified():

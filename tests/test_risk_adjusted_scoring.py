@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    RISK_PENALTY_WEIGHTS,
-    RISK_SCORE_CAPS,
+    EVIDENCE_SCORE_CAPS,
+    RISK_RELATIVE_PENALTY_WEIGHTS,
     final_ranked_features,
 )
 
@@ -43,14 +43,19 @@ def _score(
     force_include_variables: list[str] | None = None,
 ) -> pd.DataFrame:
     empty = pd.DataFrame(columns=["variable"])
+    complete = pd.DataFrame(
+        [{"variable": variable, "value": score} for variable, score in rows]
+    )
+    ranked = _ranked(rows)
+    ranked["innovation_score"] = ranked["score"]
     return final_ranked_features(
-        ranked=_ranked(rows),
+        ranked=ranked,
         residual=empty,
         stability=empty,
-        model_lift=empty,
+        model_lift=complete.rename(columns={"value": "model_lift_score"}).assign(status="ok"),
         risks=pd.DataFrame() if risks is None else risks,
-        lag_peak_quality=empty,
-        rolling_corr_scores=empty,
+        lag_peak_quality=complete.rename(columns={"value": "lag_quality"}),
+        rolling_corr_scores=complete.rename(columns={"value": "rolling_stability"}),
         top_k=top_k,
         force_include_variables=force_include_variables,
     )
@@ -70,50 +75,51 @@ def test_no_risk_preserves_evidence_score():
     assert row["final_score"] == pytest.approx(row["evidence_score"])
 
 
-def test_target_leads_direct_penalty_and_cap():
+def test_target_leads_changes_driver_class_without_reducing_prediction_evidence():
     row = _one("target_leads_variable", 0.9)
 
-    assert row["risk_penalty"] == pytest.approx(0.10)
-    assert 0.9 - row["risk_penalty"] == pytest.approx(0.80)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
-    assert row["final_score"] == pytest.approx(0.59)
-    assert row["candidate_grade"] == "C"
+    assert row["risk_penalty_rate"] == 0.0
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["final_score"] == pytest.approx(0.9)
+    assert row["candidate_class"] == "downstream_response"
 
 
 @pytest.mark.parametrize(
-    ("token", "penalty", "cap", "grade"),
+    ("token", "cap", "grade"),
     [
-        ("common_capacity_driver", 0.12, 0.74, "B"),
-        ("closed_loop_suspect", 0.12, 0.59, "C"),
-        ("poor_data_quality", 0.15, 0.44, "D"),
+        ("common_capacity_driver", 1.0, "A"),
+        ("closed_loop_suspect", 1.0, "A"),
+        ("poor_data_quality", 0.44, "D"),
     ],
 )
-def test_individual_risk_penalties_and_caps(token: str, penalty: float, cap: float, grade: str):
+def test_engineering_risks_do_not_duplicate_component_penalties(token: str, cap: float, grade: str):
     row = _one(token, 0.95)
 
-    assert row["risk_penalty"] == pytest.approx(penalty)
+    assert row["risk_penalty"] == 0.0
     assert row["risk_score_cap"] == pytest.approx(cap)
-    assert row["final_score"] == pytest.approx(cap)
+    assert row["final_score"] == pytest.approx(min(0.95, cap))
     assert row["candidate_grade"] == grade
 
 
 def test_formula_like_does_not_duplicate_strong_formula_penalty():
     row = _one("formula_like;strong_formula_leakage", 1.0)
 
-    assert row["risk_penalty"] == pytest.approx(0.20)
+    assert row["risk_penalty_rate"] == pytest.approx(0.50)
+    assert row["risk_penalty"] == pytest.approx(0.50)
     assert row["risk_score_cap"] == pytest.approx(0.25)
     assert row["risk_cap_reason"] == "strong_formula_leakage"
     assert row["final_score"] == pytest.approx(0.25)
     assert row["candidate_grade"] == "E"
 
 
-def test_multiple_risks_accumulate_and_use_strictest_cap():
+def test_engineering_risks_are_handled_by_driver_priority_not_evidence_subtraction():
     row = _one("common_capacity_driver;target_leads_variable;lag_boundary", 0.95)
 
-    assert row["risk_penalty"] == pytest.approx(0.25)
-    assert row["risk_score_cap"] == pytest.approx(0.59)
-    assert row["risk_cap_reason"] == "target_leads_variable"
-    assert row["final_score"] == pytest.approx(min(0.95 - 0.25, 0.59))
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["risk_cap_reason"] == ""
+    assert row["final_score"] == pytest.approx(0.95)
 
 
 def test_multiple_caps_choose_lowest_value():
@@ -123,9 +129,10 @@ def test_multiple_caps_choose_lowest_value():
     assert row["risk_cap_reason"] == "strong_formula_leakage"
 
 
-def test_risk_penalty_is_clipped_to_sixty_percent():
-    row = _one(";".join(RISK_PENALTY_WEIGHTS))
+def test_relative_penalty_rate_is_bounded():
+    row = _one(";".join(RISK_RELATIVE_PENALTY_WEIGHTS))
 
+    assert row["risk_penalty_rate"] == pytest.approx(0.60)
     assert row["risk_penalty"] == pytest.approx(0.60)
 
 
@@ -181,7 +188,7 @@ def test_force_included_variable_still_receives_risk_adjustment():
     risky = result.set_index("variable").loc["risky"]
 
     assert bool(risky["force_included"]) is True
-    assert risky["risk_penalty"] == pytest.approx(0.20)
+    assert risky["risk_penalty"] == pytest.approx(0.50)
     assert risky["risk_score_cap"] == pytest.approx(0.25)
     assert risky["candidate_grade"] == "E"
 
@@ -212,7 +219,7 @@ def test_adjusted_output_values_stay_in_range():
     risks = _risks(
         [
             ("none", "", 0, 0),
-            ("all", ";".join(RISK_PENALTY_WEIGHTS), 99, 99),
+            ("all", ";".join(RISK_RELATIVE_PENALTY_WEIGHTS), 99, 99),
             ("unknown", "unknown", 0, 0),
         ]
     )
@@ -220,7 +227,8 @@ def test_adjusted_output_values_stay_in_range():
     result = _score([("none", 1.5), ("all", 1.0), ("unknown", -0.5)], risks)
 
     assert result["evidence_score"].between(0, 1).all()
-    assert result["risk_penalty"].between(0, 0.60).all()
+    assert result["risk_penalty_rate"].between(0, 0.80).all()
+    assert result["risk_penalty"].between(0, 1).all()
     assert result["risk_score_cap"].between(0, 1).all()
     assert result["final_score"].between(0, 1).all()
 
@@ -264,30 +272,26 @@ def test_old_count_and_secondary_scaling_formulas_are_absent():
         assert forbidden not in source
     assert '"raw": (final["raw_corr_score"], 0.25)' not in source
     assert '"residual": (residual_score, 0.25)' not in source
-    parts_source = source.split("parts = {", 1)[1].split("}", 1)[0]
-    assert parts_source.count('"correlation":') == 1
-    assert 'final["raw_corr_score"]' not in parts_source
-    assert "residual_score" not in parts_source
+    assert "EVIDENCE_COMPONENT_WEIGHTS" not in source
+    assert "CORRELATION_EVIDENCE_WEIGHTS" not in source
+    assert "den.replace(0" not in source
 
 
-def test_risk_constants_match_audited_values():
-    assert RISK_PENALTY_WEIGHTS == {
+def test_v2_risk_constants_separate_evidence_and_engineering_priority():
+    assert RISK_RELATIVE_PENALTY_WEIGHTS == {
         "formula_like": 0.00,
-        "strong_formula_leakage": 0.20,
-        "common_capacity_driver": 0.12,
-        "closed_loop_suspect": 0.12,
-        "target_leads_variable": 0.10,
-        "unstable_across_regimes": 0.04,
-        "unstable_over_time": 0.04,
-        "lag_boundary": 0.03,
-        "low_model_lift": 0.05,
-        "poor_data_quality": 0.15,
-        "residual_collinearity": 0.04,
+        "strong_formula_leakage": 0.50,
+        "common_capacity_driver": 0.00,
+        "closed_loop_suspect": 0.00,
+        "target_leads_variable": 0.00,
+        "unstable_across_regimes": 0.00,
+        "unstable_over_time": 0.00,
+        "lag_boundary": 0.00,
+        "low_model_lift": 0.00,
+        "poor_data_quality": 0.00,
+        "residual_collinearity": 0.10,
     }
-    assert RISK_SCORE_CAPS == {
+    assert EVIDENCE_SCORE_CAPS == {
         "strong_formula_leakage": 0.25,
         "poor_data_quality": 0.44,
-        "target_leads_variable": 0.59,
-        "closed_loop_suspect": 0.59,
-        "common_capacity_driver": 0.74,
     }

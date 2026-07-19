@@ -14,47 +14,56 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
-RISK_PENALTY_WEIGHTS = {
+RISK_RELATIVE_PENALTY_WEIGHTS = {
     "formula_like": 0.00,
-    "strong_formula_leakage": 0.20,
-    "common_capacity_driver": 0.12,
-    "closed_loop_suspect": 0.12,
-    "target_leads_variable": 0.10,
-    "unstable_across_regimes": 0.04,
-    "unstable_over_time": 0.04,
-    "lag_boundary": 0.03,
-    "low_model_lift": 0.05,
-    "poor_data_quality": 0.15,
-    "residual_collinearity": 0.04,
+    "strong_formula_leakage": 0.50,
+    "common_capacity_driver": 0.00,
+    "closed_loop_suspect": 0.00,
+    "target_leads_variable": 0.00,
+    "unstable_across_regimes": 0.00,
+    "unstable_over_time": 0.00,
+    "lag_boundary": 0.00,
+    "low_model_lift": 0.00,
+    "poor_data_quality": 0.00,
+    "residual_collinearity": 0.10,
 }
-RISK_SCORE_CAPS = {
+EVIDENCE_SCORE_CAPS = {
     "strong_formula_leakage": 0.25,
     "poor_data_quality": 0.44,
-    "target_leads_variable": 0.59,
-    "closed_loop_suspect": 0.59,
-    "common_capacity_driver": 0.74,
 }
-CLASS_PRIORITY_ADJUSTMENT = {
-    "upstream_driver_candidate": 0.00,
-    "synchronous_association": -0.05,
-    "downstream_response": -0.30,
-    "closed_loop_related": -0.25,
-    "capacity_driven": -0.15,
-    "formula_or_derived": -0.50,
-    "poor_quality": -0.40,
-    "uncertain_candidate": -0.10,
+CLASS_PRIORITY_FACTORS = {
+    "upstream_driver_candidate": 1.00,
+    "synchronous_association": 0.90,
+    "downstream_response": 0.45,
+    "closed_loop_related": 0.55,
+    "capacity_driven": 0.75,
+    "formula_or_derived": 0.25,
+    "poor_quality": 0.35,
+    "uncertain_candidate": 0.80,
 }
-CORRELATION_EVIDENCE_WEIGHTS = {
-    "association": 0.40,
-    "independent_signal": 0.60,
-}
-EVIDENCE_COMPONENT_WEIGHTS = {
-    "correlation": 0.50,
-    "regime": 0.15,
-    "rolling": 0.15,
-    "lag_quality": 0.10,
-    "model_lift": 0.10,
-}
+INDUSTRIAL_SCORE_COMPONENTS = ("association", "prediction", "stability", "lag_quality")
+
+
+def _industrial_score_weight_profiles() -> tuple[dict[str, float], ...]:
+    profiles: list[dict[str, float]] = []
+    for association in range(10, 41, 5):
+        for prediction in range(10, 41, 5):
+            for stability in range(10, 41, 5):
+                lag_quality = 100 - association - prediction - stability
+                if not 10 <= lag_quality <= 40:
+                    continue
+                if prediction < association or stability < lag_quality:
+                    continue
+                profiles.append({
+                    "association": association / 100,
+                    "prediction": prediction / 100,
+                    "stability": stability / 100,
+                    "lag_quality": lag_quality / 100,
+                })
+    return tuple(profiles)
+
+
+INDUSTRIAL_SCORE_WEIGHT_PROFILES = _industrial_score_weight_profiles()
 REGIME_NAMES = ("low", "mid", "high")
 MIN_REGIMES_FOR_STABILITY = 2
 REGIME_UNSTABLE_THRESHOLD = 0.50
@@ -359,7 +368,10 @@ def _summarize_regime_robustness(scores: pd.DataFrame, max_lag: int) -> pd.DataF
 
 
 def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: list[str], max_lag: int, n_splits: int = 4, best_lags: dict[str, int] | None = None) -> pd.DataFrame:
-    cols = ["variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift"]
+    cols = [
+        "variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift",
+        "median_fold_lift", "positive_fold_ratio", "model_lift_score",
+    ]
     rows: list[dict[str, object]] = []
     ar_lags = list(range(1, min(max_lag, 6) + 1))
     for variable in candidate_variables:
@@ -372,9 +384,9 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
             dataset[f"{target}__lag_{lag}"] = frame[target].shift(lag)
         for lag in candidate_lags:
             dataset[f"{variable}__lag_{lag}"] = frame[variable].shift(lag)
-        dataset = dataset.dropna()
+        dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
         if len(dataset) < 60:
-            rows.append({"variable": variable, "status": "skipped: insufficient rows", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": 0.0})
+            rows.append({"variable": variable, "status": "skipped: insufficient rows", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
             continue
         base_cols = [f"{target}__lag_{lag}" for lag in ar_lags]
         full_cols = base_cols + [f"{variable}__lag_{lag}" for lag in candidate_lags]
@@ -382,7 +394,7 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
         full_errors: list[float] = []
         splits = _time_series_splits(len(dataset), n_splits)
         if not splits:
-            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": 0.0})
+            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
             continue
         for train_idx, test_idx in splits:
             y_train = dataset.iloc[train_idx][target].to_numpy()
@@ -394,10 +406,18 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
         base_rmse = float(np.mean(base_errors))
         full_rmse = float(np.mean(full_errors))
         if np.isnan(base_rmse) or np.isnan(full_rmse):
-            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": 0.0})
+            rows.append({"variable": variable, "status": "skipped: no valid time series split", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
             continue
         lift = max(0.0, (base_rmse - full_rmse) / base_rmse) if base_rmse > 0 else 0.0
-        rows.append({"variable": variable, "status": "ok", "ar_baseline_rmse": base_rmse, "candidate_rmse": full_rmse, "model_lift": lift})
+        fold_lifts = np.array([
+            (base - full) / base if base > 0 else 0.0
+            for base, full in zip(base_errors, full_errors)
+        ])
+        median_fold_lift = float(np.median(fold_lifts))
+        positive_fold_ratio = float(np.mean(fold_lifts > 0))
+        lift_strength = float(np.clip(max(0.0, median_fold_lift) / 0.05, 0.0, 1.0))
+        model_lift_score = lift_strength * positive_fold_ratio
+        rows.append({"variable": variable, "status": "ok", "ar_baseline_rmse": base_rmse, "candidate_rmse": full_rmse, "model_lift": lift, "median_fold_lift": median_fold_lift, "positive_fold_ratio": positive_fold_ratio, "model_lift_score": model_lift_score})
     return pd.DataFrame(rows, columns=cols)
 
 
@@ -598,7 +618,8 @@ def rolling_corr_scores(
         else:
             best_lag, best_score = prepared
         shifted = pair[variable].shift(best_lag)
-        rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target]).dropna()
+        rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target])
+        rolling = rolling.replace([np.inf, -np.inf], np.nan).dropna()
         if rolling.empty:
             continue
         sign_consistency = rolling.apply(lambda value: 1 if value >= 0 else -1).value_counts(normalize=True).max()
@@ -626,14 +647,14 @@ def _risk_token_set(value: object) -> set[str]:
 
 def _risk_adjustment(value: object) -> tuple[float, float, str]:
     tokens = _risk_token_set(value)
-    penalty = min(0.60, sum(RISK_PENALTY_WEIGHTS.get(token, 0.0) for token in tokens))
+    penalty_rate = min(0.80, sum(RISK_RELATIVE_PENALTY_WEIGHTS.get(token, 0.0) for token in tokens))
     cap = 1.0
     reason = ""
-    for token, token_cap in RISK_SCORE_CAPS.items():
+    for token, token_cap in EVIDENCE_SCORE_CAPS.items():
         if token in tokens and token_cap < cap:
             cap = token_cap
             reason = token
-    return float(penalty), float(cap), reason
+    return float(penalty_rate), float(cap), reason
 
 
 def classify_candidate(row: pd.Series) -> str:
@@ -667,26 +688,38 @@ def classify_candidate(row: pd.Series) -> str:
 def _combine_correlation_evidence(
     association_score: pd.Series,
     independent_signal_score: pd.Series,
+    innovation_score: pd.Series,
 ) -> tuple[pd.Series, pd.Series]:
     association = pd.to_numeric(association_score, errors="coerce").astype(float)
     independent = pd.to_numeric(independent_signal_score, errors="coerce").astype(float)
-    verified = independent.notna()
-    verified_score = (
-        CORRELATION_EVIDENCE_WEIGHTS["association"] * association
-        + CORRELATION_EVIDENCE_WEIGHTS["independent_signal"]
-        * independent
+    innovation = pd.to_numeric(innovation_score, errors="coerce").astype(float)
+    innovation_verified = innovation.notna()
+    independent_verified = independent.notna()
+    combined = association.copy()
+    combined = combined.where(
+        ~innovation_verified,
+        np.sqrt(association.clip(0, 1) * innovation.clip(0, 1)),
     )
-    combined = association.where(~verified, verified_score)
-    status = pd.Series(
-        np.where(verified, "independent_verified", "association_only"),
-        index=association_score.index,
-        dtype=object,
+    combined = combined.where(
+        ~independent_verified,
+        np.sqrt(combined.clip(0, 1) * independent.clip(0, 1)),
     )
+    status = pd.Series("association_only", index=association_score.index, dtype=object)
+    status.loc[innovation_verified] = "innovation_verified"
+    status.loc[independent_verified & ~innovation_verified] = "independent_verified"
+    status.loc[independent_verified & innovation_verified] = "innovation_and_independent_verified"
     return combined.clip(0, 1), status
 
 
+def _data_quality_score(diag: Mapping[str, object]) -> float:
+    missing = 1.0 - min(1.0, _safe_float(diag.get("missing_rate", 0.0)) / 0.20)
+    saturation = 1.0 - min(1.0, _safe_float(diag.get("saturation_ratio", 0.0)) / 0.20)
+    jumps = 1.0 - min(1.0, _safe_float(diag.get("abnormal_jump_ratio", 0.0)) / 0.01)
+    return float(np.clip(min(missing, saturation, jumps), 0.0, 1.0))
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
+    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "data_quality_score", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
 
@@ -707,6 +740,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         regime_stability = regime_info.get("regime_stability_final", np.nan)
         regime_status = str(regime_info.get("regime_evidence_status", ""))
         d = diag_map.get(variable, {})
+        data_quality_score = _data_quality_score(d)
         poor_quality = (
             _safe_float(d.get("missing_rate", 0), default=0.0) > 0.2
             or _safe_float(d.get("saturation_ratio", 0), default=0.0) > 0.2
@@ -765,12 +799,12 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             "residual_collinearity": "残差控制共线性高",
         }
         reason = "；".join(reason_map.get(flag, flag) for flag in flags)
-        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
+        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
     return pd.DataFrame(rows, columns=cols)
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "raw_corr", "association_score", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+    cols = ["variable", "lag", "direction", "raw_corr", "association_score", "innovation_score", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_completeness", "evidence_confidence", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -783,8 +817,12 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     if "variable" not in stability_source.columns:
         stability_source = pd.DataFrame(columns=["variable"])
     final = final.merge(stability_source, on="variable", how="left")
-    final = final.merge(model_lift[[c for c in ["variable", "model_lift", "status"] if c in model_lift.columns]], on="variable", how="left")
-    risk_columns = ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
+    model_columns = [c for c in ["variable", "model_lift", "model_lift_score", "status"] if c in model_lift.columns]
+    model_source = model_lift[model_columns].copy()
+    if "status" in model_source.columns:
+        model_source = model_source.rename(columns={"status": "_model_lift_source_status"})
+    final = final.merge(model_source, on="variable", how="left")
+    risk_columns = ["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "data_quality_score"]
     risk_source = risks[[c for c in risk_columns if c in risks.columns]].copy()
     if "variable" not in risk_source.columns:
         risk_source = pd.DataFrame(columns=["variable"])
@@ -792,57 +830,103 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final = final.merge(lag_peak_quality[[c for c in ["variable", "lag_quality", "lag_boundary_flag"] if c in lag_peak_quality.columns]], on="variable", how="left")
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
 
-    residual_raw = final["residual_corr"] if "residual_corr" in final.columns else pd.Series(np.nan, index=final.index)
-    regime_raw = final["regime_stability_final"] if "regime_stability_final" in final.columns else pd.Series(np.nan, index=final.index)
-    rolling_raw = final["rolling_stability"] if "rolling_stability" in final.columns else pd.Series(np.nan, index=final.index)
-    lagq_raw = final["lag_quality"] if "lag_quality" in final.columns else pd.Series(np.nan, index=final.index)
-    lift_raw = final["model_lift"] if "model_lift" in final.columns else pd.Series(np.nan, index=final.index)
+    residual_raw = pd.to_numeric(final["residual_corr"], errors="coerce") if "residual_corr" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
+    regime_raw = pd.to_numeric(final["regime_stability_final"], errors="coerce") if "regime_stability_final" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
+    rolling_raw = pd.to_numeric(final["rolling_stability"], errors="coerce") if "rolling_stability" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
+    lagq_raw = pd.to_numeric(final["lag_quality"], errors="coerce") if "lag_quality" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
+    innovation_raw = pd.to_numeric(final["innovation_score"], errors="coerce") if "innovation_score" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
+    if "model_lift_score" in final.columns:
+        lift_raw = final["model_lift_score"]
+    elif "model_lift" in final.columns:
+        lift_raw = final["model_lift"]
+    else:
+        lift_raw = pd.Series(np.nan, index=final.index, dtype=float)
+    lift_raw = pd.to_numeric(lift_raw, errors="coerce")
     final["residual_status"] = np.where(residual_raw.notna(), "ok", "not_computed")
     regime_evidence_status = final.get("regime_evidence_status", pd.Series(np.nan, index=final.index))
     final["regime_status"] = regime_evidence_status.where(
         regime_evidence_status.notna(), np.where(regime_raw.notna(), "ok", "not_computed")
     )
     final["rolling_status"] = np.where(rolling_raw.notna(), "ok", "not_computed")
-    final["model_lift_status"] = np.where(lift_raw.notna(), "ok", "not_computed")
+    model_source_status = final.get("_model_lift_source_status", pd.Series(np.nan, index=final.index))
+    final["model_lift_status"] = model_source_status.where(
+        model_source_status.notna(), np.where(lift_raw.notna(), "ok", "not_computed")
+    )
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
     final["association_score"] = pd.to_numeric(final["raw_corr"], errors="coerce").fillna(0.0).clip(0, 1)
+    final["innovation_score"] = pd.to_numeric(innovation_raw, errors="coerce").clip(0, 1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
     final["lag_quality"] = lagq_raw.clip(0,1)
     final["model_lift_score"] = lift_raw.clip(0,1)
+    model_lift_computed = final["model_lift_status"].astype(str).str.startswith("ok")
+    final["prediction_score"] = final["model_lift_score"].where(model_lift_computed)
     final["independent_signal_score"] = pd.to_numeric(residual_raw, errors="coerce").clip(0, 1)
     (
         final["correlation_evidence_score"],
         final["correlation_evidence_status"],
     ) = _combine_correlation_evidence(
-        final["association_score"], final["independent_signal_score"]
+        final["association_score"], final["independent_signal_score"], final["innovation_score"]
     )
-    parts = {
-        "correlation": (final["correlation_evidence_score"], EVIDENCE_COMPONENT_WEIGHTS["correlation"]),
-        "regime": (final["regime_stability_final"], EVIDENCE_COMPONENT_WEIGHTS["regime"]),
-        "rolling": (final["rolling_stability"], EVIDENCE_COMPONENT_WEIGHTS["rolling"]),
-        "lagq": (final["lag_quality"], EVIDENCE_COMPONENT_WEIGHTS["lag_quality"]),
-        "lift": (final["model_lift_score"], EVIDENCE_COMPONENT_WEIGHTS["model_lift"]),
+    both_stability = final["regime_stability_final"].notna() & final["rolling_stability"].notna()
+    final["stability_score"] = final["rolling_stability"].where(
+        final["rolling_stability"].notna(), final["regime_stability_final"]
+    ).astype(float)
+    final.loc[both_stability, "stability_score"] = np.sqrt(
+        final.loc[both_stability, "rolling_stability"]
+        * final.loc[both_stability, "regime_stability_final"]
+    )
+
+    correlation_completeness = 0.5 + 0.5 * final["innovation_score"].notna().astype(float)
+    final["evidence_completeness"] = (
+        correlation_completeness
+        + final["prediction_score"].notna().astype(float)
+        + final["stability_score"].notna().astype(float)
+        + final["lag_quality"].notna().astype(float)
+    ) / 4.0
+    data_quality_raw = final.get("data_quality_score", pd.Series(1.0, index=final.index))
+    final["data_quality_score"] = pd.to_numeric(data_quality_raw, errors="coerce").fillna(1.0).clip(0, 1)
+    final["evidence_confidence"] = np.sqrt(
+        final["data_quality_score"] * final["evidence_completeness"]
+    )
+
+    components = {
+        "association": final["correlation_evidence_score"].fillna(0.0),
+        "prediction": final["prediction_score"].fillna(0.0),
+        "stability": final["stability_score"].fillna(0.0),
+        "lag_quality": final["lag_quality"].fillna(0.0),
     }
-    num = 0
-    den = 0
-    for series, w in parts.values():
-        valid = series.notna()
-        num = num + series.fillna(0) * w
-        den = den + valid.astype(float) * w
-    final["evidence_score"] = (num / den.replace(0, np.nan)).fillna(0).clip(0, 1)
+    profile_scores = pd.DataFrame(
+        {
+            index: sum(components[name] * weights[name] for name in INDUSTRIAL_SCORE_COMPONENTS)
+            for index, weights in enumerate(INDUSTRIAL_SCORE_WEIGHT_PROFILES)
+        },
+        index=final.index,
+    )
+    final["evidence_strength"] = profile_scores.median(axis=1).clip(0, 1)
+    final["evidence_score_low"] = (
+        profile_scores.quantile(0.10, axis=1) * final["evidence_confidence"]
+    ).clip(0, 1)
+    final["evidence_score_high"] = (
+        profile_scores.quantile(0.90, axis=1) * final["evidence_confidence"]
+    ).clip(0, 1)
+    final["evidence_score"] = (
+        final["evidence_strength"] * final["evidence_confidence"]
+    ).clip(0, 1)
+    final["score_method"] = "industrial_robust_v2"
     risk_values = final.get("risk_flags", pd.Series("", index=final.index)).map(_risk_adjustment)
-    final[["risk_penalty", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
+    final[["risk_penalty_rate", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
         risk_values.tolist(), index=final.index
     )
+    final["risk_penalty"] = final["evidence_score"] * final["risk_penalty_rate"]
     penalized_score = (final["evidence_score"] - final["risk_penalty"]).clip(0, 1)
     final["final_score"] = np.minimum(penalized_score, final["risk_score_cap"]).clip(0, 1)
     final["association_rank"] = final["evidence_score"].rank(
         method="first", ascending=False
     ).astype(int)
     final["candidate_class"] = final.apply(classify_candidate, axis=1)
-    class_adjustment = final["candidate_class"].map(CLASS_PRIORITY_ADJUSTMENT).fillna(0.0)
-    final["driver_priority_score"] = (final["final_score"] + class_adjustment).clip(0, 1)
+    class_factor = final["candidate_class"].map(CLASS_PRIORITY_FACTORS).fillna(0.80)
+    final["driver_priority_score"] = (final["final_score"] * class_factor).clip(0, 1)
     final["driver_rank"] = final["driver_priority_score"].rank(
         method="first", ascending=False
     ).astype(int)
@@ -901,12 +985,12 @@ def _recommend_use(row: pd.Series) -> str:
         return "formula_coupled_reference"
     if "unstable_across_regimes" in flags or "unstable_over_time" in flags:
         return "unstable_candidate"
+    if lag < 0:
+        return "state_indicator"
     if grade == "A":
         return "strong_screening_candidate"
     if grade == "B" and _safe_float(row.get("model_lift_score", 0), default=0.0) > 0.05:
         return "prediction_candidate"
-    if int(_safe_float(row.get("lag", 0), default=0.0)) < 0:
-        return "state_indicator"
     return "manual_review_required"
 
 

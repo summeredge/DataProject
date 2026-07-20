@@ -56,6 +56,43 @@ def test_validation_value_does_not_fill_missing_training_tail():
     assert result.iloc[19]["x"] != frame.iloc[20]["x"]
 
 
+@pytest.mark.parametrize("mode", ["raw", "diff", "detrend", "detrend_diff"])
+def test_missing_target_is_removed_before_causal_transformation(mode: str):
+    frame = _frame(40)
+    missing_time = frame.index[20]
+    expected_target = frame["target"].drop(index=missing_time)
+    frame.loc[missing_time, "target"] = np.nan
+
+    cleaned = preprocess.preprocess_frame_causal(frame, "target", None, 2)
+    transformed = preprocess.transform_frame_causal(cleaned, mode, detrend_window=8)
+
+    assert missing_time not in cleaned.index
+    assert missing_time not in transformed.index
+    pd.testing.assert_series_equal(cleaned["target"], expected_target, check_names=True)
+
+
+def test_causal_forward_fill_does_not_cross_physical_gap():
+    frame = _frame(30).drop(index=_frame(30).index[15])
+    after_gap = frame.index[15]
+    frame.loc[after_gap, "x"] = np.nan
+
+    cleaned = preprocess.preprocess_frame_causal(frame, "target", None, 5)
+
+    assert pd.isna(cleaned.loc[after_gap, "x"])
+
+
+def test_causal_diff_and_trailing_detrend_restart_after_physical_gap():
+    complete = _frame(40)
+    frame = complete.drop(index=complete.index[20])
+    after_gap = complete.index[21]
+
+    differenced = preprocess.transform_frame_causal(frame, "diff", detrend_window=8)
+    detrended = preprocess.transform_frame_causal(frame, "detrend", detrend_window=8)
+
+    assert after_gap not in differenced.index
+    assert after_gap not in detrended.index
+
+
 def test_trailing_detrend_does_not_use_future_values():
     frame = _frame(30)
     baseline = preprocess.detrend_trailing_average(frame.iloc[:20], 8)

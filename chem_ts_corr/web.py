@@ -92,6 +92,7 @@ _RESAMPLE_MINUTES_ERROR = "重采样间隔必须是大于 0 的整数分钟"
 SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
 SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
+TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -604,6 +605,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -621,6 +623,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         ranked=ranked,
         ranked_source_frame=ranked_source_scaled,
         allow_ranked_reuse=not lag_search_changed,
+        target_mask=target_mask,
     )
     lag_evidence_seconds = time.perf_counter() - lag_evidence_started
     best_lags = {
@@ -630,7 +633,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     }
 
     model_lift_started = time.perf_counter()
-    lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags)
+    lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags, target_mask=target_mask)
     model_lift_seconds = time.perf_counter() - model_lift_started
 
     rolling_started = time.perf_counter()
@@ -640,6 +643,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         variables,
         secondary_config.max_lag,
         best_lag_evidence=best_lag_evidence,
+        target_mask=target_mask,
     )
     rolling_seconds = time.perf_counter() - rolling_started
 
@@ -745,6 +749,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         extra_variables=extra_variables,
     )
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -753,6 +758,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         target=secondary_config.target,
         variables=variables,
         maxlag=max(1, secondary_config.max_lag),
+        target_mask=target_mask,
     )
     granger.to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
     return {
@@ -779,6 +785,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
+    target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
     lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
     if lag_search_changed:
@@ -793,6 +800,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         best_lags,
         secondary_config.max_lag,
         recompute_limit=None if lag_search_changed else 20,
+        target_mask=target_mask,
     )
     if not variables:
         raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
@@ -805,6 +813,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         random_state=secondary_config.random_state,
         best_lags=best_lags,
         lag_mode="best_only",
+        target_mask=target_mask,
     )
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     model_variable_importance = build_model_variable_importance(importance, ranked, risk_flags=risk)
@@ -842,6 +851,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     risk_filter = _list_field(form, "risk_flag_filter")
     candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
     scaled = _scaled_frame_for_secondary(config)
+    target_mask = _target_segment_mask(scaled)
     result = run_causal_review_stage(
         frame=scaled,
         target=config.target,
@@ -857,6 +867,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
         conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
         conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
+        target_mask=target_mask,
     )
     conditional = result["conditional_granger_scores"]
     report = result["causal_review_report"]
@@ -1205,6 +1216,7 @@ def _secondary_best_lags_for_missing_variables(
     existing_best_lags: dict[str, int],
     max_lag: int,
     recompute_limit: int | None = 20,
+    target_mask: pd.Series | None = None,
 ) -> dict[str, int]:
     from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 
@@ -1227,7 +1239,12 @@ def _secondary_best_lags_for_missing_variables(
         if len(pair) < max(10, max_lag + 5):
             continue
 
-        best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        scores = (
+            compute_lag_scores(pair, target, max_lag)
+            if target_mask is None
+            else compute_lag_scores(pair, target, max_lag, target_mask=target_mask)
+        )
+        best = summarize_best_lags(scores)
         if best.empty or "lag" not in best.columns:
             continue
 
@@ -1267,7 +1284,9 @@ def _scaled_frame_for_secondary(
             return cached.copy(deep=True)
 
     transformed = _prepared_frame_for_secondary(config, protected_columns)
-    scaled = standardize_frame(transformed)
+    target_mask = _target_segment_mask(transformed)
+    scaled = standardize_frame(transformed, fit_mask=target_mask)
+    scaled.attrs[TARGET_SEGMENT_MASK_ATTR] = target_mask
     with SCALED_FRAME_CACHE_LOCK:
         SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
         while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
@@ -1277,14 +1296,9 @@ def _scaled_frame_for_secondary(
 
 
 def _segmented_numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
-    from chem_ts_corr.data import select_numeric_frame
-    from chem_ts_corr.screening import apply_ignore_roles, load_roles
     from chem_ts_corr.preprocess import segment_by_load
 
-    raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
-    numeric = select_numeric_frame(raw, config.target)
-    roles = load_roles(config, list(numeric.columns))
-    numeric = apply_ignore_roles(numeric, roles, config.target)
+    numeric = _numeric_frame(config)
     return segment_by_load(
         numeric,
         segment_column=config.segment_column,
@@ -1292,6 +1306,16 @@ def _segmented_numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
         segment_min=config.segment_min,
         segment_max=config.segment_max,
     )
+
+
+def _numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
+    from chem_ts_corr.data import select_numeric_frame
+    from chem_ts_corr.screening import apply_ignore_roles, load_roles
+
+    raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    numeric = select_numeric_frame(raw, config.target)
+    roles = load_roles(config, list(numeric.columns))
+    return apply_ignore_roles(numeric, roles, config.target)
 
 
 def _protected_validation_columns(
@@ -1314,11 +1338,11 @@ def _protected_validation_columns(
 def _prepared_frame_for_secondary(
     config: AnalysisConfig, protected_columns: list[str] | None = None
 ) -> pd.DataFrame:
-    from chem_ts_corr.preprocess import preprocess_frame, transform_frame
+    from chem_ts_corr.preprocess import operating_segment_mask, preprocess_frame, transform_frame
 
-    segmented = _segmented_numeric_frame(config)
+    numeric = _numeric_frame(config)
     cleaned = preprocess_frame(
-        segmented,
+        numeric,
         target=config.target,
         resample_rule=config.resample_rule,
         min_valid_ratio=config.min_valid_ratio,
@@ -1326,13 +1350,32 @@ def _prepared_frame_for_secondary(
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    return transform_frame(
+    target_mask = operating_segment_mask(
+        cleaned,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
+    )
+    transformed = transform_frame(
         cleaned,
         config.preprocess_mode,
         config.detrend_window,
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
+    transformed.attrs[TARGET_SEGMENT_MASK_ATTR] = target_mask.reindex(
+        transformed.index
+    ).fillna(False).astype(bool)
+    return transformed
+
+
+def _target_segment_mask(frame: pd.DataFrame) -> pd.Series | None:
+    stored = frame.attrs.get(TARGET_SEGMENT_MASK_ATTR)
+    if isinstance(stored, pd.Series):
+        resolved = stored.reindex(frame.index).fillna(False).astype(bool)
+        return None if bool(resolved.all()) else resolved
+    return None
 
 
 def _prepared_frame_for_validation(

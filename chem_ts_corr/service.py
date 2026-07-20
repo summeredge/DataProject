@@ -11,7 +11,12 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import fit_explainable_model
-from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, standardize_frame, transform_frame
+from chem_ts_corr.preprocess import (
+    operating_segment_mask,
+    preprocess_frame,
+    standardize_frame,
+    transform_frame,
+)
 from chem_ts_corr.xgb_runner import XGBRunResult, run_xgb_validation
 
 
@@ -95,10 +100,16 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     roles = load_roles(config, list(numeric.columns))
     numeric = apply_ignore_roles(numeric, roles, config.target)
     diag = diagnostics(numeric, roles)
-    segmented = segment_by_load(numeric, config.segment_column, config.segment_mode, config.segment_min, config.segment_max)
+    raw_segment_mask = operating_segment_mask(
+        numeric,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
+    )
     protected = [config.target, config.segment_column, *(config.capacity_columns or []), *(config.residual_control_columns or []), *(config.force_include_variables or [])]
     cleaned = preprocess_frame(
-        segmented,
+        numeric,
         config.target,
         config.resample_rule,
         config.min_valid_ratio,
@@ -106,18 +117,31 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
-    scaled = standardize_frame(
-        transform_frame(
-            cleaned,
-            config.preprocess_mode,
-            config.detrend_window,
-            max_interpolate_gap_points=config.max_interpolate_gap_points,
-            interpolate_limit_area=config.interpolate_limit_area,
-        )
+    segment_mask = operating_segment_mask(
+        cleaned,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
     )
+    transformed = transform_frame(
+        cleaned,
+        config.preprocess_mode,
+        config.detrend_window,
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        interpolate_limit_area=config.interpolate_limit_area,
+    )
+    target_mask = segment_mask.reindex(transformed.index).fillna(False).astype(bool)
+    analysis_target_mask = None if bool(target_mask.all()) else target_mask
+    scaled = standardize_frame(transformed, fit_mask=analysis_target_mask)
 
     _progress(progress_callback, "正在计算滞后相关")
-    lag_scores = compute_lag_scores(scaled, config.target, config.max_lag)
+    lag_scores = compute_lag_scores(
+        scaled,
+        config.target,
+        config.max_lag,
+        target_mask=analysis_target_mask,
+    )
     raw_ranked = summarize_best_lags(lag_scores)
     _progress(progress_callback, "正在计算变化量关联")
     innovation_ranked = _innovation_evidence(
@@ -126,6 +150,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         config.max_lag,
         raw_ranked,
         config.preprocess_mode,
+        target_mask=analysis_target_mask,
     )
     raw_ranked = raw_ranked.merge(
         innovation_ranked,
@@ -158,6 +183,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         residual_controls,
         config.max_lag,
         best_lags=best_lags,
+        target_mask=analysis_target_mask,
     )
     _progress(progress_callback, "正在计算工况稳定性")
     regime, stability = regime_scores(
@@ -166,6 +192,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         config.segment_column,
         config.max_lag,
         best_lags=best_lags,
+        target_mask=analysis_target_mask,
     )
     regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
@@ -174,7 +201,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         lift = _skipped_model_lift_scores(candidate_variables)
     else:
         _progress(progress_callback, "正在计算模型提升评分")
-        lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags)
+        lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags, target_mask=analysis_target_mask)
     if config.skip_rolling_corr:
         _progress(progress_callback, "已跳过滚动稳定性评分")
         rolling = _skipped_rolling_corr_scores(candidate_variables)
@@ -187,6 +214,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
             config.max_lag,
             ranked=raw_ranked,
             ranked_source_frame=scaled,
+            target_mask=analysis_target_mask,
         )
         rolling = rolling_corr_scores(
             scaled,
@@ -194,6 +222,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
             candidate_variables,
             config.max_lag,
             best_lag_evidence=best_lag_evidence,
+            target_mask=analysis_target_mask,
         )
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
@@ -212,16 +241,16 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
 
     if config.enable_model:
-        importance, metrics = fit_explainable_model(scaled, config.target, config.max_lag, candidate_variables, config.max_model_features, config.random_state, best_lags=best_lags)
+        importance, metrics = fit_explainable_model(scaled, config.target, config.max_lag, candidate_variables, config.max_model_features, config.random_state, best_lags=best_lags, target_mask=analysis_target_mask)
     else:
         importance, metrics = pd.DataFrame(), {"model_status": "skipped: enable model analysis"}
 
     if config.enable_granger:
-        granger = run_granger_tests(scaled, config.target, variables=candidate_variables[: config.top_k], maxlag=config.resolved_granger_maxlag())
+        granger = run_granger_tests(scaled, config.target, variables=candidate_variables[: config.top_k], maxlag=config.resolved_granger_maxlag(), target_mask=analysis_target_mask)
     else:
         granger = pd.DataFrame([{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}])
 
-    metrics.update({"rows_after_segment": float(len(segmented)), "rows_after_preprocess": float(len(scaled)), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "skip_model_lift": str(config.skip_model_lift), "skip_rolling_corr": str(config.skip_rolling_corr), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
+    metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "skip_model_lift": str(config.skip_model_lift), "skip_rolling_corr": str(config.skip_rolling_corr), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
     return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
 
@@ -238,6 +267,7 @@ def _innovation_evidence(
     max_lag: int,
     raw_ranked: pd.DataFrame,
     preprocess_mode: str,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     if raw_ranked.empty:
         return pd.DataFrame(columns=INNOVATION_COLUMNS)
@@ -258,6 +288,7 @@ def _innovation_evidence(
                 target,
                 max_lag,
                 lag_values=range(lower, upper + 1),
+                target_mask=target_mask,
             )
             best = summarize_best_lags(scores)
             if best.empty:

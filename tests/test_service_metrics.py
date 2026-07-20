@@ -33,6 +33,44 @@ def test_analyze_numeric_frame_metrics_include_max_lag(tmp_path):
     assert tables.metrics["top_k"] == 2.0
 
 
+def test_primary_segment_mask_keeps_cross_segment_lag_source(tmp_path):
+    rows = 240
+    rng = np.random.default_rng(20260720)
+    target = pd.Series(rng.normal(size=rows))
+    frame = pd.DataFrame(
+        {
+            "target": target.to_numpy(),
+            "x": target.shift(-1).to_numpy(),
+            "load": np.resize([0.0, 1.0], rows),
+        },
+        index=pd.date_range("2026-01-01", periods=rows, freq="5min"),
+    ).dropna()
+    config = AnalysisConfig(
+        input_path=tmp_path / "unused.csv",
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        segment_column="load",
+        segment_mode="custom",
+        segment_min=0.0,
+        segment_max=0.0,
+        max_lag=2,
+        top_k=1,
+        enable_model=False,
+        skip_model_lift=True,
+        skip_rolling_corr=True,
+    )
+
+    tables = analyze_numeric_frame(frame, config)
+    best = tables.lag_scores.loc[tables.lag_scores["variable"].eq("x")]
+    best = best.loc[best[["abs_pearson", "abs_spearman"]].max(axis=1).idxmax()]
+
+    assert int(best["lag"]) == 1
+    assert float(best["abs_pearson"]) == pytest.approx(1.0)
+    assert tables.metrics["rows_after_segment"] == 120.0
+    assert tables.metrics["rows_after_preprocess"] == 120.0
+
+
 def test_analyze_numeric_frame_reports_progress_and_skip_flags(tmp_path):
     n = 80
     frame = pd.DataFrame(
@@ -170,7 +208,7 @@ def test_innovation_peak_in_opposite_direction_is_not_verified(monkeypatch):
         ]
     )
 
-    def capture_scan(frame, target, max_lag, lag_values=None):
+    def capture_scan(frame, target, max_lag, lag_values=None, target_mask=None):
         captured["lag_values"] = list(lag_values or [])
         return pd.DataFrame({"placeholder": [1]})
 
@@ -235,7 +273,7 @@ def test_preselection_keeps_high_raw_association_when_innovation_conflicts(tmp_p
     )
     captured: dict[str, list[str]] = {}
 
-    def fake_innovation(frame, target, max_lag, raw_ranked, preprocess_mode):
+    def fake_innovation(frame, target, max_lag, raw_ranked, preprocess_mode, **kwargs):
         rows = []
         for _, row in raw_ranked.iterrows():
             conflict = row["variable"] == "conflict"

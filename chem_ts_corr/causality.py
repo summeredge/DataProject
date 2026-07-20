@@ -68,10 +68,16 @@ def run_granger_tests(
     maxlag: int,
     *,
     diagnostics: _GrangerDiagnostics | None = None,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     active_diagnostics = diagnostics if diagnostics is not None else _GrangerDiagnostics()
     restricted_cache: dict[_RestrictedCacheKey, _RestrictedPath] = {}
     period_ns = sample_period_ns(frame)
+    resolved_target_mask = (
+        target_mask.reindex(frame.index).fillna(False).astype(bool)
+        if target_mask is not None
+        else None
+    )
     slots: list[dict[str, object]] = []
     family: list[dict[str, object]] = []
     for variable in variables:
@@ -103,14 +109,15 @@ def run_granger_tests(
             continue
 
         try:
-            if _has_datetime_gaps(pair.index, period_ns):
+            if resolved_target_mask is not None or _has_datetime_gaps(pair.index, period_ns):
                 lag_results = _time_aware_granger_ssr_ftests(
                     pair,
                     target,
                     variable,
                     maxlag,
-                    period_ns=int(period_ns),
+                    period_ns=period_ns,
                     diagnostics=active_diagnostics,
+                    target_mask=resolved_target_mask,
                 )
             else:
                 lag_results = _fast_granger_ssr_ftests(
@@ -179,7 +186,11 @@ def run_granger_tests(
                 "min_p_value": best["p_value"],
                 "f_statistic": best["f_statistic"],
                 "predictive_contribution": _predictive_contribution(
-                    pair[target], pair[variable], int(best["lag"])  # type: ignore[index]
+                    pair[target],
+                    pair[variable],
+                    int(best["lag"]),  # type: ignore[index]
+                    period_ns=period_ns,
+                    target_mask=resolved_target_mask,
                 ),
                 "interpretation": (
                     "predictive validation only; not a causal conclusion; analytic p/q values "
@@ -207,8 +218,9 @@ def _time_aware_granger_ssr_ftests(
     variable: str,
     maxlag: int,
     *,
-    period_ns: int,
+    period_ns: int | None,
     diagnostics: _GrangerDiagnostics,
+    target_mask: pd.Series | None = None,
 ) -> dict[int, tuple[float, float]]:
     output: dict[int, tuple[float, float]] = {}
     columns: dict[str, pd.Series] = {"__target_current": pair[target]}
@@ -226,6 +238,8 @@ def _time_aware_granger_ssr_ftests(
         target_lag_columns.append(target_column)
         variable_lag_columns.append(variable_column)
     lag_frame = pd.DataFrame(columns, index=pair.index)
+    if target_mask is not None:
+        lag_frame = lag_frame.loc[target_mask.reindex(lag_frame.index).fillna(False).astype(bool)]
     for lag in range(1, maxlag + 1):
         restricted_columns = target_lag_columns[:lag]
         unrestricted_columns = restricted_columns + variable_lag_columns[:lag]
@@ -1330,14 +1344,24 @@ def _is_near_perfect_fit_from_scale(ssr: float, target_scale: float) -> bool:
     return ssr <= np.finfo(float).eps * max(target_scale, 1.0)
 
 
-def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -> float:
+def _predictive_contribution(
+    target: pd.Series,
+    variable: pd.Series,
+    lag: int,
+    *,
+    period_ns: int | None,
+    target_mask: pd.Series | None,
+) -> float:
     data = pd.DataFrame(
         {
             "target": target,
-            "candidate": lagged_series(variable, target.index, lag),
-            "target_lag_1": lagged_series(target, target.index, 1),
+            "candidate": lagged_series(variable, target.index, lag, period_ns=period_ns),
+            "target_lag_1": lagged_series(target, target.index, 1, period_ns=period_ns),
         }
-    ).dropna()
+    )
+    if target_mask is not None:
+        data = data.loc[target_mask.reindex(data.index).fillna(False).astype(bool)]
+    data = data.dropna()
     if len(data) < 10:
         return 0.0
     y = data["target"].to_numpy()

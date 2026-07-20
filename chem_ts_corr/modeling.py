@@ -14,6 +14,7 @@ def build_lag_features(
     max_features: int,
     best_lags: dict[str, int] | None = None,
     lag_mode: str = "best_only",
+    target_mask: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, pd.Series]:
     feature_parts: list[pd.Series] = []
     period_ns = sample_period_ns(frame)
@@ -34,7 +35,10 @@ def build_lag_features(
     if features.shape[1] > max_features:
         features = features.iloc[:, :max_features]
 
-    dataset = pd.concat([features, frame[target].rename(target)], axis=1).dropna()
+    dataset = pd.concat([features, frame[target].rename(target)], axis=1)
+    if target_mask is not None:
+        dataset = dataset.loc[target_mask.reindex(dataset.index).fillna(False).astype(bool)]
+    dataset = dataset.dropna()
     return dataset.drop(columns=[target]), dataset[target]
 
 
@@ -47,6 +51,7 @@ def fit_explainable_model(
     random_state: int,
     best_lags: dict[str, int] | None = None,
     lag_mode: str = "best_only",
+    target_mask: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, dict[str, float | str]]:
     try:
         from sklearn.ensemble import RandomForestRegressor
@@ -63,6 +68,7 @@ def fit_explainable_model(
         max_features,
         best_lags,
         lag_mode=lag_mode,
+        target_mask=target_mask,
     )
     if x.empty or len(x) < 30:
         return pd.DataFrame(), {"model_status": "skipped: insufficient rows"}

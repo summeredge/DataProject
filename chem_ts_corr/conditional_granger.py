@@ -43,6 +43,7 @@ def run_conditional_granger_tests(
     lag_mode: str | None = None,
     lag_window: int | None = None,
     fallback_maxlag: int | None = None,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     if target not in frame.columns:
         raise ValueError(f"target column not found: {target}")
@@ -51,6 +52,11 @@ def run_conditional_granger_tests(
     baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
     period_ns = sample_period_ns(frame)
+    resolved_target_mask = (
+        target_mask.reindex(frame.index).fillna(False).astype(bool)
+        if target_mask is not None
+        else None
+    )
 
     scipy_f = None
     scipy_available = True
@@ -134,7 +140,10 @@ def run_conditional_granger_tests(
             x_lag_col = f"__candidate_lag_{lag}"
             df = base_df.assign(
                 **{x_lag_col: lagged_series(x_series, frame.index, lag, period_ns=period_ns)}
-            ).dropna()
+            )
+            if resolved_target_mask is not None:
+                df = df.loc[resolved_target_mask]
+            df = df.dropna()
             n = len(df)
             if n < min_rows:
                 continue

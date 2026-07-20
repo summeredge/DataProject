@@ -164,6 +164,7 @@ def residual_corr_scores(
     capacity_columns: list[str] | None,
     max_lag: int,
     best_lags: Mapping[str, int] | None = None,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     out_cols = ["variable", "lag", "residual_corr", "residual_p_value", "residual_r2", "direction", "residual_method", "condition_number", "used_control_columns"]
     capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
@@ -183,6 +184,7 @@ def residual_corr_scores(
             target,
             max_lag,
             (best_lags or {}).get(column),
+            target_mask=target_mask,
         )
         if not best.empty:
             all_scores.append(best)
@@ -209,18 +211,25 @@ def regime_scores(
     capacity_column: str | None,
     max_lag: int,
     best_lags: Mapping[str, int] | None = None,
+    target_mask: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     score_cols = ["variable", "regime", "regime_row_count", "score", "signed_corr", "lag", "direction", "p_value", "r2"]
     if not capacity_column or capacity_column not in frame.columns:
         return pd.DataFrame(columns=score_cols), pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
 
     capacity = pd.to_numeric(frame[capacity_column], errors="coerce")
-    q1 = capacity.quantile(1 / 3)
-    q2 = capacity.quantile(2 / 3)
+    resolved_mask = (
+        target_mask.reindex(frame.index).fillna(False).astype(bool)
+        if target_mask is not None
+        else pd.Series(True, index=frame.index, dtype=bool)
+    )
+    selected_capacity = capacity.where(resolved_mask)
+    q1 = selected_capacity.quantile(1 / 3)
+    q2 = selected_capacity.quantile(2 / 3)
     regimes = dict(zip(REGIME_NAMES, [
-        capacity <= q1,
-        (capacity > q1) & (capacity <= q2),
-        capacity > q2,
+        resolved_mask & (capacity <= q1),
+        resolved_mask & (capacity > q1) & (capacity <= q2),
+        resolved_mask & (capacity > q2),
     ]))
 
     all_rows: list[pd.DataFrame] = []
@@ -378,7 +387,7 @@ def _summarize_regime_robustness(scores: pd.DataFrame, max_lag: int) -> pd.DataF
     return pd.DataFrame(rows, columns=REGIME_STABILITY_COLUMNS)
 
 
-def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: list[str], max_lag: int, n_splits: int = 4, best_lags: dict[str, int] | None = None) -> pd.DataFrame:
+def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: list[str], max_lag: int, n_splits: int = 4, best_lags: dict[str, int] | None = None, target_mask: pd.Series | None = None) -> pd.DataFrame:
     cols = [
         "variable", "status", "ar_baseline_rmse", "candidate_rmse", "model_lift",
         "median_fold_lift", "positive_fold_ratio", "model_lift_score",
@@ -407,6 +416,8 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
             dataset[f"{variable}__lag_{lag}"] = lagged_series(
                 frame[variable], frame.index, lag, period_ns=period_ns
             )
+        if target_mask is not None:
+            dataset = dataset.loc[target_mask.reindex(dataset.index).fillna(False).astype(bool)]
         dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
         if len(dataset) < 60:
             rows.append({"variable": variable, "status": "skipped: insufficient rows", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
@@ -464,6 +475,7 @@ def prepare_best_lag_evidence(
     ranked: pd.DataFrame | None = None,
     allow_ranked_reuse: bool = True,
     ranked_source_frame: pd.DataFrame | None = None,
+    target_mask: pd.Series | None = None,
 ) -> tuple[dict[str, BestLagEvidence], dict[str, int]]:
     evidence: dict[str, BestLagEvidence] = {}
     diagnostics = {
@@ -506,7 +518,12 @@ def prepare_best_lag_evidence(
             diagnostics["invalid_evidence_count"] += 1
         if len(current_pair) < max(10, max_lag + 5):
             continue
-        best = summarize_best_lags(compute_lag_scores(current_pair, target, max_lag))
+        scores = (
+            compute_lag_scores(current_pair, target, max_lag)
+            if target_mask is None
+            else compute_lag_scores(current_pair, target, max_lag, target_mask=target_mask)
+        )
+        best = summarize_best_lags(scores)
         diagnostics["recomputed_evidence_count"] += 1
         if best.empty:
             evidence[variable] = {
@@ -610,6 +627,7 @@ def rolling_corr_scores(
     window: int | None = None,
     min_periods: int | None = None,
     best_lag_evidence: Mapping[str, Mapping[str, object]] | None = None,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     cols = ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_abs_corr_median", "rolling_corr_iqr", "rolling_sign_consistency", "valid_window_count", "rolling_stability"]
     if target not in frame.columns or not candidate_variables:
@@ -632,7 +650,12 @@ def rolling_corr_scores(
             max_lag,
         )
         if prepared is None:
-            best = summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+            scores = (
+                compute_lag_scores(pair, target, max_lag)
+                if target_mask is None
+                else compute_lag_scores(pair, target, max_lag, target_mask=target_mask)
+            )
+            best = summarize_best_lags(scores)
             if best.empty:
                 continue
             best_row = best.iloc[0]
@@ -644,6 +667,8 @@ def rolling_corr_scores(
             pair[variable], pair.index, best_lag, period_ns=sample_period_ns(frame)
         )
         rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target])
+        if target_mask is not None:
+            rolling = rolling.where(target_mask.reindex(rolling.index).fillna(False).astype(bool))
         rolling = rolling.replace([np.inf, -np.inf], np.nan).dropna()
         if rolling.empty:
             continue

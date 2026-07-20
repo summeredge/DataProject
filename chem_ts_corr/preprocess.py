@@ -13,8 +13,26 @@ def segment_by_load(
     segment_max: float | None,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
+    mask = operating_segment_mask(
+        frame,
+        segment_column,
+        segment_mode,
+        segment_min,
+        segment_max,
+    )
+    segmented = frame.loc[mask]
+    return preserve_sample_period(segmented, period_ns)
+
+
+def operating_segment_mask(
+    frame: pd.DataFrame,
+    segment_column: str | None,
+    segment_mode: str,
+    segment_min: float | None,
+    segment_max: float | None,
+) -> pd.Series:
     if not segment_column or segment_mode == "all":
-        return preserve_sample_period(frame, period_ns)
+        return pd.Series(True, index=frame.index, dtype=bool)
     if segment_column not in frame.columns:
         raise ValueError(f"Segment column '{segment_column}' was not found in input data")
 
@@ -40,10 +58,10 @@ def segment_by_load(
     else:
         raise ValueError(f"Unknown segment mode: {segment_mode}")
 
-    segmented = frame.loc[load.between(lower, upper, inclusive="both")]
-    if len(segmented) < 10:
+    mask = load.between(lower, upper, inclusive="both")
+    if int(mask.sum()) < 10:
         raise ValueError("Not enough rows in selected operating segment; at least 10 are required")
-    return preserve_sample_period(segmented, period_ns)
+    return mask
 
 
 def preprocess_frame(
@@ -110,18 +128,28 @@ def preprocess_frame_causal(
     if target not in frame.columns:
         raise ValueError("Target column was removed during preprocessing")
 
-    cleaned = frame.copy()
-    if max_forward_fill_gap_points > 0:
-        cleaned = cleaned.ffill(limit=max_forward_fill_gap_points)
-    cleaned = cleaned.dropna(subset=[target])
+    cleaned = frame.copy().dropna(subset=[target])
+    predictor_columns = [column for column in cleaned.columns if column != target]
+    if max_forward_fill_gap_points > 0 and predictor_columns:
+        groups = _contiguous_segment_ids(cleaned.index, period_ns)
+        cleaned[predictor_columns] = cleaned[predictor_columns].groupby(groups).ffill(
+            limit=max_forward_fill_gap_points
+        )
     if len(cleaned) < 10:
         raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
     return preserve_sample_period(cleaned, period_ns)
 
 
-def standardize_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    std = frame.std(ddof=0).replace(0, 1)
-    return preserve_sample_period((frame - frame.mean()) / std, sample_period_ns(frame))
+def standardize_frame(
+    frame: pd.DataFrame,
+    fit_mask: pd.Series | None = None,
+) -> pd.DataFrame:
+    fit_frame = frame
+    if fit_mask is not None:
+        resolved_mask = fit_mask.reindex(frame.index).fillna(False).astype(bool)
+        fit_frame = frame.loc[resolved_mask]
+    std = fit_frame.std(ddof=0).replace(0, 1)
+    return preserve_sample_period((frame - fit_frame.mean()) / std, sample_period_ns(frame))
 
 
 def transform_frame(
@@ -157,9 +185,10 @@ def transform_frame_causal(
     if mode == "detrend":
         return detrend_trailing_average(frame, detrend_window)
     if mode == "diff":
-        return preserve_sample_period(frame.diff().dropna(how="all"), period_ns)
+        return preserve_sample_period(_causal_difference(frame, period_ns).dropna(how="all"), period_ns)
     if mode == "detrend_diff":
-        transformed = detrend_trailing_average(frame, detrend_window).diff()
+        detrended = detrend_trailing_average(frame, detrend_window)
+        transformed = _causal_difference(detrended, period_ns)
         return preserve_sample_period(transformed.dropna(how="all"), period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
@@ -184,6 +213,25 @@ def detrend_trailing_average(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     window = max(3, int(window))
     min_periods = max(2, window // 4)
-    trend = frame.rolling(window=window, center=False, min_periods=min_periods).mean()
+    groups = _contiguous_segment_ids(frame.index, period_ns)
+    trend = pd.concat(
+        [
+            group.rolling(window=window, center=False, min_periods=min_periods).mean()
+            for _, group in frame.groupby(groups, sort=False)
+        ]
+    ).reindex(frame.index)
     detrended = frame - trend
     return preserve_sample_period(detrended.dropna(how="all"), period_ns)
+
+
+def _causal_difference(frame: pd.DataFrame, period_ns: int | None) -> pd.DataFrame:
+    groups = _contiguous_segment_ids(frame.index, period_ns)
+    return frame.groupby(groups).diff()
+
+
+def _contiguous_segment_ids(index: pd.Index, period_ns: int | None) -> pd.Series:
+    if not isinstance(index, pd.DatetimeIndex) or period_ns is None or len(index) < 2:
+        return pd.Series(0, index=index, dtype=int)
+    breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
+    breaks.iloc[0] = False
+    return breaks.cumsum().astype(int)

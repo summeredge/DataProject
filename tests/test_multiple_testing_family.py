@@ -7,6 +7,7 @@ import pandas as pd
 
 from chem_ts_corr import causality, conditional_granger, lag
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.time_axis import preserve_sample_period
 
 
 def test_pearson_and_spearman_share_one_complete_test_family():
@@ -39,7 +40,7 @@ def test_granger_bh_family_contains_every_variable_and_lag(monkeypatch):
         return results[variable]
 
     monkeypatch.setattr(causality, "_fast_granger_ssr_ftests", fake_fast)
-    monkeypatch.setattr(causality, "_predictive_contribution", lambda *args: 0.1)
+    monkeypatch.setattr(causality, "_predictive_contribution", lambda *args, **kwargs: 0.1)
 
     output = causality.run_granger_tests(frame, "Y", ["X1", "X2"], maxlag=2)
     expected = benjamini_hochberg([0.001, 0.020, 0.010, 0.500])
@@ -48,6 +49,37 @@ def test_granger_bh_family_contains_every_variable_and_lag(monkeypatch):
     assert indexed.loc["X1", "fdr_q_value"] == expected.iloc[0]
     assert indexed.loc["X2", "fdr_q_value"] == expected.iloc[2]
     assert indexed.loc["X1", "fdr_q_value"] > indexed.loc["X1", "min_p_value"]
+
+
+def test_granger_predictive_contribution_uses_original_sample_period(monkeypatch):
+    index = pd.date_range("2026-01-01", periods=100, freq="10min")
+    frame = preserve_sample_period(
+        pd.DataFrame(
+            {
+                "Y": np.arange(100, dtype=float),
+                "X": np.arange(100, dtype=float),
+            },
+            index=index,
+        ),
+        5 * 60 * 1_000_000_000,
+    )
+    captured: dict[str, int | None] = {}
+
+    monkeypatch.setattr(
+        causality,
+        "_time_aware_granger_ssr_ftests",
+        lambda *args, **kwargs: {1: (2.0, 0.05)},
+    )
+
+    def capture_contribution(*args, period_ns=None, **kwargs):
+        captured["period_ns"] = period_ns
+        return 0.1
+
+    monkeypatch.setattr(causality, "_predictive_contribution", capture_contribution)
+
+    causality.run_granger_tests(frame, "Y", ["X"], maxlag=1)
+
+    assert captured["period_ns"] == 5 * 60 * 1_000_000_000
 
 
 def test_conditional_granger_corrects_all_tested_lags_before_selection(monkeypatch):

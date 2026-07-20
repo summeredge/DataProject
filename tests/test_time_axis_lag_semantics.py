@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.causality import _GrangerDiagnostics, run_granger_tests
+from chem_ts_corr.conditional_granger import run_conditional_granger_tests
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import build_lag_features
 from chem_ts_corr.preprocess import preprocess_frame, segment_by_load
@@ -159,3 +160,27 @@ def test_granger_uses_gap_safe_alignment_for_datetime_breaks():
 
     assert result.loc[0, "status"] == "ok"
     assert diagnostics.fallback_count == 2
+
+
+def test_conditional_granger_applies_segment_mask_only_at_target_time():
+    frame = _lagged_frame(1, rows=240)
+    frame["x"] += np.random.default_rng(9).normal(scale=0.05, size=len(frame))
+    target_mask = pd.Series(
+        np.resize([True, False], len(frame)),
+        index=frame.index,
+    )
+
+    result = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=1,
+        min_rows=40,
+        candidate_lags={"x": [1]},
+        baseline_maxlag=1,
+        target_mask=target_mask,
+    ).iloc[0]
+
+    assert result["status"] == "ok"
+    assert int(result["best_lag"]) == 1
+    assert int(result["n_rows"]) == int(target_mask.sum()) - 1

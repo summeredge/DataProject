@@ -653,6 +653,31 @@ def test_shift_uses_past_values_and_never_future_values():
     assert result.target.loc[timestamp] == frame.loc[timestamp, "y"]
 
 
+def test_target_mask_is_applied_after_lag_features_use_full_timeline():
+    index = pd.date_range("2026-01-01", periods=20, freq="5min")
+    frame = pd.DataFrame(
+        {
+            "y": np.arange(20, dtype=float) + 100,
+            "x": np.arange(20, dtype=float) + 1000,
+        },
+        index=index,
+    )
+    target_mask = pd.Series(np.resize([False, True], 20), index=index)
+
+    result = build_xgb_feature_sets(
+        frame,
+        "y",
+        _pool([{"variable": "x", "screening_lag": 1}]),
+        max_lag=1,
+        baseline_lags=[1],
+        candidate_lag_radius=0,
+        target_mask=target_mask,
+    )
+
+    assert result.features.index.equals(index[target_mask])
+    assert result.features.loc[index[1], "x__lag_1"] == frame.loc[index[0], "x"]
+
+
 def test_all_models_share_one_complete_case_index():
     frame = _feature_frame()
     frame.loc[10, "x"] = np.nan

@@ -170,12 +170,16 @@ def residual_corr_scores(
     capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
     if not capacity_columns:
         return pd.DataFrame(columns=out_cols)
-    target_residual, t_method, t_cond, used_cols = _residualize(frame[target], frame[capacity_columns])
+    target_residual, t_method, t_cond, used_cols = _residualize(
+        frame[target], frame[capacity_columns], fit_mask=target_mask
+    )
     all_scores: list[pd.DataFrame] = []
     for column in frame.columns:
         if column == target or column in capacity_columns:
             continue
-        candidate_residual, c_method, c_cond, c_used_cols = _residualize(frame[column], frame[capacity_columns])
+        candidate_residual, c_method, c_cond, c_used_cols = _residualize(
+            frame[column], frame[capacity_columns], fit_mask=target_mask
+        )
         pair = pd.DataFrame({target: target_residual, column: candidate_residual}).dropna()
         if len(pair) < max(10, max_lag + 5):
             continue
@@ -1097,26 +1101,47 @@ def _saturation_ratio(series: pd.Series) -> float:
     return float(counts.iloc[0]) if len(counts) else 0.0
 
 
-def _residualize(y: pd.Series, x: pd.DataFrame) -> tuple[pd.Series, str, float, list[str]]:
-    data = pd.concat([y, x], axis=1).dropna()
-    x_data = data.iloc[:, 1:]
-    usable_columns = [column for column in x_data.columns if x_data[column].nunique() > 1]
-    if len(data) < 5 or not usable_columns:
-        return y - y.mean(), "demean", np.nan, []
-    x_matrix = np.column_stack([np.ones(len(data)), x_data[usable_columns].to_numpy(dtype=float)])
-    cond = float(np.linalg.cond(x_matrix))
+def _residualize(
+    y: pd.Series,
+    x: pd.DataFrame,
+    fit_mask: pd.Series | None = None,
+) -> tuple[pd.Series, str, float, list[str]]:
+    application_data = pd.concat([y, x], axis=1).dropna()
+    fit_data = application_data
+    if fit_mask is not None:
+        resolved_mask = fit_mask.reindex(application_data.index).fillna(False).astype(bool)
+        fit_data = application_data.loc[resolved_mask]
+    fit_x = fit_data.iloc[:, 1:]
+    usable_columns = [column for column in fit_x.columns if fit_x[column].nunique() > 1]
+    if len(fit_data) < 5 or not usable_columns:
+        return y - fit_data.iloc[:, 0].mean(), "demean", np.nan, []
+    fit_matrix = np.column_stack(
+        [np.ones(len(fit_data)), fit_x[usable_columns].to_numpy(dtype=float)]
+    )
+    cond = float(np.linalg.cond(fit_matrix))
     method = "ols"
     if cond > 1e8:
         method = "ridge"
         alpha = 1e-3
-        penalty = alpha * np.eye(x_matrix.shape[1])
+        penalty = alpha * np.eye(fit_matrix.shape[1])
         penalty[0, 0] = 0.0
-        xtx = x_matrix.T @ x_matrix + penalty
-        coef = np.linalg.solve(xtx, x_matrix.T @ data.iloc[:, 0].to_numpy())
+        xtx = fit_matrix.T @ fit_matrix + penalty
+        coef = np.linalg.solve(xtx, fit_matrix.T @ fit_data.iloc[:, 0].to_numpy())
     else:
-        coef, *_ = np.linalg.lstsq(x_matrix, data.iloc[:, 0].to_numpy(), rcond=None)
-    fitted = x_matrix @ coef
-    residual = pd.Series(index=data.index, data=data.iloc[:, 0].to_numpy() - fitted)
+        coef, *_ = np.linalg.lstsq(
+            fit_matrix, fit_data.iloc[:, 0].to_numpy(), rcond=None
+        )
+    application_matrix = np.column_stack(
+        [
+            np.ones(len(application_data)),
+            application_data[usable_columns].to_numpy(dtype=float),
+        ]
+    )
+    fitted = application_matrix @ coef
+    residual = pd.Series(
+        index=application_data.index,
+        data=application_data.iloc[:, 0].to_numpy() - fitted,
+    )
     return residual.reindex(y.index), method, cond, usable_columns
 
 

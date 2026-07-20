@@ -93,6 +93,17 @@ def test_causal_diff_and_trailing_detrend_restart_after_physical_gap():
     assert after_gap not in detrended.index
 
 
+@pytest.mark.parametrize("mode", ["diff", "detrend_diff"])
+def test_retrospective_difference_restarts_after_physical_gap(mode: str):
+    complete = _frame(40)
+    frame = complete.drop(index=complete.index[20])
+    after_gap = complete.index[21]
+
+    transformed = preprocess.transform_frame(frame, mode, detrend_window=8)
+
+    assert after_gap not in transformed.index
+
+
 def test_trailing_detrend_does_not_use_future_values():
     frame = _frame(30)
     baseline = preprocess.detrend_trailing_average(frame.iloc[:20], 8)

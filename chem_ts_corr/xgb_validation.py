@@ -368,6 +368,7 @@ def build_xgb_feature_sets(
     max_lag: int,
     baseline_lags: Sequence[int] = DEFAULT_BASELINE_LAGS,
     candidate_lag_radius: int = DEFAULT_CANDIDATE_LAG_RADIUS,
+    target_mask: pd.Series | None = None,
 ) -> XGBFeatureSets:
     period_ns = sample_period_ns(frame)
     prepared = prepare_xgb_validation_frame(frame, target, candidate_pool, control_columns)
@@ -421,7 +422,11 @@ def build_xgb_feature_sets(
 
     m2 = tuple(m2_list)
     all_features = pd.DataFrame(feature_data, index=prepared.index).loc[:, m2]
-    combined = pd.concat([all_features, prepared[target].rename("__target__")], axis=1).dropna()
+    combined = pd.concat([all_features, prepared[target].rename("__target__")], axis=1)
+    if target_mask is not None:
+        resolved_mask = target_mask.reindex(combined.index).fillna(False).astype(bool)
+        combined = combined.loc[resolved_mask]
+    combined = combined.dropna()
     features = combined.loc[:, m2]
     target_series = combined["__target__"].rename(target)
     return XGBFeatureSets(

@@ -12,6 +12,7 @@ from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.preprocess import (
+    difference_by_contiguous_segment,
     operating_segment_mask,
     preprocess_frame,
     standardize_frame,
@@ -58,6 +59,7 @@ def run_xgb_analysis(
     whitelist: list[str] | None = None,
     top_n: int = 8,
     max_lag: int | None = None,
+    target_mask: pd.Series | None = None,
 ) -> XGBRunResult:
     return run_xgb_validation(
         run_dir=run_dir,
@@ -69,6 +71,7 @@ def run_xgb_analysis(
         whitelist=whitelist,
         top_n=top_n,
         max_lag=max_lag,
+        target_mask=target_mask,
     )
 
 
@@ -274,7 +277,11 @@ def _innovation_evidence(
 
     rows: list[dict[str, object]] = []
     already_differenced = preprocess_mode in {"diff", "detrend_diff"}
-    innovation_frame = frame if already_differenced else frame.diff().dropna()
+    innovation_frame = (
+        frame
+        if already_differenced
+        else difference_by_contiguous_segment(frame).dropna()
+    )
     for _, raw_row in raw_ranked.iterrows():
         variable = str(raw_row["variable"])
         raw_lag = int(raw_row["lag"])

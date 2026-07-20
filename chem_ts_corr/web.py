@@ -946,6 +946,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
 
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     data = _prepared_frame_for_validation(config)
+    target_mask = _target_segment_mask(data)
     result = run_xgb_analysis(
         run_dir=output_dir,
         data=data,
@@ -960,6 +961,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         whitelist=_list_field(form, "whitelist"),
         top_n=top_n,
         max_lag=max_lag,
+        target_mask=target_mask,
     )
     return _xgb_response_payload(
         run_id,
@@ -1295,19 +1297,6 @@ def _scaled_frame_for_secondary(
     return scaled.copy(deep=True)
 
 
-def _segmented_numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
-    from chem_ts_corr.preprocess import segment_by_load
-
-    numeric = _numeric_frame(config)
-    return segment_by_load(
-        numeric,
-        segment_column=config.segment_column,
-        segment_mode=config.segment_mode,
-        segment_min=config.segment_min,
-        segment_max=config.segment_max,
-    )
-
-
 def _numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
     from chem_ts_corr.data import select_numeric_frame
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
@@ -1381,19 +1370,36 @@ def _target_segment_mask(frame: pd.DataFrame) -> pd.Series | None:
 def _prepared_frame_for_validation(
     config: AnalysisConfig, protected_columns: list[str] | None = None
 ) -> pd.DataFrame:
-    from chem_ts_corr.preprocess import preprocess_frame_causal, transform_frame_causal
+    from chem_ts_corr.preprocess import (
+        operating_segment_mask,
+        preprocess_frame_causal,
+        transform_frame_causal,
+    )
 
-    segmented = _segmented_numeric_frame(config)
+    numeric = _numeric_frame(config)
     protected = _protected_validation_columns(config, protected_columns)
-    columns = [column for column in segmented.columns if column in protected or column == config.target]
-    source = segmented.loc[:, columns] if protected_columns is not None else segmented
+    columns = [column for column in numeric.columns if column in protected or column == config.target]
+    source = numeric.loc[:, columns] if protected_columns is not None else numeric
     cleaned = preprocess_frame_causal(
         source,
         target=config.target,
         resample_rule=config.resample_rule,
         max_forward_fill_gap_points=config.max_interpolate_gap_points,
     )
-    return transform_frame_causal(cleaned, config.preprocess_mode, config.detrend_window)
+    target_mask = operating_segment_mask(
+        cleaned,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
+    )
+    transformed = transform_frame_causal(
+        cleaned, config.preprocess_mode, config.detrend_window
+    )
+    transformed.attrs[TARGET_SEGMENT_MASK_ATTR] = target_mask.reindex(
+        transformed.index
+    ).fillna(False).astype(bool)
+    return transformed
 
 
 def _scaled_frame_cache_key(

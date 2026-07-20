@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 
 LAG_SCORE_COLUMNS = [
@@ -64,10 +65,17 @@ def compute_lag_scores(
     target: str,
     max_lag: int,
     lag_values: Iterable[int] | None = None,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, float | int | str | bool]] = []
     target_series = frame[target]
     scan_lags = tuple(range(-max_lag, max_lag + 1)) if lag_values is None else tuple(lag_values)
+    period_ns = sample_period_ns(frame)
+    resolved_mask = (
+        target_mask.reindex(frame.index).fillna(False).astype(bool)
+        if target_mask is not None
+        else None
+    )
 
     for variable in frame.columns:
         if variable == target:
@@ -75,7 +83,9 @@ def compute_lag_scores(
         series = frame[variable]
         for lag in scan_lags:
             lag = int(lag)
-            shifted = series.shift(lag)
+            shifted = lagged_series(series, target_series.index, lag, period_ns=period_ns)
+            if resolved_mask is not None:
+                shifted = shifted.where(resolved_mask)
             pearson = _safe_corr_stats(shifted, target_series, "pearson")
             spearman = _safe_corr_stats(shifted, target_series, "spearman")
             pearson_r = float(pearson["r"])

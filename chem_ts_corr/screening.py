@@ -12,6 +12,7 @@ from chem_ts_corr.common import to_float
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
 RISK_RELATIVE_PENALTY_WEIGHTS = {
@@ -218,29 +219,30 @@ def regime_scores(
     q1 = capacity.quantile(1 / 3)
     q2 = capacity.quantile(2 / 3)
     regimes = dict(zip(REGIME_NAMES, [
-        frame.loc[capacity <= q1],
-        frame.loc[(capacity > q1) & (capacity <= q2)],
-        frame.loc[capacity > q2],
+        capacity <= q1,
+        (capacity > q1) & (capacity <= q2),
+        capacity > q2,
     ]))
 
     all_rows: list[pd.DataFrame] = []
-    for name, subset in regimes.items():
-        if len(subset) < max(10, max_lag + 5):
+    for name, regime_mask in regimes.items():
+        if int(regime_mask.sum()) < max(10, max_lag + 5):
             continue
         regime_rows: list[pd.DataFrame] = []
-        for column in subset.columns:
+        for column in frame.columns:
             if column == target:
                 continue
             best = _best_lag_review_scores(
-                subset[[target, column]],
+                frame[[target, column]],
                 target,
                 max_lag,
                 (best_lags or {}).get(column),
+                target_mask=regime_mask,
             )
             if best.empty:
                 continue
             best["signed_corr"] = np.where(best["method"].eq("pearson"), best["pearson"], best["spearman"])
-            best = best.assign(regime=name, regime_row_count=len(subset))
+            best = best.assign(regime=name, regime_row_count=best["n"].astype(int))
             regime_rows.append(best[score_cols])
         if regime_rows:
             all_rows.append(
@@ -261,23 +263,33 @@ def _best_lag_review_scores(
     target: str,
     max_lag: int,
     primary_best_lag,
+    target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
+    def scan(lag_values=None) -> pd.DataFrame:
+        if target_mask is None:
+            return compute_lag_scores(pair, target, max_lag, lag_values=lag_values)
+        return compute_lag_scores(
+            pair,
+            target,
+            max_lag,
+            lag_values=lag_values,
+            target_mask=target_mask,
+        )
+
     limit = max(0, int(max_lag))
     if limit == 0:
-        return summarize_best_lags(compute_lag_scores(pair, target, limit, lag_values=[0]))
+        return summarize_best_lags(scan([0]))
 
     primary_lag = _valid_primary_lag(primary_best_lag, limit)
     if primary_lag is None or abs(primary_lag) == limit:
-        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        return summarize_best_lags(scan())
 
     radius = min(limit, max(3, int(np.ceil(limit * 0.05))))
     lower = max(-limit, primary_lag - radius)
     upper = min(limit, primary_lag + radius)
-    best = summarize_best_lags(
-        compute_lag_scores(pair, target, max_lag, lag_values=range(lower, upper + 1))
-    )
+    best = summarize_best_lags(scan(range(lower, upper + 1)))
     if best.empty:
-        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        return summarize_best_lags(scan())
 
     best_lag = int(best.iloc[0]["lag"])
     touches_local_boundary = (
@@ -285,7 +297,7 @@ def _best_lag_review_scores(
         or (best_lag == upper and upper != limit)
     )
     if touches_local_boundary:
-        return summarize_best_lags(compute_lag_scores(pair, target, max_lag))
+        return summarize_best_lags(scan())
     return best
 
 
@@ -374,6 +386,7 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
     ]
     rows: list[dict[str, object]] = []
     ar_lags = list(range(1, min(max_lag, 6) + 1))
+    period_ns = sample_period_ns(frame)
     for variable in candidate_variables:
         if variable == target or variable not in frame.columns:
             continue
@@ -388,9 +401,13 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
         dataset = pd.DataFrame(index=frame.index)
         dataset[target] = frame[target]
         for lag in ar_lags:
-            dataset[f"{target}__lag_{lag}"] = frame[target].shift(lag)
+            dataset[f"{target}__lag_{lag}"] = lagged_series(
+                frame[target], frame.index, lag, period_ns=period_ns
+            )
         for lag in candidate_lags:
-            dataset[f"{variable}__lag_{lag}"] = frame[variable].shift(lag)
+            dataset[f"{variable}__lag_{lag}"] = lagged_series(
+                frame[variable], frame.index, lag, period_ns=period_ns
+            )
         dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
         if len(dataset) < 60:
             rows.append({"variable": variable, "status": "skipped: insufficient rows", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
@@ -624,7 +641,9 @@ def rolling_corr_scores(
             best_score = float(best_row.get("score", 0.0) or 0.0)
         else:
             best_lag, best_score = prepared
-        shifted = pair[variable].shift(best_lag)
+        shifted = lagged_series(
+            pair[variable], pair.index, best_lag, period_ns=sample_period_ns(frame)
+        )
         rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target])
         rolling = rolling.replace([np.inf, -np.inf], np.nan).dropna()
         if rolling.empty:

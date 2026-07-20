@@ -8,6 +8,8 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+
 try:
     from xgboost import XGBRegressor
 except ImportError:
@@ -368,6 +370,7 @@ def build_xgb_feature_sets(
     baseline_lags: Sequence[int] = DEFAULT_BASELINE_LAGS,
     candidate_lag_radius: int = DEFAULT_CANDIDATE_LAG_RADIUS,
 ) -> XGBFeatureSets:
+    period_ns = sample_period_ns(frame)
     prepared = prepare_xgb_validation_frame(frame, target, candidate_pool, control_columns)
     pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
     baseline = normalize_positive_lags([1, *baseline_lags], max_lag)
@@ -383,7 +386,9 @@ def build_xgb_feature_sets(
     def add_feature(variable: str, lag: int) -> str:
         name = f"{variable}__lag_{lag}"
         if name not in feature_data:
-            feature_data[name] = prepared[variable].shift(lag)
+            feature_data[name] = lagged_series(
+                prepared[variable], prepared.index, lag, period_ns=period_ns
+            )
             used_lags.append(lag)
         return name
 

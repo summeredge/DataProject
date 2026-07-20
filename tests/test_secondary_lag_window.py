@@ -174,9 +174,15 @@ def test_residual_and_each_regime_use_local_window(monkeypatch):
     original = screening.compute_lag_scores
     calls = []
 
-    def counted(pair, target_name, max_lag, lag_values=None):
+    def counted(pair, target_name, max_lag, lag_values=None, target_mask=None):
         calls.append((pair.columns[-1], list(range(-max_lag, max_lag + 1)) if lag_values is None else list(lag_values)))
-        return original(pair, target_name, max_lag, lag_values=lag_values)
+        return original(
+            pair,
+            target_name,
+            max_lag,
+            lag_values=lag_values,
+            target_mask=target_mask,
+        )
 
     monkeypatch.setattr(screening, "compute_lag_scores", counted)
 

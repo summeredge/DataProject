@@ -7,6 +7,7 @@ import pandas as pd
 from scipy.stats import f
 
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 
 _GRANGER_COLUMNS = [
@@ -70,7 +71,9 @@ def run_granger_tests(
 ) -> pd.DataFrame:
     active_diagnostics = diagnostics if diagnostics is not None else _GrangerDiagnostics()
     restricted_cache: dict[_RestrictedCacheKey, _RestrictedPath] = {}
-    rows: list[dict[str, float | int | str | None]] = []
+    period_ns = sample_period_ns(frame)
+    slots: list[dict[str, object]] = []
+    family: list[dict[str, object]] = []
     for variable in variables:
         if variable == target:
             continue
@@ -80,11 +83,11 @@ def run_granger_tests(
             pair = frame[[target, variable]].dropna()
             mask_key = _restricted_mask_key(target, mask.to_numpy(dtype=bool))
         except Exception as exc:
-            rows.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
+            slots.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
             continue
 
         if maxlag <= 0:
-            rows.append(
+            slots.append(
                 {
                     "variable": variable,
                     "status": "skipped: no valid lag tests",
@@ -94,52 +97,158 @@ def run_granger_tests(
             continue
 
         if len(pair) < max(30, maxlag * 5):
-            rows.append(
+            slots.append(
                 {"variable": variable, "status": "skipped: insufficient rows", "min_p_value": None}
             )
             continue
 
         try:
-            lag_results = _fast_granger_ssr_ftests(
-                pair,
-                target,
-                variable,
-                maxlag,
-                diagnostics=active_diagnostics,
-                restricted_cache=restricted_cache,
-                mask_key=mask_key,
-            )
+            if _has_datetime_gaps(pair.index, period_ns):
+                lag_results = _time_aware_granger_ssr_ftests(
+                    pair,
+                    target,
+                    variable,
+                    maxlag,
+                    period_ns=int(period_ns),
+                    diagnostics=active_diagnostics,
+                )
+            else:
+                lag_results = _fast_granger_ssr_ftests(
+                    pair,
+                    target,
+                    variable,
+                    maxlag,
+                    diagnostics=active_diagnostics,
+                    restricted_cache=restricted_cache,
+                    mask_key=mask_key,
+                )
         except Exception as exc:
-            rows.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
+            slots.append({"variable": variable, "status": f"failed: {exc}", "min_p_value": None})
             continue
 
         if not lag_results:
-            rows.append(
+            slots.append(
                 {"variable": variable, "status": "skipped: no valid lag tests", "min_p_value": None}
             )
             continue
 
-        best_lag = min(lag_results, key=lambda lag: lag_results[lag][1])
-        f_statistic, min_p_value = lag_results[best_lag]
+        slot = {"variable": variable, "pair": pair, "tests": []}
+        slots.append(slot)
+        for lag, (f_statistic, p_value) in lag_results.items():
+            if not np.isfinite(p_value):
+                continue
+            test = {
+                "lag": int(lag),
+                "f_statistic": float(f_statistic),
+                "p_value": float(p_value),
+                "q_value": np.nan,
+            }
+            slot["tests"].append(test)  # type: ignore[union-attr]
+            family.append(test)
+
+    q_values = benjamini_hochberg([test["p_value"] for test in family])
+    for test, q_value in zip(family, q_values):
+        test["q_value"] = float(q_value)
+
+    rows: list[dict[str, object]] = []
+    for slot in slots:
+        tests = slot.get("tests")
+        if not isinstance(tests, list):
+            rows.append(slot)
+            continue
+        if not tests:
+            rows.append(
+                {
+                    "variable": slot["variable"],
+                    "status": "skipped: no valid lag tests",
+                    "min_p_value": None,
+                }
+            )
+            continue
+        best = min(
+            tests,
+            key=lambda test: (test["q_value"], test["p_value"], test["lag"]),
+        )
+        pair = slot["pair"]
+        variable = str(slot["variable"])
         rows.append(
             {
                 "variable": variable,
                 "status": "ok",
-                "best_granger_lag": best_lag,
-                "min_p_value": min_p_value,
-                "f_statistic": f_statistic,
+                "best_granger_lag": best["lag"],
+                "min_p_value": best["p_value"],
+                "f_statistic": best["f_statistic"],
                 "predictive_contribution": _predictive_contribution(
-                    pair[target], pair[variable], best_lag
+                    pair[target], pair[variable], int(best["lag"])  # type: ignore[index]
                 ),
-                "interpretation": "predictive validation only; not a causal conclusion",
+                "interpretation": (
+                    "predictive validation only; not a causal conclusion; analytic p/q values "
+                    "do not fully remove industrial time-series autocorrelation effects"
+                ),
+                "fdr_q_value": best["q_value"],
             }
         )
 
     result_frame = pd.DataFrame(rows)
-    if "min_p_value" in result_frame.columns:
-        result_frame["fdr_q_value"] = benjamini_hochberg(result_frame["min_p_value"])
+    if "fdr_q_value" in result_frame.columns:
         result_frame = result_frame.sort_values("fdr_q_value", na_position="last")
     return result_frame.reindex(columns=_GRANGER_COLUMNS)
+
+
+def _has_datetime_gaps(index: pd.Index, period_ns: int | None) -> bool:
+    if not isinstance(index, pd.DatetimeIndex) or period_ns is None or len(index) < 2:
+        return False
+    return bool(np.any(np.diff(index.asi8) != int(period_ns)))
+
+
+def _time_aware_granger_ssr_ftests(
+    pair: pd.DataFrame,
+    target: str,
+    variable: str,
+    maxlag: int,
+    *,
+    period_ns: int,
+    diagnostics: _GrangerDiagnostics,
+) -> dict[int, tuple[float, float]]:
+    output: dict[int, tuple[float, float]] = {}
+    for lag in range(1, maxlag + 1):
+        columns: dict[str, pd.Series] = {"__target_current": pair[target]}
+        target_lag_columns: list[str] = []
+        variable_lag_columns: list[str] = []
+        for offset in range(1, lag + 1):
+            target_column = f"__target_lag_{offset}"
+            variable_column = f"__variable_lag_{offset}"
+            columns[target_column] = lagged_series(
+                pair[target], pair.index, offset, period_ns=period_ns
+            )
+            columns[variable_column] = lagged_series(
+                pair[variable], pair.index, offset, period_ns=period_ns
+            )
+            target_lag_columns.append(target_column)
+            variable_lag_columns.append(variable_column)
+        aligned = pd.DataFrame(columns, index=pair.index).dropna()
+        if aligned.empty:
+            continue
+        y = aligned["__target_current"].to_numpy(dtype=float)
+        restricted_x = aligned[target_lag_columns].to_numpy(dtype=float)
+        unrestricted_x = aligned[target_lag_columns + variable_lag_columns].to_numpy(dtype=float)
+        restricted_ssr, restricted_rank = _ols_ssr_and_rank(
+            restricted_x, y, diagnostics=diagnostics
+        )
+        unrestricted_ssr, unrestricted_rank = _ols_ssr_and_rank(
+            unrestricted_x, y, diagnostics=diagnostics
+        )
+        target_scale = _target_variation_scale(y)
+        statistics = _combine_model_statistics(
+            lag,
+            _ModelStatistics(len(y), restricted_ssr, restricted_rank, target_scale, True),
+            _ModelStatistics(len(y), unrestricted_ssr, unrestricted_rank, target_scale, True),
+            True,
+        )
+        diagnostics.fallback_count += 1
+        if statistics.f_statistic is not None and statistics.p_value is not None:
+            output[lag] = (statistics.f_statistic, statistics.p_value)
+    return output
 
 
 def _fast_granger_ssr_ftests(
@@ -1214,10 +1323,6 @@ def _add_intercept(x: np.ndarray) -> np.ndarray:
     return np.column_stack([np.ones(len(x)), x])
 
 
-def _is_near_perfect_fit(ssr: float, y: np.ndarray) -> bool:
-    return _is_near_perfect_fit_from_scale(ssr, _target_variation_scale(y))
-
-
 def _is_near_perfect_fit_from_scale(ssr: float, target_scale: float) -> bool:
     return ssr <= np.finfo(float).eps * max(target_scale, 1.0)
 
@@ -1226,8 +1331,8 @@ def _predictive_contribution(target: pd.Series, variable: pd.Series, lag: int) -
     data = pd.DataFrame(
         {
             "target": target,
-            "candidate": variable.shift(lag),
-            "target_lag_1": target.shift(1),
+            "candidate": lagged_series(variable, target.index, lag),
+            "target_lag_1": lagged_series(target, target.index, 1),
         }
     ).dropna()
     if len(data) < 10:

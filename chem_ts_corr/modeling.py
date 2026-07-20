@@ -3,6 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+
 
 def build_lag_features(
     frame: pd.DataFrame,
@@ -14,12 +16,17 @@ def build_lag_features(
     lag_mode: str = "best_only",
 ) -> tuple[pd.DataFrame, pd.Series]:
     feature_parts: list[pd.Series] = []
+    period_ns = sample_period_ns(frame)
     for variable in candidate_variables:
         if variable == target:
             continue
         selected_lags = _selected_lags(best_lags.get(variable) if best_lags else None, max_lag, lag_mode)
         for lag in selected_lags:
-            feature_parts.append(frame[variable].shift(lag).rename(f"{variable}__lag_{lag}"))
+            feature_parts.append(
+                lagged_series(frame[variable], frame.index, lag, period_ns=period_ns).rename(
+                    f"{variable}__lag_{lag}"
+                )
+            )
 
     if not feature_parts:
         return pd.DataFrame(index=frame.index), frame[target]

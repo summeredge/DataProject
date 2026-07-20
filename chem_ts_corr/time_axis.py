@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+
+SAMPLE_PERIOD_NS_ATTR = "lag_sample_period_ns"
+
+
+def infer_sample_period_ns(index: pd.Index) -> int | None:
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+        return None
+    values = np.sort(index.asi8)
+    differences = np.diff(values)
+    positive = differences[differences > 0]
+    if not len(positive):
+        return None
+    periods, counts = np.unique(positive, return_counts=True)
+    return int(periods[np.argmax(counts)])
+
+
+def sample_period_ns(frame: pd.DataFrame) -> int | None:
+    stored = frame.attrs.get(SAMPLE_PERIOD_NS_ATTR)
+    try:
+        stored_int = int(stored)
+    except (TypeError, ValueError, OverflowError):
+        stored_int = 0
+    return stored_int if stored_int > 0 else infer_sample_period_ns(frame.index)
+
+
+def preserve_sample_period(
+    frame: pd.DataFrame,
+    period_ns: int | None,
+) -> pd.DataFrame:
+    if period_ns is not None and int(period_ns) > 0:
+        frame.attrs[SAMPLE_PERIOD_NS_ATTR] = int(period_ns)
+    return frame
+
+
+def lagged_series(
+    series: pd.Series,
+    target_index: pd.Index,
+    lag: int,
+    *,
+    period_ns: int | None = None,
+) -> pd.Series:
+    lag = int(lag)
+    if (
+        isinstance(series.index, pd.DatetimeIndex)
+        and isinstance(target_index, pd.DatetimeIndex)
+        and series.index.is_unique
+        and target_index.is_unique
+    ):
+        resolved_period = period_ns or infer_sample_period_ns(target_index)
+        if resolved_period is not None and resolved_period > 0:
+            source_index = target_index - pd.to_timedelta(lag * resolved_period, unit="ns")
+            shifted = series.reindex(source_index)
+            shifted.index = target_index
+            return shifted
+    return series.reindex(target_index).shift(lag)

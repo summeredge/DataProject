@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 
 OUT_COLS = [
@@ -49,6 +50,7 @@ def run_conditional_granger_tests(
     controls = _normalized_controls(control_columns, frame.columns, target)
     baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
+    period_ns = sample_period_ns(frame)
 
     scipy_f = None
     scipy_available = True
@@ -89,8 +91,7 @@ def run_conditional_granger_tests(
             rows.append(base_row)
             continue
 
-        best = None
-        y_name = target
+        candidates: list[dict[str, object]] = []
         y_series = pd.to_numeric(frame[target], errors="coerce")
         x_series = pd.to_numeric(frame[variable], errors="coerce")
         control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in effective_controls}
@@ -116,22 +117,24 @@ def run_conditional_granger_tests(
         # baseline model: target lags + control lags. Build these once per
         # variable because they do not change across candidate x lags.
         y_lag_cols = []
-        for l in range(1, baseline_lag_limit + 1):
-            col = f"__target_lag_{l}"
-            base_df[col] = y_series.shift(l)
+        for lag in range(1, baseline_lag_limit + 1):
+            col = f"__target_lag_{lag}"
+            base_df[col] = lagged_series(y_series, frame.index, lag, period_ns=period_ns)
             y_lag_cols.append(col)
         control_lag_cols = []
         for c, series in control_series.items():
-            for l in range(1, baseline_lag_limit + 1):
-                col = f"__control__{len(control_lag_cols)}__lag_{l}"
-                base_df[col] = series.shift(l)
+            for lag in range(1, baseline_lag_limit + 1):
+                col = f"__control__{len(control_lag_cols)}__lag_{lag}"
+                base_df[col] = lagged_series(series, frame.index, lag, period_ns=period_ns)
                 control_lag_cols.append(col)
         base_cols = y_lag_cols + control_lag_cols
 
         for lag in lag_values:
             # full model adds exactly the candidate lag being tested.
             x_lag_col = f"__candidate_lag_{lag}"
-            df = base_df.assign(**{x_lag_col: x_series.shift(lag)}).dropna()
+            df = base_df.assign(
+                **{x_lag_col: lagged_series(x_series, frame.index, lag, period_ns=period_ns)}
+            ).dropna()
             n = len(df)
             if n < min_rows:
                 continue
@@ -188,25 +191,34 @@ def run_conditional_granger_tests(
                 "full_condition_number": full_condition_number,
                 "condition_number": condition_number,
                 "collinearity_status": collinearity_status,
+                "q_value": np.nan,
             }
-            if best is None:
-                best = candidate
-            else:
-                # prefer lower p-value when available, otherwise higher contribution
-                best_p = best["p_value"]
-                cand_p = candidate["p_value"]
-                if np.isnan(best_p) and not np.isnan(cand_p):
-                    best = candidate
-                elif (not np.isnan(cand_p)) and (not np.isnan(best_p)) and cand_p < best_p:
-                    best = candidate
-                elif np.isnan(cand_p) and np.isnan(best_p) and candidate["predictive_contribution"] > best["predictive_contribution"]:
-                    best = candidate
+            candidates.append(candidate)
 
-        if best is None:
+        if not candidates:
             base_row["status"] = "skipped: insufficient rows"
             rows.append(base_row)
             continue
+        base_row["_candidates"] = candidates
+        base_row["_lag_status"] = lag_status
+        rows.append(base_row)
 
+    family = [
+        candidate
+        for row in rows
+        for candidate in row.get("_candidates", [])
+        if np.isfinite(candidate["p_value"])
+    ]
+    q_values = benjamini_hochberg([candidate["p_value"] for candidate in family])
+    for candidate, q_value in zip(family, q_values):
+        candidate["q_value"] = float(q_value)
+
+    for row in rows:
+        candidates = row.pop("_candidates", None)
+        lag_status = str(row.pop("_lag_status", ""))
+        if not isinstance(candidates, list):
+            continue
+        best = min(candidates, key=_conditional_candidate_key)
         status = (
             "high_collinearity_risk"
             if best["collinearity_status"] == "high_collinearity_risk"
@@ -214,11 +226,12 @@ def run_conditional_granger_tests(
         )
         if lag_status == "fallback_missing_ranked_lag" and status.startswith("ok"):
             status = status.replace("ok", "ok: fallback_missing_ranked_lag", 1)
-        base_row.update(
+        row.update(
             {
                 "status": status,
                 "best_lag": int(best["lag"]),
                 "min_p_value": best["p_value"],
+                "fdr_q_value": best["q_value"],
                 "baseline_rmse": best["baseline_rmse"],
                 "full_rmse": best["full_rmse"],
                 "predictive_contribution": best["predictive_contribution"],
@@ -226,14 +239,25 @@ def run_conditional_granger_tests(
                 "full_condition_number": best["full_condition_number"],
                 "condition_number": best["condition_number"],
                 "n_rows": int(best["n_rows"]),
+                "interpretation": (
+                    "predictive validation only; not a causal conclusion; analytic p/q values "
+                    "do not fully remove industrial time-series autocorrelation effects"
+                ),
             }
         )
-        rows.append(base_row)
 
     out = pd.DataFrame(rows, columns=OUT_COLS)
-    if not out.empty:
-        out["fdr_q_value"] = benjamini_hochberg(out["min_p_value"])
     return out
+
+
+def _conditional_candidate_key(candidate: dict[str, object]) -> tuple[float, ...]:
+    q_value = float(candidate["q_value"])
+    p_value = float(candidate["p_value"])
+    contribution = float(candidate["predictive_contribution"])
+    lag = float(candidate["lag"])
+    if np.isfinite(q_value):
+        return (0.0, q_value, p_value, -contribution, lag)
+    return (1.0, float("inf"), float("inf"), -contribution, lag)
 
 
 def build_candidate_lag_windows(

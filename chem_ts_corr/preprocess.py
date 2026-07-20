@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from chem_ts_corr.time_axis import infer_sample_period_ns, preserve_sample_period, sample_period_ns
+
 
 def segment_by_load(
     frame: pd.DataFrame,
@@ -10,8 +12,9 @@ def segment_by_load(
     segment_min: float | None,
     segment_max: float | None,
 ) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
     if not segment_column or segment_mode == "all":
-        return frame
+        return preserve_sample_period(frame, period_ns)
     if segment_column not in frame.columns:
         raise ValueError(f"Segment column '{segment_column}' was not found in input data")
 
@@ -40,7 +43,7 @@ def segment_by_load(
     segmented = frame.loc[load.between(lower, upper, inclusive="both")]
     if len(segmented) < 10:
         raise ValueError("Not enough rows in selected operating segment; at least 10 are required")
-    return segmented
+    return preserve_sample_period(segmented, period_ns)
 
 
 def preprocess_frame(
@@ -52,8 +55,10 @@ def preprocess_frame(
     max_interpolate_gap_points: int = 5,
     interpolate_limit_area: str = "inside",
 ) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
     if resample_rule:
         frame = frame.resample(resample_rule).median()
+        period_ns = infer_sample_period_ns(frame.index)
 
     valid_ratio = frame.notna().mean()
     keep_columns = valid_ratio[valid_ratio >= min_valid_ratio].index.tolist()
@@ -89,12 +94,12 @@ def preprocess_frame(
     protected_low_var = [col for col in low_variance[low_variance].index if col in protected]
     if protected_low_var:
         cleaned.attrs["protected_low_variance_columns"] = protected_low_var
-    return cleaned.drop(columns=removable)
+    return preserve_sample_period(cleaned.drop(columns=removable), period_ns)
 
 
 def standardize_frame(frame: pd.DataFrame) -> pd.DataFrame:
     std = frame.std(ddof=0).replace(0, 1)
-    return (frame - frame.mean()) / std
+    return preserve_sample_period((frame - frame.mean()) / std, sample_period_ns(frame))
 
 
 def transform_frame(
@@ -104,14 +109,18 @@ def transform_frame(
     max_interpolate_gap_points: int = 5,
     interpolate_limit_area: str = "inside",
 ) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
     if mode == "raw":
-        return frame
+        return preserve_sample_period(frame, period_ns)
     if mode == "detrend":
         return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area)
     if mode == "diff":
-        return frame.diff().dropna()
+        return preserve_sample_period(frame.diff().dropna(), period_ns)
     if mode == "detrend_diff":
-        return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area).diff().dropna()
+        transformed = detrend_moving_average(
+            frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area
+        ).diff().dropna()
+        return preserve_sample_period(transformed, period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
 
@@ -121,7 +130,11 @@ def detrend_moving_average(
     max_interpolate_gap_points: int = 5,
     interpolate_limit_area: str = "inside",
 ) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
     window = max(3, int(window))
     trend = frame.rolling(window=window, center=True, min_periods=max(2, window // 4)).mean()
     detrended = frame - trend
-    return detrended.interpolate(method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area).dropna()
+    transformed = detrended.interpolate(
+        method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area
+    ).dropna()
+    return preserve_sample_period(transformed, period_ns)

@@ -157,6 +157,9 @@ def test_driver_priority_score_uses_class_factor(candidate_class: str):
 
     assert result["candidate_class"] == candidate_class
     expected = result["final_score"] * CLASS_PRIORITY_FACTORS[candidate_class]
+    assert result["driver_priority_factor"] == pytest.approx(
+        CLASS_PRIORITY_FACTORS[candidate_class]
+    )
     assert result["driver_priority_score"] == pytest.approx(expected)
 
 
@@ -177,10 +180,16 @@ def test_output_contains_legacy_and_shadow_fields_in_order():
 
     for column in ["variable", "final_score", "candidate_grade"]:
         assert column in result.columns
-    shadow = ["association_rank", "candidate_class", "driver_priority_score", "driver_rank"]
+    shadow = [
+        "association_rank",
+        "candidate_class",
+        "driver_priority_factor",
+        "driver_priority_score",
+        "driver_rank",
+    ]
     assert all(column in result.columns for column in shadow)
     final_index = result.columns.get_loc("final_score")
-    assert result.columns[final_index + 1 : final_index + 5].tolist() == shadow
+    assert result.columns[final_index + 1 : final_index + 6].tolist() == shadow
 
 
 def test_main_output_order_and_topk_use_driver_rank():

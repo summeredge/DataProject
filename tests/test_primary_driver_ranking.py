@@ -263,8 +263,10 @@ def test_output_fields_remain_compatible():
     result = _run_ranked([("x", 0.8, 1)])
     required = {
         "variable", "raw_corr", "correlation_evidence_score", "regime_stability_final",
-        "evidence_score", "risk_penalty", "risk_score_cap", "final_score", "association_rank",
-        "candidate_class", "driver_priority_score", "driver_rank", "candidate_grade",
+        "evidence_score", "evidence_completeness", "evidence_confidence",
+        "data_quality_score", "evidence_coverage_status", "evidence_missing_items",
+        "risk_penalty", "risk_score_cap", "final_score", "association_rank",
+        "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade",
         "recommended_use", "force_included",
     }
 

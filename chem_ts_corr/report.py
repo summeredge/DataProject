@@ -5,10 +5,26 @@ from pathlib import Path
 import pandas as pd
 
 from chem_ts_corr.common import to_int
-
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.near_miss import build_near_miss_candidates
+
+
+DISPLAY_SCORE_COLUMNS = {
+    "driver_priority_score",
+    "final_score",
+    "driver_priority_factor",
+    "evidence_completeness",
+    "evidence_confidence",
+    "data_quality_score",
+    "evidence_strength",
+    "evidence_score",
+    "evidence_score_low",
+    "evidence_score_high",
+    "证据覆盖度",
+    "证据修正系数",
+    "数据质量得分",
+}
 
 
 def write_outputs(
@@ -115,8 +131,18 @@ def build_markdown_summary(
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","association_score","innovation_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","data_quality_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
-    lines.extend(_table_lines(ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()))
+    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_class","driver_priority_factor","evidence_coverage_status","evidence_missing_items","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","association_score","innovation_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","data_quality_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
+    decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
+    decomposition = decomposition.rename(
+        columns={
+            "evidence_coverage_status": "证据覆盖状态",
+            "evidence_missing_items": "缺失证据",
+            "evidence_completeness": "证据覆盖度",
+            "data_quality_score": "数据质量得分",
+            "evidence_confidence": "证据修正系数",
+        }
+    )
+    lines.extend(_table_lines(decomposition))
 
     lines.extend(["", "## 预测候选", ""])
     lines.extend(_table_lines(_core_columns(predictive).head(15)))
@@ -169,7 +195,8 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 使用工业稳健 V2：在多组合理工程权重下汇总变化量关联、增量预测、稳定性和滞后质量；缺失证据降低完整度与置信度，不再放大剩余证据。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
+            "- final_score 使用工业稳健 V2：在多组合理工程权重下汇总变化量关联、增量预测、稳定性和滞后质量；缺失证据降低证据覆盖度与修正系数，不再放大剩余证据。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
+            "- 证据修正系数由证据覆盖度和数据质量共同计算，仅用于修正综合证据评分，不表示概率、统计置信度或因果置信度。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",
@@ -213,7 +240,10 @@ def _table_lines(frame: pd.DataFrame) -> list[str]:
 
     display = frame.fillna("")
     columns = [str(col) for col in display.columns]
-    rows = [[_format_cell(value) for value in row] for row in display.to_numpy()]
+    rows = [
+        [_format_cell(value, columns[index]) for index, value in enumerate(row)]
+        for row in display.to_numpy()
+    ]
     widths = [
         max(len(columns[index]), *(len(row[index]) for row in rows))
         for index in range(len(columns))
@@ -228,8 +258,10 @@ def _table_lines(frame: pd.DataFrame) -> list[str]:
     return [header, separator, *body]
 
 
-def _format_cell(value: object) -> str:
+def _format_cell(value: object, column: str = "") -> str:
     if isinstance(value, float):
+        if column in DISPLAY_SCORE_COLUMNS:
+            return f"{value:.3f}"
         return f"{value:.6g}"
     return str(value)
 

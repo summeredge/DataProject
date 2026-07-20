@@ -2148,7 +2148,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>前 10 个推荐变量</h2>
-        <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低完整度与置信度，不会放大其他分项。</div>
+        <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低证据覆盖度与修正系数，不会放大其他分项。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
       </div>
 
@@ -3877,7 +3877,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "final_score", "evidence_confidence", "lag", "direction", "raw_corr", "innovation_score", "prediction_score", "stability_score", "risk_flags", "recommended_use", "recommended_action"];
+  return ["variable", "driver_rank", "driver_priority_score", "candidate_class", "evidence_coverage_status", "lag", "direction", "risk_flags", "recommended_use", "recommended_action"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -3945,21 +3945,55 @@ function buildDetailModalBody(row, options = {}) {
 function renderGenericDetailModalBody(row, options = {}) {
   const getValue = options.valueGetter || ((item, column) => item[column]);
   const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
-  const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags");
+  const isScreeningCandidate = "driver_priority_score" in (row || {}) && "final_score" in (row || {});
+  const groupedColumns = new Set(isScreeningCandidate ? [
+      "driver_rank", "driver_priority_score", "final_score", "candidate_class",
+      "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items",
+      "evidence_completeness", "data_quality_score", "evidence_confidence",
+    ] : []);
+  const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags" && !groupedColumns.has(column));
   const fields = rawFieldColumnsWithoutRiskFlags.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, getValue(row, column)))}</span>
     </div>
   `).join("");
+  const scoreDetails = renderScreeningScoreDetails(row);
   return `
     <div class="review-card">
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
+      ${scoreDetails}
       <details class="raw-fields" open>
         <summary>展开完整原始字段</summary>
         <div class="detail-grid">${("risk_flags" in (row || {})) ? renderRiskTagDetails(row.risk_flags) : ""}${fields}</div>
       </details>
     </div>
+  `;
+}
+
+function renderScreeningScoreDetails(row) {
+  if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
+  const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
+  const evidenceColumns = ["evidence_coverage_status", "evidence_missing_items", "evidence_completeness", "data_quality_score", "evidence_confidence"];
+  const renderFields = (columns) => columns.map((column) => `
+    <div class="detail-field">
+      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
+    </div>
+  `).join("");
+  const factor = numericValue(row.driver_priority_factor);
+  const equalScoreNote = factor === 1 && row.candidate_class === "upstream_driver_candidate"
+    ? "<p>当前候选属于上游驱动候选，优先系数为 1.00，因此两个得分相同。</p>"
+    : "";
+  return `
+    <h4>排序结果</h4>
+    <div class="detail-grid">${renderFields(rankingColumns)}</div>
+    <p>驱动优先得分 = 稳健综合得分 × 候选类别优先系数。</p>
+    ${equalScoreNote}
+    <h4>证据覆盖</h4>
+    <div class="detail-grid">${renderFields(evidenceColumns)}</div>
+    <h4>解释说明</h4>
+    <p>证据修正系数由证据覆盖度和数据质量共同计算，用于修正综合证据得分，不表示统计概率或因果置信度。</p>
   `;
 }
 
@@ -4005,7 +4039,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "driver_rank", "driver_priority_score", "final_score", "evidence_confidence", "lag", "direction", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "driver_rank", "driver_priority_score", "candidate_class", "evidence_coverage_status", "lag", "direction", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -4564,7 +4598,17 @@ function cellTitle(column, value) {
   return "";
 }
 
+const THREE_DECIMAL_SCORE_COLUMNS = new Set([
+  "driver_priority_score", "final_score", "driver_priority_factor",
+  "evidence_completeness", "evidence_confidence", "data_quality_score",
+  "evidence_strength", "evidence_score", "evidence_score_low", "evidence_score_high",
+]);
+
 function formatCellValue(column, value) {
+  const scoreValue = value === null || value === undefined || value === "" ? NaN : Number(value);
+  if (THREE_DECIMAL_SCORE_COLUMNS.has(column) && Number.isFinite(scoreValue)) {
+    return scoreValue.toFixed(3);
+  }
   const text = String(value ?? "");
   const maps = {
     innovation_sign: {
@@ -4768,6 +4812,12 @@ function formatValue(value) {
       model_explanation_support: "模型解释支持",
       lag_boundary: "滞后触及边界",
       target_leads_variable: "变量滞后目标",
+      upstream_driver_candidate: "上游驱动候选",
+      synchronous_association: "同步关联",
+      downstream_response: "下游响应",
+      closed_loop_related: "闭环相关",
+      formula_or_derived: "公式或派生变量",
+      poor_quality: "低质量变量",
       unstable_over_time: "时序不稳定",
       low_model_lift: "低模型增益",
       lag_boundary_flag: "滞后边界命中",
@@ -4876,8 +4926,9 @@ function formatValue(value) {
 
 function columnLabel(column) {
   const addedLabels = {
-    driver_rank: "驱动优先排名",
+    driver_rank: "驱动排名",
     driver_priority_score: "驱动优先得分",
+    driver_priority_factor: "驱动优先系数",
     innovation_lag: "变化量滞后",
     innovation_direction: "变化量方向",
     innovation_sign: "变化量符号",
@@ -4888,6 +4939,7 @@ function columnLabel(column) {
     variable: "变量",
     trend_action: "趋势验证",
     final_score: "稳健综合得分",
+    candidate_class: "候选类别",
     lag: "滞后",
     direction: "方向",
     raw_corr: "原始相关",
@@ -4901,8 +4953,10 @@ function columnLabel(column) {
     stability_score: "综合稳定性",
     data_quality_score: "数据质量得分",
     evidence_strength: "证据强度",
-    evidence_completeness: "证据完整度",
-    evidence_confidence: "证据置信度",
+    evidence_completeness: "证据覆盖度",
+    evidence_confidence: "证据修正系数",
+    evidence_coverage_status: "证据覆盖状态",
+    evidence_missing_items: "缺失证据",
     evidence_score_low: "证据得分下界",
     evidence_score_high: "证据得分上界",
     score_method: "评分方法",

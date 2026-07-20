@@ -22,7 +22,7 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     _write_csv(
         run_dir / "ranked_features.csv",
         [
-            {"variable": "FIC001.SV", "final_score": 0.91, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none"},
+            {"variable": "FIC001.SV", "driver_rank": 1, "driver_priority_score": 0.91, "final_score": 0.91, "candidate_class": "upstream_driver_candidate", "driver_priority_factor": 1.0, "evidence_coverage_status": "部分完整", "evidence_missing_items": "稳定性验证", "evidence_completeness": 0.875, "data_quality_score": 0.999, "evidence_confidence": 0.935, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none"},
             {"variable": "PI002.PV", "final_score": 0.73, "candidate_grade": "B", "lag": -2, "direction": "target_leads_variable", "recommended_use": "manual_review", "risk_flags": "target_leads_variable", "risk_level": "medium"},
         ],
     )
@@ -58,6 +58,9 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
 
     assert package["meta"]["target"] == "Y.PV"
     assert package["highly_correlated_variables"][0]["variable"] == "FIC001.SV"
+    assert package["highly_correlated_variables"][0]["evidence_coverage_status"] == "部分完整"
+    assert package["highly_correlated_variables"][0]["evidence_missing_items"] == "稳定性验证"
+    assert package["highly_correlated_variables"][0]["evidence_confidence"] == 0.935
     assert package["attention_variables"][0]["variable"] == "FIC001.SV"
     assert package["predictive_causal_evidence"][0]["variable"] == "FIC001.SV"
     control_roles = {row["variable"]: row["suggested_control_role"] for row in package["control_candidate_variables"]}
@@ -87,5 +90,7 @@ def test_build_llm_prompt_contains_strict_control_and_causality_constraints(tmp_
     assert "closed_loop_suspect" in prompt
     assert "high_collinearity_risk" in prompt
     assert "fallback_missing_ranked_lag" in prompt
+    assert "evidence_confidence 的中文含义是“证据修正系数”" in prompt
+    assert "不是概率、统计置信度或因果置信度" in prompt
     assert "```json" in prompt
     json.loads(prompt.split("```json", 1)[1].split("```", 1)[0])

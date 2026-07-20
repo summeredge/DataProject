@@ -55,7 +55,7 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
     conditional_by_var = _index_by_variable(conditional)
     final_by_var = _index_by_variable(final)
 
-    highly = [_compact(row, ["variable", "final_score", "candidate_grade", "lag", "direction", "risk_flags", "risk_level", "recommended_use"]) for row in _rows(ranked, top_n)]
+    highly = [_compact(row, ["variable", "driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items", "evidence_completeness", "data_quality_score", "evidence_confidence", "candidate_grade", "lag", "direction", "risk_flags", "risk_level", "recommended_use"]) for row in _rows(ranked, top_n)]
     attention = [_compact(row, ["final_rank", "variable", "integrated_review_decision", "priority_label", "key_reason", "conflict_type", "conflict_reason", "lag_boundary_hint"]) for row in _rows(final, top_n)]
 
     names = list(dict.fromkeys(
@@ -137,6 +137,7 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
+- evidence_confidence 的中文含义是“证据修正系数”，由证据覆盖度和数据质量共同计算；它不是概率、统计置信度或因果置信度。解释候选证据时应同时参考 evidence_coverage_status 和 evidence_missing_items。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。
 - .PV 可以作为过程变量或控制回路历史数据代表；即使属于 FIC/TIC/PIC/AIC 等 PID 回路，相关性、滞后、Granger、模型解释等分析仍可使用 .PV。

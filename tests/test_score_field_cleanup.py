@@ -120,6 +120,56 @@ def test_v2_complete_balanced_evidence_preserves_common_scale():
     assert row["evidence_score"] == pytest.approx(0.8)
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "status", "missing_items"),
+    [
+        (
+            {"innovation": 0.8, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
+            "完整",
+            "",
+        ),
+        (
+            {"innovation": np.nan, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
+            "部分完整",
+            "变化量验证",
+        ),
+        (
+            {"innovation": 0.8, "lag_quality": 0.8},
+            "证据不足",
+            "模型提升；稳定性验证",
+        ),
+    ],
+)
+def test_evidence_coverage_status_uses_valid_evidence_fields(
+    kwargs: dict[str, object], status: str, missing_items: str
+):
+    row = _result(**kwargs)
+
+    assert row["evidence_coverage_status"] == status
+    assert row["evidence_missing_items"] == missing_items
+
+
+def test_not_computed_model_lift_is_missing_even_with_numeric_source_value():
+    ranked = pd.DataFrame(
+        [{"variable": "x", "score": 0.8, "innovation_score": 0.8, "lag": 1}]
+    )
+    model_lift = _frame(
+        {"variable": "x", "model_lift_score": 0.8, "status": "not_computed"}
+    )
+    row = final_ranked_features(
+        ranked,
+        _frame(),
+        _frame(),
+        model_lift,
+        _frame({"variable": "x", "risk_flags": ""}),
+        _frame({"variable": "x", "lag_quality": 0.8}),
+        _frame({"variable": "x", "rolling_stability": 0.8}),
+    ).iloc[0]
+
+    assert pd.isna(row["prediction_score"])
+    assert "模型提升" in row["evidence_missing_items"]
+
+
 def test_direction_risk_changes_driver_priority_without_reducing_evidence():
     row = _result(raw=0.9, innovation=0.9, rolling=0.9, lag_quality=0.9, model_lift=0.9, risk_flags="target_leads_variable")
 
@@ -152,6 +202,7 @@ def test_ranking_and_topk_stay_driver_rank_based():
     assert result["variable"].tolist() == ["b", "a"]
     assert result["final_score"].tolist() == pytest.approx([0.58, 0.9])
     assert result["driver_priority_score"].tolist() == pytest.approx([0.58, 0.9 * 0.45])
+    assert result["driver_priority_factor"].tolist() == pytest.approx([1.0, 0.45])
     assert result["driver_rank"].tolist() == [1, 2]
     assert top["variable"].tolist() == ["b"]
     assert top.loc[0, "driver_rank"] == 1
@@ -160,7 +211,12 @@ def test_ranking_and_topk_stay_driver_rank_based():
 def _summary_frame() -> pd.DataFrame:
     return pd.DataFrame([{
         "variable": "x", "driver_rank": 1, "driver_priority_score": 0.8,
-        "final_score": 0.8, "evidence_score": 0.8, "association_score": 0.8,
+        "final_score": 0.8, "candidate_class": "upstream_driver_candidate",
+        "driver_priority_factor": 1.0, "evidence_coverage_status": "证据不足",
+        "evidence_missing_items": "模型提升；稳定性验证；滞后质量",
+        "evidence_completeness": 0.625, "data_quality_score": 0.999768,
+        "evidence_confidence": 0.790477, "evidence_score": 0.8,
+        "association_score": 0.8,
         "independent_signal_score": np.nan, "correlation_evidence_score": 0.8,
         "correlation_evidence_status": "association_only", "regime_stability_final": np.nan,
         "regime_status": "not_computed", "rolling_stability": np.nan,
@@ -177,6 +233,10 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
 
     for field in ["association_score", "independent_signal_score", "correlation_evidence_score"]:
         assert field in section
+    for label in ["证据覆盖状态", "缺失证据", "证据覆盖度", "数据质量得分", "证据修正系数"]:
+        assert label in section
+    assert "0.999768" not in section
+    assert "1.000" in section
     assert "raw_corr_score" not in section
     assert "residual_corr_score" not in section
     table = [line for line in section.splitlines() if line.startswith("|")]
@@ -190,8 +250,10 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
 def test_report_risk_and_regime_explanations_are_current():
     markdown = build_markdown_summary("target", _summary_frame(), pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame())
 
-    for text in ["工业稳健 V2", "缺失证据降低完整度", "risk_score_cap", "工况覆盖度"]:
+    for text in ["工业稳健 V2", "缺失证据降低证据覆盖度", "risk_score_cap", "工况覆盖度"]:
         assert text in markdown
+    assert "不表示概率、统计置信度或因果置信度" in markdown
+    assert "证据置信度" not in markdown
     assert "剩余已计算项按原始权重重归一" not in markdown
 
 
@@ -202,11 +264,89 @@ def test_web_uses_formal_score_labels_and_keeps_driver_sort():
         'association_score: "原始关联规范化得分"',
         'independent_signal_score: "独立残差信号得分"',
         'correlation_evidence_score: "关联证据综合得分"',
+        'evidence_confidence: "证据修正系数"',
+        'evidence_completeness: "证据覆盖度"',
+        'evidence_coverage_status: "证据覆盖状态"',
         'table: { column: "driver_rank", direction: "asc" }',
     ]:
         assert marker in source
+    assert "证据置信度" not in source
     assert "raw_corr_score:" not in source
     assert "residual_corr_score:" not in source
+
+
+def test_web_primary_tables_hide_duplicate_scores_and_show_coverage_status():
+    source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    main_columns = source.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+    overview_columns = source.split("overviewTop:", 1)[1].split("],", 1)[0]
+
+    for columns in [main_columns, overview_columns]:
+        assert "driver_priority_score" in columns
+        assert "evidence_coverage_status" in columns
+        assert "final_score" not in columns
+        assert "evidence_confidence" not in columns
+
+
+def test_web_detail_explains_score_chain_and_evidence_correction():
+    source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    detail = source.split("function renderScreeningScoreDetails", 1)[1].split(
+        "function selectTableRow", 1
+    )[0]
+
+    for marker in [
+        "排序结果",
+        "driver_rank",
+        "driver_priority_score",
+        "final_score",
+        "candidate_class",
+        "driver_priority_factor",
+        "证据覆盖",
+        "evidence_coverage_status",
+        "evidence_missing_items",
+        "evidence_completeness",
+        "data_quality_score",
+        "evidence_confidence",
+        "驱动优先得分 = 稳健综合得分 × 候选类别优先系数",
+        "不表示统计概率或因果置信度",
+    ]:
+        assert marker in detail
+
+
+def test_web_score_precision_is_field_specific_and_does_not_include_p_or_q_values():
+    source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    formatter = source.split("const THREE_DECIMAL_SCORE_COLUMNS", 1)[1].split(
+        "function renderReviewDownloads", 1
+    )[0]
+
+    for field in [
+        "driver_priority_score",
+        "final_score",
+        "driver_priority_factor",
+        "evidence_completeness",
+        "evidence_confidence",
+        "data_quality_score",
+        "evidence_strength",
+        "evidence_score",
+        "evidence_score_low",
+        "evidence_score_high",
+    ]:
+        assert field in formatter
+    assert ".toFixed(3)" in formatter
+    assert "p_value" not in formatter
+    assert "q_value" not in formatter
+
+
+def test_output_scores_keep_raw_precision_for_csv_export():
+    row = _result(
+        raw=0.999768,
+        innovation=np.nan,
+        rolling=0.865825,
+        lag_quality=0.935306,
+        model_lift=0.865825,
+    )
+
+    assert row["final_score"] != round(row["final_score"], 3)
+    assert row["evidence_confidence"] != round(row["evidence_confidence"], 3)
 
 
 def test_near_miss_does_not_fabricate_missing_residual():

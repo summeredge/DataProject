@@ -247,6 +247,36 @@ def test_innovation_peak_in_opposite_direction_is_not_verified(monkeypatch):
     assert pd.isna(result["innovation_score"])
 
 
+def test_innovation_difference_does_not_cross_physical_gap(monkeypatch):
+    complete_index = pd.date_range("2026-01-01", periods=20, freq="5min")
+    frame = pd.DataFrame(
+        {"target": np.arange(20, dtype=float), "x": np.arange(20, dtype=float)},
+        index=complete_index,
+    ).drop(index=complete_index[10])
+    after_gap = complete_index[11]
+    captured: dict[str, pd.Index] = {}
+    raw_ranked = pd.DataFrame(
+        [{"variable": "x", "lag": 1, "direction": "variable leads target", "score": 0.9}]
+    )
+
+    def capture_scan(frame, *args, **kwargs):
+        captured["index"] = frame.index
+        return pd.DataFrame({"placeholder": [1]})
+
+    monkeypatch.setattr(service, "compute_lag_scores", capture_scan)
+    monkeypatch.setattr(
+        service,
+        "summarize_best_lags",
+        lambda scores: pd.DataFrame(
+            [{"variable": "x", "lag": 1, "direction": "variable leads target", "score": 0.8}]
+        ),
+    )
+
+    service._innovation_evidence(frame, "target", 3, raw_ranked, "raw")
+
+    assert after_gap not in captured["index"]
+
+
 def test_preselection_keeps_high_raw_association_when_innovation_conflicts(tmp_path, monkeypatch):
     from chem_ts_corr import screening
 

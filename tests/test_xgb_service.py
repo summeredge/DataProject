@@ -118,6 +118,7 @@ def _mock_success(
     *,
     expected_top_n: int = 8,
     expected_max_lag: int = 5,
+    expected_target_mask: pd.Series | None = None,
 ):
     pool = pd.DataFrame([{"candidate_order": 1, "variable": "x", "screening_lag": 3}])
     feature_sets = _feature_sets()
@@ -134,6 +135,7 @@ def _mock_success(
     def build_features(*args, **kwargs):
         calls.append("features")
         assert kwargs["max_lag"] == expected_max_lag
+        assert kwargs["target_mask"] is expected_target_mask
         return feature_sets
 
     def build_splits(n_samples, **kwargs):
@@ -166,13 +168,14 @@ def test_successful_run_uses_fixed_orchestration_and_creates_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[str] = []
-    _mock_success(monkeypatch, calls)
     data, final, ranked = _inputs()
+    target_mask = pd.Series(np.resize([True, False], len(data)), index=data.index)
+    _mock_success(monkeypatch, calls, expected_target_mask=target_mask)
     run_dir = tmp_path / "new-run"
 
     result = run_xgb_validation(
         run_dir=run_dir, target="target", data=data, final_review_summary=final,
-        ranked_features=ranked, control_columns=["control"],
+        ranked_features=ranked, control_columns=["control"], target_mask=target_mask,
     )
 
     assert result.status == "success"
@@ -769,6 +772,7 @@ def test_service_hook_forwards_all_parameters_and_returns_xgb_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     data, final, ranked = _inputs()
+    target_mask = pd.Series(np.resize([True, False], len(data)), index=data.index)
     expected = XGBRunResult("success", (), None, None, None, None)
     captured: dict[str, object] = {}
 
@@ -787,6 +791,7 @@ def test_service_hook_forwards_all_parameters_and_returns_xgb_result(
         whitelist=["manual"],
         top_n=4,
         max_lag=9,
+        target_mask=target_mask,
     )
 
     assert result is expected
@@ -799,6 +804,7 @@ def test_service_hook_forwards_all_parameters_and_returns_xgb_result(
     assert captured["whitelist"] == ["manual"]
     assert captured["top_n"] == 4
     assert captured["max_lag"] == 9
+    assert captured["target_mask"] is target_mask
 
 
 def test_service_hook_missing_final_review_returns_xgb_error(tmp_path: Path):

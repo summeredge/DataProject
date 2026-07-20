@@ -12,6 +12,7 @@ import chem_ts_corr.service as service
 import chem_ts_corr.web as web
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.xgb_runner import XGBRunResult
+from chem_ts_corr.xgb_validation import build_xgb_feature_sets
 
 
 def _write_run(tmp_path: Path) -> tuple[Path, AnalysisConfig, pd.DataFrame, pd.DataFrame]:
@@ -259,7 +260,7 @@ def test_xgb_prepared_frame_applies_operating_segment(tmp_path: Path):
         {
             "timestamp": pd.date_range("2025-01-01", periods=30, freq="min"),
             "target": np.arange(30, dtype=float),
-            "load": np.arange(30, dtype=float),
+            "load": np.resize([1.0, 0.0], 30),
             "x": np.arange(30, dtype=float) * 3,
         }
     )
@@ -268,15 +269,32 @@ def test_xgb_prepared_frame_applies_operating_segment(tmp_path: Path):
         frame,
         segment_column="load",
         segment_mode="custom",
-        segment_min=10,
-        segment_max=20,
+        segment_min=0,
+        segment_max=0,
     )
 
     prepared = web._prepared_frame_for_validation(config)
+    target_mask = web._target_segment_mask(prepared)
+    feature_sets = build_xgb_feature_sets(
+        prepared,
+        "target",
+        pd.DataFrame([{"variable": "x", "screening_lag": 1, "candidate_order": 1}]),
+        max_lag=1,
+        baseline_lags=[1],
+        candidate_lag_radius=0,
+        target_mask=target_mask,
+    )
+    first_target_time = prepared.index[1]
 
-    assert prepared["load"].min() == 10
-    assert prepared["load"].max() == 20
-    assert len(prepared) == 11
+    assert len(prepared) == 30
+    assert target_mask is not None
+    assert int(target_mask.sum()) == 15
+    assert first_target_time in feature_sets.features.index
+    assert prepared.loc[first_target_time, "load"] == 0
+    assert prepared.loc[first_target_time - pd.Timedelta(minutes=1), "load"] == 1
+    assert feature_sets.features.loc[first_target_time, "x__lag_1"] == prepared.loc[
+        first_target_time - pd.Timedelta(minutes=1), "x"
+    ]
 
 
 def test_xgb_prepared_frame_applies_ignore_roles(tmp_path: Path):

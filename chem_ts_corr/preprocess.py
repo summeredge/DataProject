@@ -165,11 +165,14 @@ def transform_frame(
     if mode == "detrend":
         return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area)
     if mode == "diff":
-        return preserve_sample_period(frame.diff().dropna(), period_ns)
+        return preserve_sample_period(
+            difference_by_contiguous_segment(frame).dropna(), period_ns
+        )
     if mode == "detrend_diff":
-        transformed = detrend_moving_average(
+        detrended = detrend_moving_average(
             frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area
-        ).diff().dropna()
+        )
+        transformed = difference_by_contiguous_segment(detrended).dropna()
         return preserve_sample_period(transformed, period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
@@ -185,10 +188,12 @@ def transform_frame_causal(
     if mode == "detrend":
         return detrend_trailing_average(frame, detrend_window)
     if mode == "diff":
-        return preserve_sample_period(_causal_difference(frame, period_ns).dropna(how="all"), period_ns)
+        return preserve_sample_period(
+            difference_by_contiguous_segment(frame).dropna(how="all"), period_ns
+        )
     if mode == "detrend_diff":
         detrended = detrend_trailing_average(frame, detrend_window)
-        transformed = _causal_difference(detrended, period_ns)
+        transformed = difference_by_contiguous_segment(detrended)
         return preserve_sample_period(transformed.dropna(how="all"), period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
@@ -224,9 +229,10 @@ def detrend_trailing_average(frame: pd.DataFrame, window: int) -> pd.DataFrame:
     return preserve_sample_period(detrended.dropna(how="all"), period_ns)
 
 
-def _causal_difference(frame: pd.DataFrame, period_ns: int | None) -> pd.DataFrame:
+def difference_by_contiguous_segment(frame: pd.DataFrame) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
     groups = _contiguous_segment_ids(frame.index, period_ns)
-    return frame.groupby(groups).diff()
+    return preserve_sample_period(frame.groupby(groups).diff(), period_ns)
 
 
 def _contiguous_segment_ids(index: pd.Index, period_ns: int | None) -> pd.Series:

@@ -65,6 +65,7 @@ def run_xgb_validation(
     whitelist: list[str] | None = None,
     top_n: int = DEFAULT_XGB_TOP_N,
     max_lag: int | None = None,
+    target_mask: pd.Series | None = None,
 ) -> XGBRunResult:
     total_started_at = time.perf_counter()
     timings = {
@@ -131,6 +132,7 @@ def run_xgb_validation(
             candidate_pool,
             control_columns=control_columns,
             max_lag=resolved_max_lag,
+            target_mask=target_mask,
         )
         timings["feature_build"] = _elapsed_seconds(stage_started_at)
     except (TypeError, ValueError) as exc:

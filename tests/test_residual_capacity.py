@@ -1,8 +1,47 @@
 import numpy as np
 import pandas as pd
+import pytest
 
+from chem_ts_corr import screening
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.screening import residual_corr_scores, regime_scores, risk_flags
+
+
+def test_residual_fit_uses_target_regime_and_applies_coefficients_to_full_timeline():
+    index = pd.date_range("2026-01-01", periods=20, freq="5min")
+    capacity = pd.Series(np.arange(1, 21, dtype=float), index=index, name="cap")
+    fit_mask = pd.Series([True] * 10 + [False] * 10, index=index)
+    target = pd.Series(
+        np.where(fit_mask, 5.0 + 2.0 * capacity, 5.0 + 10.0 * capacity),
+        index=index,
+        name="target",
+    )
+
+    residual, method, _, used_columns = screening._residualize(
+        target, capacity.to_frame(), fit_mask=fit_mask
+    )
+
+    assert method == "ols"
+    assert used_columns == ["cap"]
+    assert residual.loc[fit_mask].abs().max() == pytest.approx(0.0, abs=1e-10)
+    assert residual.loc[~fit_mask].to_numpy() == pytest.approx(
+        (8.0 * capacity.loc[~fit_mask]).to_numpy()
+    )
+
+
+def test_residual_demean_fallback_uses_only_target_regime_mean():
+    index = pd.RangeIndex(8)
+    target = pd.Series([1.0, 2.0, 3.0, 4.0, 100.0, 200.0, 300.0, 400.0], index=index)
+    constant_control = pd.DataFrame({"cap": 1.0}, index=index)
+    fit_mask = pd.Series([True, True, True, True, False, False, False, False], index=index)
+
+    residual, method, _, used_columns = screening._residualize(
+        target, constant_control, fit_mask=fit_mask
+    )
+
+    assert method == "demean"
+    assert used_columns == []
+    pd.testing.assert_series_equal(residual, target - 2.5)
 
 
 def test_residual_corr_and_risk_flags_common_capacity_driver():

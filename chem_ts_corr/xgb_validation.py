@@ -64,7 +64,6 @@ _AUTO_EXCLUDED_RISK_TOKEN_ORDER = (
     "poor_data_quality",
     "target_leads_variable",
 )
-AUTO_EXCLUDED_RISK_TOKENS = frozenset(_AUTO_EXCLUDED_RISK_TOKEN_ORDER)
 AUTO_EXCLUDED_CANDIDATE_CLASSES = frozenset(
     {"downstream_response", "formula_or_derived", "poor_quality"}
 )
@@ -1015,20 +1014,6 @@ def _insufficient_uplift_summary(variable: str) -> CandidateUpliftSummary:
         worst_fold_rmse_improvement_pct=float("nan"),
         validation_status="insufficient_features",
     )
-
-
-def _ordered_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:
-    if candidate_pool.empty or "variable" not in candidate_pool.columns:
-        return []
-    source = candidate_pool.copy(deep=True)
-    source["_source_order"] = range(len(source))
-    source["_candidate_order"] = pd.to_numeric(
-        source.get("candidate_order", pd.Series(index=source.index, dtype=float)), errors="coerce"
-    )
-    source = source.sort_values(
-        ["_candidate_order", "_source_order"], kind="mergesort", na_position="last"
-    )
-    return _stable_unique(_text(variable) for variable in source["variable"] if _text(variable))
 
 
 def _bounded_uplift_candidates(candidate_pool: pd.DataFrame) -> list[str]:

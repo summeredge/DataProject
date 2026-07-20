@@ -211,27 +211,30 @@ def _time_aware_granger_ssr_ftests(
     diagnostics: _GrangerDiagnostics,
 ) -> dict[int, tuple[float, float]]:
     output: dict[int, tuple[float, float]] = {}
+    columns: dict[str, pd.Series] = {"__target_current": pair[target]}
+    target_lag_columns: list[str] = []
+    variable_lag_columns: list[str] = []
+    for offset in range(1, maxlag + 1):
+        target_column = f"__target_lag_{offset}"
+        variable_column = f"__variable_lag_{offset}"
+        columns[target_column] = lagged_series(
+            pair[target], pair.index, offset, period_ns=period_ns
+        )
+        columns[variable_column] = lagged_series(
+            pair[variable], pair.index, offset, period_ns=period_ns
+        )
+        target_lag_columns.append(target_column)
+        variable_lag_columns.append(variable_column)
+    lag_frame = pd.DataFrame(columns, index=pair.index)
     for lag in range(1, maxlag + 1):
-        columns: dict[str, pd.Series] = {"__target_current": pair[target]}
-        target_lag_columns: list[str] = []
-        variable_lag_columns: list[str] = []
-        for offset in range(1, lag + 1):
-            target_column = f"__target_lag_{offset}"
-            variable_column = f"__variable_lag_{offset}"
-            columns[target_column] = lagged_series(
-                pair[target], pair.index, offset, period_ns=period_ns
-            )
-            columns[variable_column] = lagged_series(
-                pair[variable], pair.index, offset, period_ns=period_ns
-            )
-            target_lag_columns.append(target_column)
-            variable_lag_columns.append(variable_column)
-        aligned = pd.DataFrame(columns, index=pair.index).dropna()
+        restricted_columns = target_lag_columns[:lag]
+        unrestricted_columns = restricted_columns + variable_lag_columns[:lag]
+        aligned = lag_frame[["__target_current", *unrestricted_columns]].dropna()
         if aligned.empty:
             continue
         y = aligned["__target_current"].to_numpy(dtype=float)
-        restricted_x = aligned[target_lag_columns].to_numpy(dtype=float)
-        unrestricted_x = aligned[target_lag_columns + variable_lag_columns].to_numpy(dtype=float)
+        restricted_x = aligned[restricted_columns].to_numpy(dtype=float)
+        unrestricted_x = aligned[unrestricted_columns].to_numpy(dtype=float)
         restricted_ssr, restricted_rank = _ols_ssr_and_rank(
             restricted_x, y, diagnostics=diagnostics
         )

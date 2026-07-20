@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import re
 from typing import Any
 
 import pandas as pd
@@ -214,14 +213,6 @@ def _conflicts(row: pd.Series) -> tuple[str, str]:
         types.append("boundary_lag_uncertain")
         reasons.append("滞后命中边界，真实滞后可能超过当前搜索范围。")
     return ";".join(types), ";".join(reasons)
-
-
-def _parse_lags(value: Any) -> list[int]:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return []
-    if isinstance(value, (list, tuple, set)):
-        return [int(v) for v in value if _number(v) is not None]
-    return [int(x) for x in re.findall(r"-?\d+", str(value))]
 
 
 def _coalesce(*values: Any) -> Any:

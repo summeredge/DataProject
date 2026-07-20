@@ -186,28 +186,6 @@ def build_causal_review_evidence(
 
 
 
-def _dedupe_variables(frame: pd.DataFrame) -> pd.DataFrame:
-    if "variable" not in frame.columns or frame.empty:
-        return frame
-    sortable = frame.copy(deep=True)
-    sort_cols: list[str] = []
-    ascending: list[bool] = []
-    for col in ["fdr_q_value", "granger_fdr_q_value", "min_p_value", "granger_min_p_value"]:
-        if col in sortable.columns:
-            sortable[f"__sort_{col}"] = pd.to_numeric(sortable[col], errors="coerce")
-            sort_cols.append(f"__sort_{col}")
-            ascending.append(True)
-    for col in ["importance_rank", "model_importance_rank"]:
-        if col in sortable.columns:
-            sortable[f"__sort_{col}"] = pd.to_numeric(sortable[col], errors="coerce")
-            sort_cols.append(f"__sort_{col}")
-            ascending.append(True)
-    if sort_cols:
-        sortable = sortable.sort_values(sort_cols, ascending=ascending, na_position="last", kind="mergesort")
-    sortable = sortable.drop(columns=[c for c in sortable.columns if c.startswith("__sort_")])
-    return sortable.drop_duplicates(subset=["variable"], keep="first")
-
-
 def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> None:
     for col in columns:
         if col not in frame.columns:

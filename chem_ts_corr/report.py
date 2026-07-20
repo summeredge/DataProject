@@ -109,7 +109,9 @@ def build_markdown_summary(
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
 
-    lines.extend(["", "## 强初筛候选", ""]); lines.extend(_table_lines(_core_columns(strong).head(15))); lines.extend(["", "## 相关性线索", ""])
+    lines.extend(["", "## 强初筛候选", ""])
+    lines.extend(_table_lines(_core_columns(strong).head(15)))
+    lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])

@@ -33,16 +33,29 @@ LAG_PEAK_QUALITY_COLUMNS = [
 ]
 
 
-def _safe_corr_stats(x: pd.Series, y: pd.Series, method: str) -> dict[str, float | int]:
-    aligned = pd.concat([x, y], axis=1).dropna()
-    if len(aligned) < 5:
-        return {"r": np.nan, "p_value": np.nan, "r2": np.nan, "n": len(aligned)}
-    if aligned.iloc[:, 0].nunique() <= 1 or aligned.iloc[:, 1].nunique() <= 1:
-        return {"r": np.nan, "p_value": np.nan, "r2": np.nan, "n": len(aligned)}
+def _aligned_corr_stats(x: pd.Series, y: pd.Series) -> dict[str, dict[str, float | int]]:
+    x_values = pd.to_numeric(x, errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    y_values = pd.to_numeric(y, errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+    valid = ~np.isnan(x_values) & ~np.isnan(y_values)
+    x_valid = x_values[valid]
+    y_valid = y_values[valid]
+    n = len(x_valid)
+    empty = {"r": np.nan, "p_value": np.nan, "r2": np.nan, "n": n}
+    if n < 5 or len(np.unique(x_valid)) <= 1 or len(np.unique(y_valid)) <= 1:
+        return {"pearson": empty.copy(), "spearman": empty.copy()}
 
-    corr_frame = aligned if method == "pearson" else aligned.rank(method="average")
-    r = float(corr_frame.iloc[:, 0].corr(corr_frame.iloc[:, 1], method="pearson"))
-    return {"r": r, "p_value": _corr_p_value(r, len(aligned)), "r2": r * r, "n": len(aligned)}
+    pearson_r = float(np.corrcoef(x_valid, y_valid)[0, 1])
+    x_ranked = pd.Series(x_valid).rank(method="average").to_numpy(dtype=float)
+    y_ranked = pd.Series(y_valid).rank(method="average").to_numpy(dtype=float)
+    spearman_r = float(np.corrcoef(x_ranked, y_ranked)[0, 1])
+    return {
+        "pearson": _stats_from_correlation(pearson_r, n),
+        "spearman": _stats_from_correlation(spearman_r, n),
+    }
+
+
+def _stats_from_correlation(r: float, n: int) -> dict[str, float | int]:
+    return {"r": r, "p_value": _corr_p_value(r, n), "r2": r * r, "n": n}
 
 
 def _corr_p_value(r: float, n: int) -> float:
@@ -86,8 +99,9 @@ def compute_lag_scores(
             shifted = lagged_series(series, target_series.index, lag, period_ns=period_ns)
             if resolved_mask is not None:
                 shifted = shifted.where(resolved_mask)
-            pearson = _safe_corr_stats(shifted, target_series, "pearson")
-            spearman = _safe_corr_stats(shifted, target_series, "spearman")
+            stats = _aligned_corr_stats(shifted, target_series)
+            pearson = stats["pearson"]
+            spearman = stats["spearman"]
             pearson_r = float(pearson["r"])
             spearman_r = float(spearman["r"])
             rows.append(

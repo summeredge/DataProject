@@ -4485,6 +4485,11 @@ function cellTitle(column, value) {
 function formatCellValue(column, value) {
   const text = String(value ?? "");
   const maps = {
+    innovation_sign: {
+      "1": "正向",
+      "-1": "负向",
+      "0": "零相关",
+    },
     integrated_review_decision: {
       priority_review: "优先复核",
       priority_review_with_statistical_limit: "优先复核但统计受限",
@@ -4642,6 +4647,11 @@ function formatValue(value) {
   }
   if (typeof value === "string") {
     const map = {
+      non_predictive_lag: "非预测性滞后",
+      innovation_verified: "变化量验证通过",
+      innovation_lag_conflict: "变化量滞后冲突",
+      innovation_sign_conflict: "变化量符号冲突",
+      innovation_sign_unknown: "变化量符号未知",
       candidate_grade_A: "候选等级A",
       candidate_grade_B: "候选等级B",
       candidate_grade_C: "候选等级C",

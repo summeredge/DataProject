@@ -138,9 +138,11 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     if raw_ranked.empty:
         topk = []
     else:
-        preliminary_score = np.sqrt(
-            raw_ranked["score"].clip(0, 1)
-            * raw_ranked["innovation_score"].fillna(0.0).clip(0, 1)
+        preliminary_score = raw_ranked["score"].clip(0, 1).copy()
+        innovation_verified = raw_ranked["innovation_status"].eq("innovation_verified")
+        preliminary_score.loc[innovation_verified] = np.sqrt(
+            raw_ranked.loc[innovation_verified, "score"].clip(0, 1)
+            * raw_ranked.loc[innovation_verified, "innovation_score"].clip(0, 1)
         )
         topk = raw_ranked.assign(_preliminary_score=preliminary_score).nlargest(
             config.top_k, "_preliminary_score"

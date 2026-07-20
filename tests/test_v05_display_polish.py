@@ -57,6 +57,27 @@ def test_remaining_status_values_are_chinese_ready():
         assert marker in INDEX_HTML
 
 
+def test_innovation_statuses_and_sign_values_are_chinese_ready():
+    required = [
+        "non_predictive_lag",
+        "innovation_verified",
+        "innovation_lag_conflict",
+        "innovation_sign_conflict",
+        "innovation_sign_unknown",
+        "非预测性滞后",
+        "变化量验证通过",
+        "变化量滞后冲突",
+        "变化量符号冲突",
+        "变化量符号未知",
+        'innovation_sign: {',
+        '"1": "正向"',
+        '"-1": "负向"',
+        '"0": "零相关"',
+    ]
+    for marker in required:
+        assert marker in INDEX_HTML
+
+
 def test_table_width_uses_content_fit_with_page_maximum():
     compact = INDEX_HTML.replace(" ", "")
     required = [

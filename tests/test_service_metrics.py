@@ -209,6 +209,64 @@ def test_innovation_peak_in_opposite_direction_is_not_verified(monkeypatch):
     assert pd.isna(result["innovation_score"])
 
 
+def test_preselection_keeps_high_raw_association_when_innovation_conflicts(tmp_path, monkeypatch):
+    from chem_ts_corr import screening
+
+    n = 100
+    rng = np.random.default_rng(42)
+    target = np.sin(np.arange(n) / 5)
+    frame = pd.DataFrame(
+        {
+            "target": target,
+            "conflict": target,
+            "verified": rng.normal(size=n),
+        },
+        index=pd.date_range("2025-01-01", periods=n, freq="min"),
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "unused.csv",
+        time_column="timestamp",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=4,
+        top_k=1,
+        enable_model=False,
+        skip_rolling_corr=True,
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_innovation(frame, target, max_lag, raw_ranked, preprocess_mode):
+        rows = []
+        for _, row in raw_ranked.iterrows():
+            conflict = row["variable"] == "conflict"
+            rows.append(
+                {
+                    "variable": row["variable"],
+                    "innovation_score": np.nan if conflict else row["score"],
+                    "innovation_lag": row["lag"],
+                    "innovation_direction": row["direction"],
+                    "innovation_sign": 1,
+                    "innovation_status": (
+                        "innovation_lag_conflict" if conflict else "innovation_verified"
+                    ),
+                }
+            )
+        return pd.DataFrame(rows, columns=service.INNOVATION_COLUMNS)
+
+    def capture_lift(frame, target, candidate_variables, max_lag, **kwargs):
+        captured["candidate_variables"] = list(candidate_variables)
+        return pd.DataFrame(
+            [{"variable": variable, "status": "non_predictive_lag"} for variable in candidate_variables]
+        )
+
+    monkeypatch.setattr(service, "_innovation_evidence", fake_innovation)
+    monkeypatch.setattr(screening, "model_lift_scores", capture_lift)
+
+    analyze_numeric_frame(frame, config)
+
+    assert captured["candidate_variables"] == ["conflict"]
+
+
 @pytest.mark.parametrize(
     "extra_columns",
     [

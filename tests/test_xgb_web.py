@@ -322,7 +322,7 @@ def test_xgb_prepared_frame_applies_configured_transform(tmp_path: Path, mode: s
         assert prepared.index[0] > pd.Timestamp(frame.iloc[0]["timestamp"])
         assert prepared.iloc[0]["target"] == 1.0
     else:
-        assert len(prepared) == len(frame)
+        assert len(prepared) == len(frame) - 1
         assert not prepared["target"].equals(
             pd.Series(frame["target"].to_numpy(), index=pd.to_datetime(frame["timestamp"]))
         )

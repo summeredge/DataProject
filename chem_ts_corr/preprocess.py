@@ -97,6 +97,28 @@ def preprocess_frame(
     return preserve_sample_period(cleaned.drop(columns=removable), period_ns)
 
 
+def preprocess_frame_causal(
+    frame: pd.DataFrame,
+    target: str,
+    resample_rule: str | None,
+    max_forward_fill_gap_points: int = 5,
+) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
+    if resample_rule:
+        frame = frame.resample(resample_rule).median()
+        period_ns = infer_sample_period_ns(frame.index)
+    if target not in frame.columns:
+        raise ValueError("Target column was removed during preprocessing")
+
+    cleaned = frame.copy()
+    if max_forward_fill_gap_points > 0:
+        cleaned = cleaned.ffill(limit=max_forward_fill_gap_points)
+    cleaned = cleaned.dropna(subset=[target])
+    if len(cleaned) < 10:
+        raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
+    return preserve_sample_period(cleaned, period_ns)
+
+
 def standardize_frame(frame: pd.DataFrame) -> pd.DataFrame:
     std = frame.std(ddof=0).replace(0, 1)
     return preserve_sample_period((frame - frame.mean()) / std, sample_period_ns(frame))
@@ -124,6 +146,24 @@ def transform_frame(
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
 
+def transform_frame_causal(
+    frame: pd.DataFrame,
+    mode: str,
+    detrend_window: int,
+) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
+    if mode == "raw":
+        return preserve_sample_period(frame, period_ns)
+    if mode == "detrend":
+        return detrend_trailing_average(frame, detrend_window)
+    if mode == "diff":
+        return preserve_sample_period(frame.diff().dropna(how="all"), period_ns)
+    if mode == "detrend_diff":
+        transformed = detrend_trailing_average(frame, detrend_window).diff()
+        return preserve_sample_period(transformed.dropna(how="all"), period_ns)
+    raise ValueError(f"Unknown preprocess mode: {mode}")
+
+
 def detrend_moving_average(
     frame: pd.DataFrame,
     window: int,
@@ -138,3 +178,12 @@ def detrend_moving_average(
         method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area
     ).dropna()
     return preserve_sample_period(transformed, period_ns)
+
+
+def detrend_trailing_average(frame: pd.DataFrame, window: int) -> pd.DataFrame:
+    period_ns = sample_period_ns(frame)
+    window = max(3, int(window))
+    min_periods = max(2, window // 4)
+    trend = frame.rolling(window=window, center=False, min_periods=min_periods).mean()
+    detrended = frame - trend
+    return preserve_sample_period(detrended.dropna(how="all"), period_ns)

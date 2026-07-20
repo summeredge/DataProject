@@ -1266,7 +1266,7 @@ def _scaled_frame_for_secondary(
         if cached is not None:
             return cached.copy(deep=True)
 
-    transformed = _prepared_frame_for_validation(config, protected_columns)
+    transformed = _prepared_frame_for_secondary(config, protected_columns)
     scaled = standardize_frame(transformed)
     with SCALED_FRAME_CACHE_LOCK:
         SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
@@ -1276,38 +1276,53 @@ def _scaled_frame_for_secondary(
     return scaled.copy(deep=True)
 
 
-def _prepared_frame_for_validation(
-    config: AnalysisConfig, protected_columns: list[str] | None = None
-) -> pd.DataFrame:
+def _segmented_numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
     from chem_ts_corr.data import select_numeric_frame
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
-    from chem_ts_corr.preprocess import preprocess_frame, segment_by_load, transform_frame
+    from chem_ts_corr.preprocess import segment_by_load
 
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
     numeric = select_numeric_frame(raw, config.target)
     roles = load_roles(config, list(numeric.columns))
     numeric = apply_ignore_roles(numeric, roles, config.target)
-    segmented = segment_by_load(
+    return segment_by_load(
         numeric,
         segment_column=config.segment_column,
         segment_mode=config.segment_mode,
         segment_min=config.segment_min,
         segment_max=config.segment_max,
     )
-    protected = [
-        config.target,
-        config.segment_column,
-        *(config.capacity_columns or []),
-        *(config.residual_control_columns or []),
-        *(config.force_include_variables or []),
-        *(protected_columns or []),
+
+
+def _protected_validation_columns(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> list[str]:
+    return [
+        column
+        for column in [
+            config.target,
+            config.segment_column,
+            *(config.capacity_columns or []),
+            *(config.residual_control_columns or []),
+            *(config.force_include_variables or []),
+            *(protected_columns or []),
+        ]
+        if column
     ]
+
+
+def _prepared_frame_for_secondary(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.preprocess import preprocess_frame, transform_frame
+
+    segmented = _segmented_numeric_frame(config)
     cleaned = preprocess_frame(
         segmented,
         target=config.target,
         resample_rule=config.resample_rule,
         min_valid_ratio=config.min_valid_ratio,
-        protected_columns=[c for c in protected if c],
+        protected_columns=_protected_validation_columns(config, protected_columns),
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
@@ -1318,6 +1333,24 @@ def _prepared_frame_for_validation(
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
     )
+
+
+def _prepared_frame_for_validation(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.preprocess import preprocess_frame_causal, transform_frame_causal
+
+    segmented = _segmented_numeric_frame(config)
+    protected = _protected_validation_columns(config, protected_columns)
+    columns = [column for column in segmented.columns if column in protected or column == config.target]
+    source = segmented.loc[:, columns] if protected_columns is not None else segmented
+    cleaned = preprocess_frame_causal(
+        source,
+        target=config.target,
+        resample_rule=config.resample_rule,
+        max_forward_fill_gap_points=config.max_interpolate_gap_points,
+    )
+    return transform_frame_causal(cleaned, config.preprocess_mode, config.detrend_window)
 
 
 def _scaled_frame_cache_key(

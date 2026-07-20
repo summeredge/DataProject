@@ -5,7 +5,10 @@ import pandas as pd
 from chem_ts_corr.common import as_text, left_join_missing, to_float
 
 
-INTERPRETATION = "predictive validation only; not a causal conclusion"
+INTERPRETATION = (
+    "predictive validation only; not a causal conclusion; analytic p/q values do not fully "
+    "remove industrial time-series autocorrelation effects"
+)
 
 REPORT_COLUMNS = [
     "variable",

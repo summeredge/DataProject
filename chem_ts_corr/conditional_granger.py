@@ -92,6 +92,7 @@ def run_conditional_granger_tests(
             continue
 
         candidates: list[dict[str, object]] = []
+        y_name = target
         y_series = pd.to_numeric(frame[target], errors="coerce")
         x_series = pd.to_numeric(frame[variable], errors="coerce")
         control_series = {c: pd.to_numeric(frame[c], errors="coerce") for c in effective_controls}

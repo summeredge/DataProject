@@ -125,7 +125,7 @@ def test_conditional_granger_controls_common_driver_effect():
     assert controlled_contribution < uncontrolled_contribution
     assert controlled_contribution < uncontrolled_contribution * 0.05
     assert controlled_contribution < 0.01
-    assert controlled["interpretation"] == "predictive validation only; not a causal conclusion"
+    assert "predictive validation only; not a causal conclusion" in controlled["interpretation"]
     assert list(controlled.index) == EXPECTED_OUT_COLS
 
 
@@ -156,7 +156,7 @@ def test_conditional_granger_flags_high_collinearity_with_controls():
     assert np.isfinite(float(row["predictive_contribution"]))
     assert float(row["predictive_contribution"]) >= 0
     assert (not np.isfinite(float(row["condition_number"]))) or float(row["condition_number"]) > 1e8
-    assert row["interpretation"] == "predictive validation only; not a causal conclusion"
+    assert "predictive validation only; not a causal conclusion" in row["interpretation"]
 
 
 def test_conditional_granger_non_collinear_sample_keeps_ok_status_and_condition_numbers():

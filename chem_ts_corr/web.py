@@ -4806,7 +4806,7 @@ function formatValue(value) {
     };
     if (map[value]) return map[value];
     if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
-    if (value === "predictive validation only; not a causal conclusion") return "仅作预测验证；不是因果结论";
+    if (value.startsWith("predictive validation only; not a causal conclusion")) return "仅作预测验证；不是因果结论；解析式 p/q 值不能完全消除工业时序自相关影响";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
     if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";

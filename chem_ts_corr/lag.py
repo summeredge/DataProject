@@ -109,8 +109,17 @@ def compute_lag_scores(
 
     result = pd.DataFrame(rows, columns=LAG_SCORE_COLUMNS)
     if not result.empty:
-        result["pearson_q"] = benjamini_hochberg(result["pearson_p"])
-        result["spearman_q"] = benjamini_hochberg(result["spearman_p"])
+        family: list[float] = []
+        positions: list[tuple[str, object]] = []
+        for method in ("pearson", "spearman"):
+            for index, p_value in result[f"{method}_p"].items():
+                if pd.notna(p_value):
+                    family.append(float(p_value))
+                    positions.append((method, index))
+        result["pearson_q"] = np.nan
+        result["spearman_q"] = np.nan
+        for (method, index), q_value in zip(positions, benjamini_hochberg(family)):
+            result.loc[index, f"{method}_q"] = q_value
         use_pearson = result["abs_pearson"] >= result["abs_spearman"]
         result["p_value"] = np.where(use_pearson, result["pearson_p"], result["spearman_p"])
         result["corr_q_value"] = np.where(use_pearson, result["pearson_q"], result["spearman_q"])

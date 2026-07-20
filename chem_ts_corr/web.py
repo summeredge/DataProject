@@ -5147,15 +5147,5 @@ function reset() {
 """
 
 
-class _IndexHtml(str):
-    def __contains__(self, item):
-        if item == "综合证据复核":
-            return False
-        return super().__contains__(item)
-
-
-INDEX_HTML = _IndexHtml(INDEX_HTML)
-
-
 if __name__ == "__main__":
     main()

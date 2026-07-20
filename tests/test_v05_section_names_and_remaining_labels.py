@@ -1,19 +1,32 @@
+from pathlib import Path
+
 from chem_ts_corr.web import INDEX_HTML
 
 
 def test_section_names_are_clearer():
     required = [
-        "最终推荐结果质检总览",
-        "逐变量综合证据复核表",
+        "<h3>最终推荐结果质检总览</h3>",
+        "<h2>逐变量综合证据复核表</h2>",
+        'id="finalReviewQualityOverview"',
+        'id="causalReviewEvidenceTable"',
     ]
     for marker in required:
         assert marker in INDEX_HTML
     forbidden = [
-        "最终推荐质量总览",
-        "综合证据复核",
+        "<h2>最终推荐质量总览</h2>",
+        "<h2>综合证据复核</h2>",
     ]
     for marker in forbidden:
         assert marker not in INDEX_HTML
+
+
+def test_index_html_uses_plain_string_semantics():
+    source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+
+    assert type(INDEX_HTML) is str
+    assert "class _IndexHtml" not in source
+    assert "def __contains__" not in source
+    assert "INDEX_HTML = _IndexHtml" not in source
 
 
 def test_raw_risk_tag_display_is_chinese_readable():

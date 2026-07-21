@@ -106,12 +106,12 @@ def test_innovation_conflict_metadata_survives_without_false_verification():
     assert row["correlation_evidence_status"] == "association_only"
 
 
-def test_verified_residual_uses_fixed_family_formula():
+def test_verified_residual_uses_equal_weight_family_formula():
     row = _evaluate(
         [_ranked("x", 0.9)],
         residual=_frame({"variable": "x", "residual_corr": 0.3}),
     ).iloc[0]
-    expected = np.sqrt(0.9 * 0.3)
+    expected = (0.9 * 0.9 * 0.3) ** (1 / 3)
 
     assert row["association_score"] == pytest.approx(0.9)
     assert row["independent_signal_score"] == pytest.approx(0.3)
@@ -141,9 +141,11 @@ def test_zero_residual_is_valid_independent_signal():
 
 @pytest.mark.parametrize(
     ("raw", "residual", "expected"),
-    [(0.7, 0.7, 0.7), (0.4, 0.8, np.sqrt(0.4 * 0.8))],
+    [(0.7, 0.7, 0.7), (0.4, 0.8, (0.4 * 0.4 * 0.8) ** (1 / 3))],
 )
-def test_family_formula_handles_equal_or_higher_residual(raw: float, residual: float, expected: float):
+def test_equal_weight_family_formula_handles_equal_or_higher_residual(
+    raw: float, residual: float, expected: float
+):
     row = _evaluate(
         [_ranked("x", raw)],
         residual=_frame({"variable": "x", "residual_corr": residual}),
@@ -177,7 +179,7 @@ def test_all_evidence_uses_fixed_component_budget():
         lag_peak=_frame({"variable": "x", "lag_quality": 0.5}),
         model_lift=_frame({"variable": "x", "model_lift": 0.4}),
     ).iloc[0]
-    correlation = np.sqrt(0.9 * 0.3)
+    correlation = (0.9 * 0.9 * 0.3) ** (1 / 3)
     stability_score = np.sqrt(0.7 * 0.6)
     expected = np.median([
         profile["association"] * correlation

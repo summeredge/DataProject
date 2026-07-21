@@ -280,7 +280,9 @@ def test_pr4_direction_and_driver_rank_sort_remain_active():
 
 def test_v2_components_keep_single_association_family_entry():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
-    components = source.split("components = {", 1)[1].split("}", 1)[0]
+    components = source.split("components = pd.DataFrame", 1)[1].split(
+        'final["evidence_available_count"]', 1
+    )[0]
 
     assert components.count('"association":') == 1
     assert '"raw":' not in components

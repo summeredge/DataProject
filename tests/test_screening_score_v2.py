@@ -48,14 +48,21 @@ def _score(
     ).iloc[0]
 
 
-def test_weight_profiles_cover_reasonable_engineering_choices_without_one_magic_formula():
+def test_weight_profiles_sample_all_components_fairly_without_one_magic_formula():
     profiles = INDUSTRIAL_SCORE_WEIGHT_PROFILES
 
     assert len(profiles) > 10
     assert all(sum(profile.values()) == pytest.approx(1.0) for profile in profiles)
     assert all(0.10 <= value <= 0.40 for profile in profiles for value in profile.values())
-    assert all(profile["prediction"] >= profile["association"] for profile in profiles)
-    assert all(profile["stability"] >= profile["lag_quality"] for profile in profiles)
+    marginal_weights = {
+        component: sorted(profile[component] for profile in profiles)
+        for component in profiles[0]
+    }
+    assert all(
+        weights == marginal_weights["association"]
+        for component, weights in marginal_weights.items()
+        if component != "association"
+    )
 
 
 def test_innovation_disagreement_reduces_slow_trend_association():

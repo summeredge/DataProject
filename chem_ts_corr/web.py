@@ -2131,9 +2131,8 @@ INDEX_HTML = r"""<!doctype html>
 
     <section class="results">
       <div class="tabs" role="tablist" aria-label="结果分类">
-        <button class="tab-button active" role="tab" aria-selected="true" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="0">初步分析</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="candidatesTab" id="tab-candidatesTab" data-tab="candidatesTab" tabindex="-1">候选变量</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
+        <button class="tab-button active" role="tab" aria-selected="true" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="0">趋势图</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="-1">初步分析</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">四级验证</button>
@@ -2142,7 +2141,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
       </div>
 
-      <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
+      <div id="overviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-overviewTab" hidden>
         <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="overview" class="overview-grid"></div>
@@ -2150,20 +2149,19 @@ INDEX_HTML = r"""<!doctype html>
         <h2>前 10 个推荐变量</h2>
         <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低证据覆盖度与修正系数，不会放大其他分项。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
+        <section id="candidatesTab">
+          <h2>候选变量</h2>
+          <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
+          <h3>结果质量提示</h3>
+          <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
+          <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
+          <h2>轻量遗漏候选</h2>
+          <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
+          <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
+        </section>
       </div>
 
-      <div id="candidatesTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-candidatesTab" hidden>
-        <h2>候选变量</h2>
-        <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
-        <h3>结果质量提示</h3>
-        <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
-        <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
-        <h2>轻量遗漏候选</h2>
-        <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
-        <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
-      </div>
-
-      <div id="trendTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-trendTab" hidden>
+      <div id="trendTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-trendTab">
         <h2>趋势图</h2>
         <div id="trendReviewHint" class="help">点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。</div>
         <div class="chart-controls">
@@ -2426,6 +2424,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
   button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
+activateTab("trendTab");
 el("drawTrend").addEventListener("click", drawTrend);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);

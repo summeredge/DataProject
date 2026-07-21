@@ -22,7 +22,7 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     _write_csv(
         run_dir / "ranked_features.csv",
         [
-            {"variable": "FIC001.SV", "driver_rank": 1, "driver_priority_score": 0.91, "final_score": 0.91, "candidate_class": "upstream_driver_candidate", "driver_priority_factor": 1.0, "evidence_coverage_status": "部分完整", "evidence_missing_items": "稳定性验证", "evidence_completeness": 0.875, "data_quality_score": 0.999, "evidence_confidence": 0.935, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none"},
+            {"variable": "FIC001.SV", "driver_rank": 1, "driver_priority_score": 0.91, "final_score": 0.91, "candidate_class": "upstream_driver_candidate", "driver_priority_factor": 1.0, "evidence_coverage_status": "部分完整", "evidence_missing_items": "稳定性验证", "evidence_completeness": 0.875, "data_quality_score": 0.999, "evidence_confidence": 0.935, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none", "score_method": "industrial_robust_v3"},
             {"variable": "PI002.PV", "final_score": 0.73, "candidate_grade": "B", "lag": -2, "direction": "target_leads_variable", "recommended_use": "manual_review", "risk_flags": "target_leads_variable", "risk_level": "medium"},
         ],
     )
@@ -57,6 +57,7 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     package = build_llm_analysis_package(run_dir, top_n=10)
 
     assert package["meta"]["target"] == "Y.PV"
+    assert package["overview"]["score_method"] == "industrial_robust_v3"
     assert package["highly_correlated_variables"][0]["variable"] == "FIC001.SV"
     assert package["highly_correlated_variables"][0]["evidence_coverage_status"] == "部分完整"
     assert package["highly_correlated_variables"][0]["evidence_missing_items"] == "稳定性验证"
@@ -73,7 +74,7 @@ def test_build_llm_prompt_contains_strict_control_and_causality_constraints(tmp_
     run_dir = tmp_path / "run_002"
     run_dir.mkdir()
     (run_dir / "summary.md").write_text("- target: Y.PV\n", encoding="utf-8")
-    _write_csv(run_dir / "ranked_features.csv", [{"variable": "FIC001.SV", "final_score": 0.9, "candidate_grade": "A", "lag": 5, "direction": "variable_leads_target"}])
+    _write_csv(run_dir / "ranked_features.csv", [{"variable": "FIC001.SV", "final_score": 0.9, "candidate_grade": "A", "lag": 5, "direction": "variable_leads_target", "score_method": "industrial_robust_v3"}])
 
     package = build_llm_analysis_package(run_dir, top_n=5)
     prompt = build_llm_prompt(package, report_type="apc_advice")
@@ -92,5 +93,7 @@ def test_build_llm_prompt_contains_strict_control_and_causality_constraints(tmp_
     assert "fallback_missing_ranked_lag" in prompt
     assert "evidence_confidence 的中文含义是“证据修正系数”" in prompt
     assert "不是概率、统计置信度或因果置信度" in prompt
+    assert "industrial_robust_v3" in prompt
+    assert "评分版本仅表示评分语义，不代表新的因果算法" in prompt
     assert "```json" in prompt
     json.loads(prompt.split("```json", 1)[1].split("```", 1)[0])

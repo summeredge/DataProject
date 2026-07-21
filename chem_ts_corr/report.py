@@ -195,7 +195,7 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 使用工业稳健 V2：在多组合理工程权重下汇总变化量关联、增量预测、稳定性和滞后质量；缺失证据降低证据覆盖度与修正系数，不再放大剩余证据。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
+            "- final_score 使用工业稳健 V3：可用相关证据按等权几何均值合并，缺失证据与零分证据分离，profile 对实际可用证据权重重新归一，数据质量采用平滑衰减。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
             "- 证据修正系数由证据覆盖度和数据质量共同计算，仅用于修正综合证据评分，不表示概率、统计置信度或因果置信度。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",

@@ -1027,7 +1027,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["evidence_score"] = (
         final["evidence_strength"] * final["evidence_confidence"]
     ).clip(0, 1)
-    final["score_method"] = "industrial_robust_v2"
+    final["score_method"] = "industrial_robust_v3"
     risk_values = final.get("risk_flags", pd.Series("", index=final.index)).map(_risk_adjustment)
     final[["risk_penalty_rate", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
         risk_values.tolist(), index=final.index

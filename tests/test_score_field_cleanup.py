@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.near_miss import build_near_miss_candidates
-from chem_ts_corr.report import build_markdown_summary
+from chem_ts_corr.report import build_markdown_summary, write_outputs
 from chem_ts_corr.screening import final_ranked_features
 
 
@@ -110,14 +110,41 @@ def test_real_half_optional_evidence_is_preserved():
     assert row["lag_quality_status"] == "ok"
 
 
-def test_v2_complete_balanced_evidence_preserves_common_scale():
+def test_v3_complete_balanced_evidence_preserves_common_scale():
     row = _result(
         raw=0.8, innovation=0.8, rolling=0.8, lag_quality=0.8, model_lift=0.8
     )
 
-    assert row["score_method"] == "industrial_robust_v2"
+    assert row["score_method"] == "industrial_robust_v3"
     assert row["evidence_completeness"] == 1.0
     assert row["evidence_score"] == pytest.approx(0.8)
+
+
+def test_current_runtime_score_method_assignment_is_v3():
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+
+    assert 'final["score_method"] = "industrial_robust_v3"' in source
+    assert 'final["score_method"] = "industrial_robust_v2"' not in source
+    assert source.count('final["score_method"] = ') == 1
+
+
+def test_ranked_features_csv_preserves_schema_and_exports_v3(tmp_path: Path):
+    ranked = pd.DataFrame([_result()])
+    expected_columns = list(ranked.columns)
+
+    write_outputs(
+        tmp_path,
+        "target",
+        ranked,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {},
+    )
+
+    exported = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    assert list(exported.columns) == expected_columns
+    assert exported["score_method"].tolist() == ["industrial_robust_v3"]
 
 
 @pytest.mark.parametrize(
@@ -250,8 +277,9 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
 def test_report_risk_and_regime_explanations_are_current():
     markdown = build_markdown_summary("target", _summary_frame(), pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame())
 
-    for text in ["工业稳健 V2", "缺失证据降低证据覆盖度", "risk_score_cap", "工况覆盖度"]:
+    for text in ["工业稳健 V3", "可用相关证据按等权几何均值合并", "risk_score_cap", "工况覆盖度"]:
         assert text in markdown
+    assert "工业稳健 V2" not in markdown
     assert "不表示概率、统计置信度或因果置信度" in markdown
     assert "证据置信度" not in markdown
     assert "剩余已计算项按原始权重重归一" not in markdown

@@ -104,6 +104,11 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
         "meta": {"run_dir": str(path), **summary},
         "overview": {
             "top_n": top_n,
+            "score_method": (
+                str(ranked["score_method"].dropna().iloc[0])
+                if "score_method" in ranked.columns and ranked["score_method"].notna().any()
+                else ""
+            ),
             "available_files": sorted(p.name for p in path.glob("*.csv")) if path.exists() else [],
             "model_variable_importance_rows": int(len(importance)),
             "enhanced_validation_rows": int(len(enhanced)),
@@ -137,6 +142,7 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
+- 必须按 overview.score_method 说明当前评分版本；评分版本仅表示评分语义，不代表新的因果算法，也不得据此声称确定性因果关系。
 - evidence_confidence 的中文含义是“证据修正系数”，由证据覆盖度和数据质量共同计算；它不是概率、统计置信度或因果置信度。解释候选证据时应同时参考 evidence_coverage_status 和 evidence_missing_items。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。

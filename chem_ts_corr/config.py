@@ -24,6 +24,7 @@ class AnalysisConfig:
     capacity_columns: list[str] | None = None
     residual_control_columns: list[str] | None = None
     force_include_variables: list[str] | None = None
+    excluded_columns: list[str] = field(default_factory=list)
     exclude_control_columns_from_candidates: bool = True
     roles_path: Path | None = None
     random_state: int = 42

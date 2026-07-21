@@ -21,7 +21,14 @@ from types import SimpleNamespace
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig as _AnalysisConfig
-from chem_ts_corr.data import EXCEL_SUFFIXES, TEXT_SUFFIXES, load_timeseries_csv, read_timeseries_table
+from chem_ts_corr.data import (
+    EXCEL_SUFFIXES,
+    TEXT_SUFFIXES,
+    drop_excluded_columns,
+    load_timeseries_csv,
+    normalize_excluded_columns,
+    read_timeseries_table,
+)
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
@@ -377,6 +384,24 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     output_dir = RUNS_DIR / run_id
     input_path = _resolve_upload(file_id)
     resolved_encoding = _resolve_encoding(input_path, encoding)
+    excluded_columns = normalize_excluded_columns(_list_field(form, "excluded_columns"))
+    capacity_columns = _list_field(form, "capacity_columns")
+    residual_control_columns = (
+        _list_field(form, "residual_control_columns") or capacity_columns
+    )
+    force_include_variables = _list_field(form, "force_include_variables")
+    segment_column = _field(form, "segment_column", "") or None
+    _validate_analysis_excluded_columns(
+        input_path,
+        resolved_encoding,
+        time_column=time_column,
+        target=target,
+        excluded_columns=excluded_columns,
+        segment_column=segment_column,
+        capacity_columns=capacity_columns,
+        residual_control_columns=residual_control_columns,
+        force_include_variables=force_include_variables,
+    )
     config = AnalysisConfig(
         input_path=input_path,
         time_column=time_column,
@@ -389,13 +414,14 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         top_k=_int_field(form, "top_k", 30),
         preprocess_mode=_field(form, "preprocess_mode", "raw"),
         detrend_window=_int_field(form, "detrend_window", 24),
-        segment_column=_field(form, "segment_column", "") or None,
+        segment_column=segment_column,
         segment_mode=_field(form, "segment_mode", "all"),
         segment_min=_optional_float_field(form, "segment_min"),
         segment_max=_optional_float_field(form, "segment_max"),
-        capacity_columns=_list_field(form, "capacity_columns"),
-        residual_control_columns=_list_field(form, "residual_control_columns") or _list_field(form, "capacity_columns"),
-        force_include_variables=_list_field(form, "force_include_variables"),
+        capacity_columns=capacity_columns,
+        residual_control_columns=residual_control_columns,
+        force_include_variables=force_include_variables,
+        excluded_columns=excluded_columns,
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
@@ -421,6 +447,54 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     )
     thread.start()
     return {"task_id": task_id, "run_id": run_id, "status": "running"}
+
+
+def _validate_analysis_excluded_columns(
+    input_path: Path,
+    encoding: str,
+    *,
+    time_column: str,
+    target: str,
+    excluded_columns: list[str],
+    segment_column: str | None,
+    capacity_columns: list[str],
+    residual_control_columns: list[str],
+    force_include_variables: list[str],
+) -> None:
+    if time_column in excluded_columns:
+        raise ValueError(f"剔除列不能同时作为时间列：{time_column}")
+    if target in excluded_columns:
+        raise ValueError(f"剔除列不能同时作为目标列：{target}")
+    protected = [
+        column
+        for column in [
+            segment_column,
+            *capacity_columns,
+            *residual_control_columns,
+            *force_include_variables,
+        ]
+        if column
+    ]
+    conflicts = [column for column in excluded_columns if column in set(protected)]
+    if conflicts:
+        raise ValueError(f"剔除列与工况/控制/白名单参数冲突：{'、'.join(conflicts)}")
+
+    sample, _ = read_timeseries_table(input_path, encoding=encoding, nrows=5000)
+    if time_column not in sample.columns:
+        raise ValueError(f"时间列不存在：{time_column}")
+    if target not in sample.columns:
+        raise ValueError(f"目标列不存在：{target}")
+    filtered = drop_excluded_columns(sample, excluded_columns)
+    numeric_columns = [
+        column
+        for column in filtered.columns
+        if pd.to_numeric(filtered[column], errors="coerce").notna().mean() >= 0.7
+    ]
+    candidates = [
+        column for column in numeric_columns if column not in {time_column, target}
+    ]
+    if not candidates:
+        raise ValueError("剔除后至少需要保留一个可分析数值候选列")
 
 
 def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
@@ -849,6 +923,13 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         raise ValueError("请先完成主筛查并生成 causal_review_candidates.csv")
 
     risk_filter = _list_field(form, "risk_flag_filter")
+    control_columns = (
+        _list_field(form, "control_columns")
+        or config.residual_control_columns
+        or config.capacity_columns
+        or []
+    )
+    _ensure_columns_not_excluded(config, control_columns, "三层复核控制列")
     candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
     scaled = _scaled_frame_for_secondary(config)
     target_mask = _target_segment_mask(scaled)
@@ -859,7 +940,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         causal_review_candidates=candidates,
         risk_flags=risk,
         output_dir=output_dir,
-        control_columns=_list_field(form, "control_columns") or config.residual_control_columns or config.capacity_columns,
+        control_columns=control_columns,
         maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
         min_rows=_int_field(form, "min_rows", 60),
         top_n=_optional_int_field(form, "top_n"),
@@ -945,6 +1026,15 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         )
 
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    control_columns = (
+        _list_field(form, "control_columns")
+        or config.residual_control_columns
+        or config.capacity_columns
+        or []
+    )
+    whitelist = _list_field(form, "whitelist")
+    _ensure_columns_not_excluded(config, control_columns, "XGBoost 控制列")
+    _ensure_columns_not_excluded(config, whitelist, "XGBoost 白名单")
     data = _prepared_frame_for_validation(config)
     target_mask = _target_segment_mask(data)
     result = run_xgb_analysis(
@@ -953,12 +1043,8 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         target=config.target,
         final_review_summary=final_summary,
         ranked_features=ranked,
-        control_columns=(
-            _list_field(form, "control_columns")
-            or config.residual_control_columns
-            or config.capacity_columns
-        ),
-        whitelist=_list_field(form, "whitelist"),
+        control_columns=control_columns,
+        whitelist=whitelist,
         top_n=top_n,
         max_lag=max_lag,
         target_mask=target_mask,
@@ -1111,6 +1197,9 @@ def _secondary_variables_from_ranked(
     config: AnalysisConfig,
     extra_variables: list[str] | None = None,
 ) -> list[str]:
+    _ensure_columns_not_excluded(
+        config, extra_variables or [], "二次验证补充变量"
+    )
     if ranked.empty or "variable" not in ranked.columns:
         return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
     top = ranked.head(config.top_k)["variable"].astype(str).tolist()
@@ -1138,6 +1227,7 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
         resample_rule = None
 
     extra_variables = _secondary_extra_variables_from_form(form)
+    _ensure_columns_not_excluded(config, extra_variables, "二次验证补充变量")
     force_include_variables = list(
         dict.fromkeys(
             [v for v in (config.force_include_variables or []) if v]
@@ -1151,6 +1241,19 @@ def _secondary_config_from_form(config: AnalysisConfig, form: dict[str, Any]) ->
         max_lag=secondary_max_lag,
         force_include_variables=force_include_variables,
     )
+
+
+def _ensure_columns_not_excluded(
+    config: AnalysisConfig, columns: list[str] | None, label: str
+) -> None:
+    excluded = set(normalize_excluded_columns(config.excluded_columns))
+    conflicts = [
+        column
+        for column in normalize_excluded_columns(columns)
+        if column in excluded
+    ]
+    if conflicts:
+        raise ValueError(f"{label}不能包含已剔除列：{'、'.join(conflicts)}")
 
 
 def _normalize_minute_resample_rule(
@@ -1297,11 +1400,21 @@ def _scaled_frame_for_secondary(
     return scaled.copy(deep=True)
 
 
-def _numeric_frame(config: AnalysisConfig) -> pd.DataFrame:
+def _numeric_frame(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
     from chem_ts_corr.data import select_numeric_frame
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
 
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    raw = drop_excluded_columns(
+        raw,
+        config.excluded_columns,
+        protected_columns=[
+            config.time_column,
+            *_protected_validation_columns(config, protected_columns),
+        ],
+    )
     numeric = select_numeric_frame(raw, config.target)
     roles = load_roles(config, list(numeric.columns))
     return apply_ignore_roles(numeric, roles, config.target)
@@ -1329,7 +1442,7 @@ def _prepared_frame_for_secondary(
 ) -> pd.DataFrame:
     from chem_ts_corr.preprocess import operating_segment_mask, preprocess_frame, transform_frame
 
-    numeric = _numeric_frame(config)
+    numeric = _numeric_frame(config, protected_columns)
     cleaned = preprocess_frame(
         numeric,
         target=config.target,
@@ -1376,7 +1489,7 @@ def _prepared_frame_for_validation(
         transform_frame_causal,
     )
 
-    numeric = _numeric_frame(config)
+    numeric = _numeric_frame(config, protected_columns)
     protected = _protected_validation_columns(config, protected_columns)
     columns = [column for column in numeric.columns if column in protected or column == config.target]
     source = numeric.loc[:, columns] if protected_columns is not None else numeric
@@ -1426,6 +1539,7 @@ def _scaled_frame_cache_key(
         tuple(config.capacity_columns or []),
         tuple(config.residual_control_columns or []),
         tuple(config.force_include_variables or []),
+        tuple(config.excluded_columns or []),
         protected_columns,
         config.resample_rule,
         config.min_valid_ratio,
@@ -1450,11 +1564,25 @@ def _chart_frame_from_params(
     input_path = _resolve_upload(file_id)
     resolved_encoding = _resolve_encoding(input_path, encoding)
     time_column = _single(params, "time_column")
+    excluded_columns = normalize_excluded_columns(
+        _single(params, "excluded_columns").split(",")
+    )
+    segment_column = _single(params, "segment_column") or None
+    if time_column in excluded_columns:
+        raise ValueError(f"剔除列不能同时作为时间列：{time_column}")
+    excluded_variables = [
+        variable for variable in variables if variable in set(excluded_columns)
+    ]
+    if excluded_variables:
+        raise ValueError(f"已剔除列不能用于图表：{'、'.join(excluded_variables)}")
+    if segment_column and segment_column in excluded_columns:
+        raise ValueError(f"剔除列不能同时作为工况列：{segment_column}")
 
     from chem_ts_corr.data import load_timeseries_csv, select_numeric_frame
     from chem_ts_corr.preprocess import segment_by_load, transform_frame
 
     raw = load_timeseries_csv(input_path, time_column, encoding=resolved_encoding)
+    raw = drop_excluded_columns(raw, excluded_columns)
     start_time = _single(params, "trend_start", "")
     end_time = _single(params, "trend_end", "")
     if start_time:
@@ -1467,11 +1595,16 @@ def _chart_frame_from_params(
     columns = [column for column in variables if column in numeric.columns]
     if not columns:
         raise ValueError("选择的变量不是有效数值列")
-    frame_columns = list(dict.fromkeys(columns + [col for col in [_single(params, "segment_column")] if col and col in numeric.columns]))
+    frame_columns = list(
+        dict.fromkeys(
+            columns
+            + [col for col in [segment_column] if col and col in numeric.columns]
+        )
+    )
     frame = numeric[frame_columns]
     segmented = segment_by_load(
         frame,
-        segment_column=_single(params, "segment_column") or None,
+        segment_column=segment_column,
         segment_mode=_single(params, "segment_mode", "all"),
         segment_min=_optional_query_float(params, "segment_min"),
         segment_max=_optional_query_float(params, "segment_max"),
@@ -2062,6 +2195,16 @@ INDEX_HTML = r"""<!doctype html>
       </label>
       </div>
       <div class="control-group">
+        <div class="control-group-title">数据剔除</div>
+        <label>强制剔除列（多选）
+          <details id="excludedColumnsDropdown" class="multi-dropdown">
+            <summary id="excludedColumnsSummary">未选择剔除列</summary>
+            <div id="excludedColumnsOptions" class="multi-options"></div>
+          </details>
+        </label>
+        <div class="help">选中的列将在所有分析、验证和图表处理前删除；原始上传文件不会被修改。</div>
+      </div>
+      <div class="control-group">
         <div class="control-group-title">基础分析参数</div>
       <div class="row">
         <label>时间列<select id="timeColumn"></select></label>
@@ -2392,6 +2535,8 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 let fileId = "";
 let currentRunId = "";
+let recognizedColumns = [];
+let recognizedNumericColumns = [];
 let lastRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
@@ -2460,6 +2605,8 @@ el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
+el("timeColumn").addEventListener("change", handleProtectedColumnChange);
+el("targetColumn").addEventListener("change", handleProtectedColumnChange);
 
 
 function fillCapacityOptions(columns) {
@@ -2546,6 +2693,119 @@ function updateSecondaryIncludeSummary() {
   el("secondaryIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择二次验证补充变量";
 }
 
+function getExcludedColumnSelection() {
+  return Array.from(document.querySelectorAll('#excludedColumnsOptions input[type="checkbox"]:checked')).map((node) => node.value);
+}
+
+function setExcludedColumnSelection(values) {
+  const selected = new Set(values || []);
+  Array.from(document.querySelectorAll('#excludedColumnsOptions input[type="checkbox"]')).forEach((node) => {
+    node.checked = selected.has(node.value) && !node.disabled;
+  });
+  updateExcludedColumnsSummary();
+}
+
+function updateExcludedColumnsSummary() {
+  const selected = getExcludedColumnSelection();
+  el("excludedColumnsSummary").textContent = selected.length ? `已剔除 ${selected.length} 列` : "未选择剔除列";
+}
+
+function updateExcludedColumnDisabledState() {
+  const protectedColumns = new Set([el("timeColumn").value, el("targetColumn").value].filter(Boolean));
+  Array.from(document.querySelectorAll('#excludedColumnsOptions input[type="checkbox"]')).forEach((input) => {
+    input.disabled = protectedColumns.has(input.value);
+    if (input.disabled) input.checked = false;
+  });
+  updateExcludedColumnsSummary();
+}
+
+function fillExcludedColumnOptions(columns) {
+  const previous = new Set(getExcludedColumnSelection());
+  const box = el("excludedColumnsOptions");
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.checked = previous.has(name);
+    input.addEventListener("change", () => {
+      updateExcludedColumnsSummary();
+      refreshColumnSelectors();
+    });
+    box.appendChild(row);
+  });
+  updateExcludedColumnDisabledState();
+}
+
+function restoreSelect(id, values, currentValue, allowEmpty = false, emptyLabel = "不选择") {
+  const select = el(id);
+  fillSelect(select, values, allowEmpty, emptyLabel);
+  if (currentValue && values.includes(currentValue)) {
+    select.value = currentValue;
+  } else if (currentValue) {
+    select.value = "";
+  }
+}
+
+function refreshColumnSelectors() {
+  const excluded = new Set(getExcludedColumnSelection());
+  const available = recognizedNumericColumns.filter((name) => !excluded.has(name));
+  const current = Object.fromEntries(
+    ["targetColumn", "segmentColumn", "trendVar1", "trendVar2", "trendVar3", "trendVar4", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"]
+      .map((id) => [id, el(id).value])
+  );
+  const capacity = getCapacitySelection().filter((name) => !excluded.has(name));
+  const forced = getForceIncludeSelection().filter((name) => !excluded.has(name));
+  const secondary = getSecondaryIncludeSelection().filter((name) => !excluded.has(name));
+
+  restoreSelect("targetColumn", available, current.targetColumn);
+  restoreSelect("segmentColumn", available, current.segmentColumn, true, "不分段");
+  ["trendVar1", "trendVar2", "trendVar3", "trendVar4", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => {
+    restoreSelect(id, available, current[id], true, "不选择");
+  });
+  fillCapacityOptions(available);
+  setCapacitySelection(capacity);
+  fillForceIncludeOptions(available);
+  setForceIncludeSelection(forced);
+  fillSecondaryIncludeOptions(available);
+  setSecondaryIncludeSelection(secondary);
+  const whitelist = el("xgbWhitelist").value.split(/[,，]/).map((value) => value.trim()).filter((value) => value && !excluded.has(value));
+  el("xgbWhitelist").value = whitelist.join(",");
+  updateExcludedColumnDisabledState();
+}
+
+function setSecondaryIncludeSelection(values) {
+  const selected = new Set(values || []);
+  Array.from(document.querySelectorAll('#secondaryIncludeOptions input[type="checkbox"]')).forEach((node) => {
+    node.checked = selected.has(node.value);
+  });
+  updateSecondaryIncludeSummary();
+}
+
+function handleProtectedColumnChange() {
+  const protectedColumns = new Set([el("timeColumn").value, el("targetColumn").value].filter(Boolean));
+  setExcludedColumnSelection(
+    getExcludedColumnSelection().filter((name) => !protectedColumns.has(name))
+  );
+  refreshColumnSelectors();
+}
+
+function validateAnalysisColumnSelection() {
+  const timeColumn = el("timeColumn").value;
+  const target = el("targetColumn").value;
+  const excluded = new Set(getExcludedColumnSelection());
+  if (!timeColumn) return "请选择时间列";
+  if (!target) return "请选择目标列";
+  if (excluded.has(timeColumn)) return `剔除列不能同时作为时间列：${timeColumn}`;
+  if (excluded.has(target)) return `剔除列不能同时作为目标列：${target}`;
+  const protectedColumns = [el("segmentColumn").value, ...getCapacitySelection(), ...getForceIncludeSelection()].filter(Boolean);
+  const conflicts = protectedColumns.filter((name) => excluded.has(name));
+  if (conflicts.length) return `剔除列与工况/控制/白名单参数冲突：${Array.from(new Set(conflicts)).join("、")}`;
+  const candidates = recognizedNumericColumns.filter((name) => name !== target && name !== timeColumn && !excluded.has(name));
+  if (!candidates.length) return "剔除后至少需要保留一个可分析数值候选列";
+  return "";
+}
+
 function appendSecondaryValidationOptions(form) {
   form.append("secondary_include_variables", getSecondaryIncludeSelection().join(","));
   form.append("secondary_resample_mode", el("secondaryResampleMode").value || "raw");
@@ -2562,6 +2822,9 @@ async function uploadFile() {
     form.append("file", file);
     const data = await postForm("/api/upload", form);
     fileId = data.file_id;
+    recognizedColumns = [];
+    recognizedNumericColumns = [];
+    setExcludedColumnSelection([]);
     setStatus(`已上传：${data.filename}\n正在识别列...`);
     await loadColumns();
   } catch (error) {
@@ -2575,6 +2838,8 @@ async function loadColumns() {
     const response = await fetch(url);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "列识别失败");
+    recognizedColumns = data.columns || [];
+    recognizedNumericColumns = data.numericColumns || [];
     fillSelect(el("timeColumn"), data.columns);
   fillSelect(el("targetColumn"), data.numericColumns);
   fillSelect(el("segmentColumn"), data.numericColumns, true);
@@ -2609,6 +2874,8 @@ async function loadColumns() {
       el("segmentColumn").value = loadCandidate;
       setCapacitySelection([loadCandidate]);
     }
+  fillExcludedColumnOptions(recognizedNumericColumns);
+  refreshColumnSelectors();
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
   el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
@@ -2621,6 +2888,8 @@ async function loadColumns() {
 
 async function analyze() {
   if (!fileId) return setStatus("请先上传文件。");
+  const validationError = validateAnalysisColumnSelection();
+  if (validationError) return setStatus(validationError, "error");
   setStatus("Python 后台正在分析，数据较大时请等待...", "loading");
   el("analyze").disabled = true;
   try {
@@ -2642,6 +2911,7 @@ async function analyze() {
     form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
+    form.append("excluded_columns", getExcludedColumnSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
@@ -3285,6 +3555,7 @@ function appendChartQueryParams(params) {
   params.set("segment_max", el("segmentMax").value);
   params.set("preprocess_mode", el("preprocessMode").value);
   params.set("detrend_window", el("detrendWindow").value);
+  params.set("excluded_columns", getExcludedColumnSelection().join(","));
 }
 
 async function drawTrend() {
@@ -5128,6 +5399,8 @@ function clearOptionalElement(targetId) {
 function reset() {
   fileId = "";
   currentRunId = "";
+  recognizedColumns = [];
+  recognizedNumericColumns = [];
   lastRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
@@ -5151,6 +5424,9 @@ function reset() {
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
   el("segmentColumn").innerHTML = "";
+  el("excludedColumnsOptions").innerHTML = "";
+  el("excludedColumnsSummary").textContent = "未选择剔除列";
+  el("excludedColumnsDropdown").open = false;
   el("capacityOptions").innerHTML = "";
   el("capacitySummary").textContent = "请选择残差控制列";
   el("capacityDropdown").open = false;

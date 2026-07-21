@@ -49,6 +49,10 @@ def test_normalize_minute_resample_rule_rejects_non_finite_values(value):
 def test_analyze_response_normalizes_resample_before_starting_thread(
     raw_rule, expected, monkeypatch, tmp_path
 ):
+    (tmp_path / "input.csv").write_text(
+        "time,target,x\n2025-01-01 00:00:00,1,2\n",
+        encoding="utf-8",
+    )
     form = {
         "file_id": "file-1",
         "time_column": "time",

@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 
 import chem_ts_corr.pipeline as pipeline
 import chem_ts_corr.web as web
@@ -31,7 +32,9 @@ def test_run_analysis_returns_deterministic_stage_timings(monkeypatch, tmp_path)
         lag_peak_quality=None,
         rolling_corr_scores=None,
     )
-    monkeypatch.setattr(pipeline, "load_timeseries_csv", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        pipeline, "load_timeseries_csv", lambda *args, **kwargs: pd.DataFrame()
+    )
     monkeypatch.setattr(
         pipeline,
         "analyze_numeric_frame",

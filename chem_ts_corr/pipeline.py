@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.data import load_timeseries_csv
+from chem_ts_corr.data import drop_excluded_columns, load_timeseries_csv
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_numeric_frame
 
@@ -13,6 +13,18 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, fl
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
     raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
+    raw = drop_excluded_columns(
+        raw,
+        config.excluded_columns,
+        protected_columns=[
+            config.time_column,
+            config.target,
+            config.segment_column,
+            *(config.capacity_columns or []),
+            *(config.residual_control_columns or []),
+            *(config.force_include_variables or []),
+        ],
+    )
     read_data_seconds = time.perf_counter() - read_started
 
     analysis_started = time.perf_counter()

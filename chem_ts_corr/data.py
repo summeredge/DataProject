@@ -9,6 +9,37 @@ EXCEL_SUFFIXES = {".xlsx", ".xls", ".xlsm"}
 TEXT_SUFFIXES = {".csv", ".txt", ".tsv"}
 
 
+def normalize_excluded_columns(excluded_columns: list[str] | None) -> list[str]:
+    return list(
+        dict.fromkeys(
+            str(column).strip()
+            for column in (excluded_columns or [])
+            if column is not None and str(column).strip()
+        )
+    )
+
+
+def drop_excluded_columns(
+    frame: pd.DataFrame,
+    excluded_columns: list[str] | None,
+    *,
+    protected_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    excluded = normalize_excluded_columns(excluded_columns)
+    protected = set(normalize_excluded_columns(protected_columns))
+    conflicts = [column for column in excluded if column in protected]
+    if conflicts:
+        raise ValueError(f"剔除列与受保护参数冲突：{'、'.join(conflicts)}")
+
+    missing = [column for column in excluded if column not in frame.columns]
+    if missing:
+        raise ValueError(f"剔除列不存在：{'、'.join(missing)}")
+
+    result = frame.drop(columns=excluded).copy(deep=True)
+    result.attrs = dict(frame.attrs)
+    return result
+
+
 def read_timeseries_table(
     path: Path,
     encoding: str = "utf-8-sig",

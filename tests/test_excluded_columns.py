@@ -10,6 +10,7 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import drop_excluded_columns
 from chem_ts_corr.pipeline import run_analysis
 from chem_ts_corr import web
+from chem_ts_corr import screening
 
 
 def _input_frame(rows: int = 120) -> pd.DataFrame:
@@ -165,3 +166,70 @@ def test_run_config_round_trip_preserves_excluded_columns(tmp_path: Path):
     restored = web._read_run_config(config.output_dir)
 
     assert restored.excluded_columns == ["drop_a", "drop_b"]
+
+
+def test_second_analysis_with_one_of_eleven_variables_excluded_refits_aligned_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    rows = 180
+    rng = np.random.default_rng(20260722)
+    variables = {
+        f"x{index}": np.cumsum(rng.normal(size=rows))
+        for index in range(11)
+    }
+    target = sum(
+        (index + 1) / 11 * np.roll(values, 1)
+        for index, values in enumerate(variables.values())
+    ) + rng.normal(scale=0.05, size=rows)
+    frame = pd.DataFrame(
+        {
+            "time": pd.date_range("2026-01-01", periods=rows, freq="h"),
+            "target": target,
+            **variables,
+        }
+    )
+    input_path = tmp_path / "eleven_variables.csv"
+    frame.to_csv(input_path, index=False, encoding="utf-8-sig")
+
+    fitted: list[tuple[object, tuple[object, ...]]] = []
+    original_fit = screening.fit_linear_model
+
+    def recording_fit(X: pd.DataFrame, y: object, **kwargs: object):
+        model = original_fit(X, y, **kwargs)
+        fitted.append((model, tuple(X.columns)))
+        return model
+
+    monkeypatch.setattr(screening, "fit_linear_model", recording_fit)
+    common = dict(
+        input_path=input_path,
+        time_column="time",
+        target="target",
+        max_lag=3,
+        top_k=11,
+        skip_rolling_corr=False,
+    )
+    first = AnalysisConfig(
+        **common,
+        output_dir=tmp_path / "all_variables",
+        excluded_columns=[],
+    )
+    second = AnalysisConfig(
+        **common,
+        output_dir=tmp_path / "one_excluded",
+        excluded_columns=["x10"],
+    )
+
+    run_analysis(first)
+    first_models = [model for model, _ in fitted]
+    first_count = len(first_models)
+    run_analysis(second)
+    second_models = [model for model, _ in fitted[first_count:]]
+
+    assert first_models
+    assert second_models
+    assert all(second_model is not first_model for second_model in second_models for first_model in first_models)
+    assert all(model.feature_names == columns for model, columns in fitted)
+    ranked = pd.read_csv(second.output_dir / "ranked_features.csv", encoding="utf-8-sig")
+    assert not ranked.empty
+    assert "x10" not in set(ranked["variable"].astype(str))
+    assert web._scaled_frame_cache_key(first) != web._scaled_frame_cache_key(second)

@@ -8,6 +8,12 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr.feature_alignment import (
+    bind_model_feature_names,
+    predict_tabular_model,
+    validate_feature_alignment,
+)
+
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 try:
@@ -529,13 +535,16 @@ def train_xgb_fold(
     model_params = {**DEFAULT_XGB_PARAMS, **(params or {})}
     model_params["early_stopping_rounds"] = early_stopping_rounds
     model = XGBRegressor(**model_params)
+    bind_model_feature_names(model, X_train)
+    validate_feature_alignment(X_valid, model)
+    validate_feature_alignment(X_test, model)
     model.fit(
         X_train,
         y_train,
         eval_set=[(X_valid, y_valid)],
         verbose=False,
     )
-    prediction = np.asarray(model.predict(X_test), dtype=float)
+    prediction = np.asarray(predict_tabular_model(model, X_test), dtype=float)
     truth = np.asarray(y_test, dtype=float)
     if prediction.shape != truth.shape:
         raise ValueError("XGB prediction length does not match test labels")

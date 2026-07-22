@@ -10,6 +10,7 @@ import pandas as pd
 from chem_ts_corr.common import to_float
 
 from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.feature_alignment import fit_linear_model, predict_linear_model
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
@@ -1179,29 +1180,25 @@ def _residualize(
     usable_columns = [column for column in fit_x.columns if fit_x[column].nunique() > 1]
     if len(fit_data) < 5 or not usable_columns:
         return y - fit_data.iloc[:, 0].mean(), "demean", np.nan, []
+    fit_features = fit_x[usable_columns]
     fit_matrix = np.column_stack(
-        [np.ones(len(fit_data)), fit_x[usable_columns].to_numpy(dtype=float)]
+        [np.ones(len(fit_data)), fit_features.to_numpy(dtype=float)]
     )
     cond = float(np.linalg.cond(fit_matrix))
     method = "ols"
     if cond > 1e8:
         method = "ridge"
-        alpha = 1e-3
-        penalty = alpha * np.eye(fit_matrix.shape[1])
-        penalty[0, 0] = 0.0
-        xtx = fit_matrix.T @ fit_matrix + penalty
-        coef = np.linalg.solve(xtx, fit_matrix.T @ fit_data.iloc[:, 0].to_numpy())
-    else:
-        coef, *_ = np.linalg.lstsq(
-            fit_matrix, fit_data.iloc[:, 0].to_numpy(), rcond=None
+        model = fit_linear_model(
+            fit_features,
+            fit_data.iloc[:, 0].to_numpy(),
+            ridge_alpha=1e-3,
         )
-    application_matrix = np.column_stack(
-        [
-            np.ones(len(application_data)),
-            application_data[usable_columns].to_numpy(dtype=float),
-        ]
-    )
-    fitted = application_matrix @ coef
+    else:
+        model = fit_linear_model(
+            fit_features,
+            fit_data.iloc[:, 0].to_numpy(),
+        )
+    fitted = predict_linear_model(model, application_data[usable_columns])
     residual = pd.Series(
         index=application_data.index,
         data=application_data.iloc[:, 0].to_numpy() - fitted,
@@ -1234,10 +1231,8 @@ def _time_series_splits(n_rows: int, n_splits: int) -> list[tuple[np.ndarray, np
 
 
 def _linear_predict(x_train: pd.DataFrame, y_train: np.ndarray, x_test: pd.DataFrame) -> np.ndarray:
-    train = np.column_stack([np.ones(len(x_train)), x_train.to_numpy()])
-    test = np.column_stack([np.ones(len(x_test)), x_test.to_numpy()])
-    coef, *_ = np.linalg.lstsq(train, y_train, rcond=None)
-    return test @ coef
+    model = fit_linear_model(x_train, y_train)
+    return predict_linear_model(model, x_test)
 
 
 def _rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:

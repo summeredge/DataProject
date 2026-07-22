@@ -145,6 +145,28 @@ def test_train_fold_uses_validation_only_as_eval_set_and_test_only_for_predict(
     assert not model.fit_calls[0]["X"].index.isin(X_test.index).any()
 
 
+def test_train_fold_rejects_feature_mismatch_before_fit(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(xgb_module, "XGBRegressor", RecordingRegressor)
+    data = _feature_sets()
+    X_train = data.features.iloc[:6, :2]
+    X_valid = data.features.iloc[6:9, :2]
+    X_test = data.features.iloc[9:12, [1, 0]]
+
+    with pytest.raises(ValueError, match="feature alignment mismatch"):
+        train_xgb_fold(
+            X_train,
+            data.target.iloc[:6],
+            X_valid,
+            data.target.iloc[6:9],
+            X_test,
+            data.target.iloc[9:12],
+            fold=0,
+            model_name="M1",
+        )
+
+    assert RecordingRegressor.instances[0].fit_calls == []
+
+
 def test_train_fold_metrics_use_test_truth_and_prediction(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(xgb_module, "XGBRegressor", RecordingRegressor)
     data = _feature_sets()

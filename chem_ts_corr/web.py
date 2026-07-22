@@ -335,33 +335,66 @@ def _resolve_encoding(path: Path, encoding: str) -> str:
 def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
     candidate = next(
         (column for column in sample.columns if _looks_like_time_column(str(column))),
-        "",
+        None,
     )
-    if not candidate:
+    automatically_detected = False
+    if candidate is None and len(sample.columns):
+        first_column = sample.columns[0]
+        if _looks_like_index_column(str(first_column)):
+            candidate = first_column
+            automatically_detected = True
+    if candidate is None:
         return {}
     try:
         time_frame, _ = read_timeseries_table(path, encoding=encoding, usecols=[candidate])
-        values = pd.to_datetime(time_frame[candidate], errors="coerce").dropna().sort_values()
+        source_values = time_frame[candidate]
+        values = pd.to_datetime(source_values, errors="coerce")
     except Exception:
-        return {"timeColumn": candidate}
+        return {} if automatically_detected else {"timeColumn": candidate}
+    if automatically_detected and not _is_high_quality_time_series(values, source_values):
+        return {}
+    values = values.dropna().sort_values()
     if values.empty:
         return {"timeColumn": candidate}
 
     start = values.iloc[0]
     end = values.iloc[-1]
     default_end = min(start + pd.Timedelta(days=3), end)
-    return {
+    metadata = {
         "timeColumn": candidate,
         "timeStart": _datetime_local(start),
         "timeEnd": _datetime_local(end),
         "trendStartDefault": _datetime_local(start),
         "trendEndDefault": _datetime_local(default_end),
     }
+    if automatically_detected:
+        metadata["autoTimeColumn"] = candidate
+    return metadata
 
 
 def _looks_like_time_column(name: str) -> bool:
     lower = name.lower()
     return any(token in lower for token in ["time", "date", "timestamp", "时间", "日期"])
+
+
+def _looks_like_index_column(name: str) -> bool:
+    normalized = name.strip().lower()
+    return (
+        not normalized
+        or bool(re.fullmatch(r"unnamed:\s*0", normalized))
+        or normalized == "index"
+        or normalized.startswith(("index_", "index-", "index.", "index "))
+    )
+
+
+def _is_high_quality_time_series(values: pd.Series, source_values: pd.Series) -> bool:
+    if pd.api.types.is_numeric_dtype(source_values):
+        return False
+    if values.notna().mean() < 0.95:
+        return False
+    valid_values = values.dropna()
+    differences = valid_values.diff().dropna()
+    return not differences.empty and (differences >= pd.Timedelta(0)).mean() >= 0.95
 
 
 def _datetime_local(value: pd.Timestamp) -> str:
@@ -2879,7 +2912,8 @@ async function loadColumns() {
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
   el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
-    setStatus(`列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
+    const timeColumnStatus = data.autoTimeColumn ? `已自动识别时间列：${data.autoTimeColumn}。` : "";
+    setStatus(`${timeColumnStatus}列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
   } catch (error) {
     el("analyze").disabled = true;
     setStatus(error.message || String(error), "error");

@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 from chem_ts_corr.time_axis import infer_sample_period_ns, preserve_sample_period, sample_period_ns
+
+
+@dataclass(frozen=True)
+class FrameScaler:
+    mean_: pd.Series
+    scale_: pd.Series
+    feature_names: tuple[object, ...]
+
+    def transform(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if tuple(frame.columns) != self.feature_names:
+            raise ValueError(
+                "feature alignment mismatch: "
+                f"X.columns={list(frame.columns)!r}, "
+                f"model.feature_names={list(self.feature_names)!r}"
+            )
+        return (frame - self.mean_) / self.scale_
 
 
 def segment_by_load(
@@ -148,8 +166,12 @@ def standardize_frame(
     if fit_mask is not None:
         resolved_mask = fit_mask.reindex(frame.index).fillna(False).astype(bool)
         fit_frame = frame.loc[resolved_mask]
-    std = fit_frame.std(ddof=0).replace(0, 1)
-    return preserve_sample_period((frame - fit_frame.mean()) / std, sample_period_ns(frame))
+    scaler = FrameScaler(
+        mean_=fit_frame.mean(),
+        scale_=fit_frame.std(ddof=0).replace(0, 1),
+        feature_names=tuple(fit_frame.columns),
+    )
+    return preserve_sample_period(scaler.transform(frame), sample_period_ns(frame))
 
 
 def transform_frame(

@@ -7,6 +7,12 @@ import pandas as pd
 from scipy.stats import f
 
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.feature_alignment import (
+    fit_linear_model,
+    fit_named_matrix_model,
+    predict_linear_model,
+    predict_named_matrix_model,
+)
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 
@@ -1328,10 +1334,11 @@ def _ols_ssr_and_rank(
     diagnostics: _GrangerDiagnostics | None = None,
 ) -> tuple[float, int]:
     matrix = _add_intercept(x)
+    feature_names = ["__intercept__", *(f"feature_{index}" for index in range(x.shape[1]))]
     if diagnostics is not None:
         diagnostics.lstsq_count += 1
-    coef, _residuals, rank, _singular_values = np.linalg.lstsq(matrix, y, rcond=None)
-    residual = y - matrix @ coef
+    model, rank = fit_named_matrix_model(matrix, y, feature_names)
+    residual = y - predict_named_matrix_model(model, matrix, feature_names)
     ssr = float(np.dot(residual, residual))
     return ssr, int(rank)
 
@@ -1371,7 +1378,6 @@ def _predictive_contribution(
 
 
 def _linear_rmse(x: pd.DataFrame, y: object) -> float:
-    matrix = _add_intercept(x.to_numpy())
-    coef, *_ = np.linalg.lstsq(matrix, y, rcond=None)
-    pred = matrix @ coef
+    model = fit_linear_model(x, y)
+    pred = predict_linear_model(model, x)
     return float(np.sqrt(np.mean((y - pred) ** 2)))

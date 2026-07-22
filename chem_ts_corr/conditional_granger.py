@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.common import benjamini_hochberg
+from chem_ts_corr.feature_alignment import fit_named_matrix_model, predict_named_matrix_model
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 
@@ -163,13 +164,19 @@ def run_conditional_granger_tests(
             )
 
             try:
-                b_coef, *_ = np.linalg.lstsq(x_base, y, rcond=None)
-                f_coef, *_ = np.linalg.lstsq(x_full, y, rcond=None)
+                base_feature_names = ["__intercept__", *base_cols]
+                full_feature_names = ["__intercept__", *full_cols]
+                base_model, _ = fit_named_matrix_model(x_base, y, base_feature_names)
+                full_model, _ = fit_named_matrix_model(x_full, y, full_feature_names)
             except Exception:
                 continue
 
-            resid_b = y - x_base @ b_coef
-            resid_f = y - x_full @ f_coef
+            resid_b = y - predict_named_matrix_model(
+                base_model, x_base, base_feature_names
+            )
+            resid_f = y - predict_named_matrix_model(
+                full_model, x_full, full_feature_names
+            )
             rss_b = float(np.sum(resid_b * resid_b))
             rss_f = float(np.sum(resid_f * resid_f))
             rmse_b = float(np.sqrt(np.mean(resid_b * resid_b)))

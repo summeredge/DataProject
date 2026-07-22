@@ -642,6 +642,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
     return {
         "run_id": run_id,
+        "analysisContext": {"preprocess_mode": config.preprocess_mode},
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary)),
         "rankedFeatures": _records(display_ranked.head(50)),
         "riskFlags": _records(risky.head(50)),
@@ -2329,7 +2330,6 @@ INDEX_HTML = r"""<!doctype html>
     .trend-histogram-empty { display:grid; place-items:center; width:100%; min-width:0; height:72px; color:var(--muted); font-size:var(--font-xs); border:1px dashed var(--line); border-radius:4px; }
     .swatch { width:18px; height:3px; border-radius:2px; display:inline-block; vertical-align:middle; margin-right:6px; }
     .table-wrap { overflow-x:auto; overflow-y:auto; max-height:560px; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
-    .table-wrap::after { content:"表格按内容宽度展示；超出页面时横向滚动，点击表头可排序，点击行查看完整字段详情"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
     .terms-help-table-wrap { overflow-x:auto; width:max-content; min-width:0; max-width:100%; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(15,23,42,.05); background:var(--panel); }
     .terms-help-table-wrap::after { content:"术语说明按正常页面高度完整展示；超出页面宽度时可横向滚动"; display:block; padding:5px 8px; color:var(--muted); font-size:var(--font-xs); background:var(--surface-muted); border-top:1px solid var(--line); }
     .terms-help-category-cell { font-weight:650; color:var(--text); background:var(--surface-muted); vertical-align:top; }
@@ -2625,10 +2625,13 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
         <h3>增强筛选摘要</h3>
         <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
+        <div class="help">术语说明：模型提升表示加入该候选变量后，相对仅使用目标变量历史的自回归基准，时间外预测 RMSE 的改善；大于 0 表示误差下降。滚动稳定性表示固定最佳滞后后，在多个时间窗口中相关关系的稳定程度，综合相关强度、符号一致性和波动离散度，范围为 0 至 1；越高越稳定。</div>
         <h3>模型提升评分</h3>
         <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
+        <div class="help">术语说明：模型提升得分为分段提升中位数（以 5% 改善为满分并截断至 0 至 1）与正提升分段比例的乘积；越高表示提升越稳定。自回归基准 RMSE 是只使用目标变量自身历史值时，各时间外测试分段的平均预测误差。候选变量模型 RMSE 是在同一基准上加入该候选变量滞后值后的平均预测误差；在相同验证条件下，数值越低越好。</div>
         <h3>滚动稳定性评分</h3>
         <div id="enhancedRollingTable" class="empty">点击“运行增强筛选”后显示滚动稳定性评分。</div>
+        <div class="help">术语说明：滚动稳定性为固定最佳滞后后，按时间窗口计算相关性并综合相关强度、符号一致性和相关波动得到的 0 至 1 分数；越高表示该相关关系在不同时间段中越稳定，不代表因果结论。</div>
         <h2>Granger 验证</h2>
         <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
         <h2>随机森林模型解释变量排序</h2>
@@ -2772,6 +2775,7 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 let fileId = "";
 let currentRunId = "";
+let currentAnalysisContext = {};
 let recognizedColumns = [];
 let recognizedNumericColumns = [];
 let lastRows = [];
@@ -3072,6 +3076,7 @@ async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
   clearLagProfileCache();
+  currentAnalysisContext = {};
   try {
     setStatus("正在上传文件...", "loading");
     const form = new FormData();
@@ -3231,6 +3236,7 @@ function formatCompletedAnalysisStatus(result) {
 
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
+  currentAnalysisContext = data.analysisContext || {};
   lastRows = data.rankedFeatures || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
@@ -4532,48 +4538,87 @@ function renderGenericDetailModalBody(row, options = {}) {
   `;
 }
 
-function timeRelationshipFromLag(lag) {
-  const value = lagProfileNumber(lag);
-  if (value === null) return "未计算";
-  return value > 0 ? "变量领先目标" : value < 0 ? "变量滞后目标" : "同步变化";
-}
-
 function timeRelationshipExplanation(lag, intervalMinutes = null) {
   const value = lagProfileNumber(lag);
-  if (value === null) return "当前缺少可用的最佳滞后，无法判断时间关系，建议复核数据和时间对齐。";
-  if (value === 0) return "候选变量与目标变量主要表现为同步变化。";
+  const relationship = lagDirectionText(lag);
+  if (relationship === "未计算") return "当前缺少可用的最佳滞后，无法判断时间关系，建议复核数据和时间对齐。";
+  if (relationship === "同步变化") return "候选变量与目标变量主要表现为同步变化。";
   const interval = lagProfileNumber(intervalMinutes);
   const distance = interval !== null && interval > 0
     ? `约 ${Math.abs(value) * interval} 分钟`
     : ` ${Math.abs(value)} 个采样点`;
-  if (value > 0) return `候选变量领先目标变量${distance}。`;
+  if (relationship === "变量领先目标") return `候选变量领先目标变量${distance}。`;
   return `候选变量滞后目标变量${distance}，更可能表现为响应变量、反馈动作或下游状态，建议复核工艺关系。`;
 }
 
-function correlationDirectionExplanation(direction) {
+function correlationDirectionExplanation(direction, preprocessMode) {
+  const mode = String(preprocessMode ?? "");
   const messages = {
-    正向: "在当前最佳滞后对齐下，候选变量较高时，目标变量通常也较高。",
-    负向: "在当前最佳滞后对齐下，候选变量较高时，目标变量通常较低。",
-    方向较弱: "当前最佳滞后点的带符号相关系数接近零，相关方向较弱。",
-    未计算: "当前缺少可用的带符号相关结果，无法判断相关方向。",
+    raw: {
+      正向: "在当前最佳滞后对齐下，候选变量水平较高时，目标变量水平通常也较高。",
+      负向: "在当前最佳滞后对齐下，候选变量水平较高时，目标变量水平通常较低。",
+      方向较弱: "当前最佳滞后点的原始水平相关系数接近零，相关方向较弱。",
+    },
+    detrend: {
+      正向: "在当前最佳滞后对齐下，候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常也较高。",
+      负向: "在当前最佳滞后对齐下，候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常较低。",
+      方向较弱: "当前最佳滞后点的去趋势后相关系数接近零，相关方向较弱。",
+    },
+    diff: {
+      正向: "在当前最佳滞后对齐下，候选变量增加时，目标变量通常也呈增加趋势。",
+      负向: "在当前最佳滞后对齐下，候选变量增加时，目标变量通常呈下降趋势。",
+      方向较弱: "当前最佳滞后点的变化量相关系数接近零，变化方向关系较弱。",
+    },
+    detrend_diff: {
+      正向: "在当前最佳滞后对齐下，候选变量去趋势后的变化增加时，目标变量去趋势后的变化通常也增加。",
+      负向: "在当前最佳滞后对齐下，候选变量去趋势后的变化增加时，目标变量去趋势后的变化通常下降。",
+      方向较弱: "当前最佳滞后点的去趋势后变化量相关系数接近零，变化方向关系较弱。",
+    },
   };
-  return messages[direction] || messages.未计算;
+  if (messages[mode]?.[direction]) return messages[mode][direction];
+  if (direction === "正向" || direction === "负向") {
+    return `在当前预处理口径和最佳滞后对齐下，候选变量与目标变量呈${direction}关系。`;
+  }
+  if (direction === "方向较弱") return "在当前预处理口径和最佳滞后对齐下，相关方向较弱。";
+  return "当前缺少可用的带符号相关结果，无法判断相关方向。";
 }
 
-function innovationDirectionExplanation(status) {
+function innovationDirectionExplanation(status, preprocessMode) {
+  const mode = String(preprocessMode ?? "");
+  if (mode === "diff" || mode === "detrend_diff") {
+    return "当前主筛查已采用差分口径，变化量方向与主筛查方向来自同一组证据，未形成独立的主筛查—变化量一致性验证。";
+  }
   const messages = {
-    innovation_verified: "原始值与变化量的方向和滞后基本一致。",
-    innovation_sign_conflict: "原始值与变化量方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
-    innovation_lag_conflict: "原始值与变化量的滞后关系不一致，动态关系可能不稳定。",
+    innovation_verified: "主筛查关系与变化量关系的方向和滞后基本一致。",
+    innovation_sign_conflict: "主筛查关系与变化量关系方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+    innovation_lag_conflict: "主筛查关系与变化量关系的滞后不一致，动态关系可能不稳定。",
     innovation_sign_unknown: "变化量方向无法可靠判断。",
     not_computed: "未完成变化量方向验证。",
   };
-  return messages[String(status ?? "")] || "变化量方向验证状态未知，建议复核原始结果。";
+  return messages[String(status ?? "")] || "变化量方向验证状态未知，建议复核主筛查结果。";
+}
+
+function innovationDirectionText(value) {
+  if (value === null || value === undefined || value === "") return "未计算";
+  const normalized = String(value);
+  if (!["-1", "0", "1"].includes(normalized)) return "未计算";
+  return displayCellValue("innovation_sign", value);
+}
+
+function preprocessModeLabel(mode) {
+  const labels = {
+    raw: "原始数据",
+    detrend: "去趋势",
+    diff: "一阶差分",
+    detrend_diff: "去趋势后差分",
+  };
+  return labels[String(mode ?? "")] || "未知预处理口径";
 }
 
 function directionalitySummary(lag, correlationDirection, intervalMinutes = null) {
   const value = lagProfileNumber(lag);
-  if (value === null) return `时间关系未计算，${correlationDirection || "相关方向未计算"}。`;
+  const relationship = lagDirectionText(lag);
+  if (relationship === "未计算") return `时间关系未计算，${correlationDirection || "相关方向未计算"}。`;
   const interval = lagProfileNumber(intervalMinutes);
   const distance = interval !== null && interval > 0
     ? `约 ${Math.abs(value) * interval} 分钟`
@@ -4581,14 +4626,13 @@ function directionalitySummary(lag, correlationDirection, intervalMinutes = null
   const correlation = correlationDirection === "方向较弱"
     ? "相关方向较弱"
     : correlationDirection === "未计算" ? "相关方向未计算" : `${correlationDirection}相关`;
-  if (value > 0) return `变量领先目标${distance}，${correlation}。`;
-  if (value < 0) return `变量滞后目标${distance}，${correlation}，更可能表现为响应或反馈关系。`;
+  if (relationship === "变量领先目标") return `变量领先目标${distance}，${correlation}。`;
+  if (relationship === "变量滞后目标") return `变量滞后目标${distance}，${correlation}，更可能表现为响应或反馈关系。`;
   return `与目标同步变化，${correlation}。`;
 }
 
 function directionInteractionExplanation(lag, correlationDirection) {
-  const value = lagProfileNumber(lag);
-  if (value !== null && value > 0 && correlationDirection === "负向") {
+  if (lagDirectionText(lag) === "变量领先目标" && correlationDirection === "负向") {
     return "候选变量先变化，并与之后的目标变化呈反向关系。";
   }
   return "时间关系与相关方向是两种独立信息，建议结合工艺机理和时间对齐复核。";
@@ -4612,10 +4656,14 @@ function renderScreeningScoreDetails(row) {
     </div>
   `).join("");
   const factor = numericValue(row.driver_priority_factor);
-  const timeRelationship = timeRelationshipFromLag(row.lag);
+  const preprocessMode = currentAnalysisContext.preprocess_mode;
+  const timeRelationship = lagDirectionText(row.lag);
   const correlationDirection = row.correlation_direction || "未计算";
-  const innovationDirection = displayCellValue("innovation_sign", row.innovation_sign) || "未计算";
-  const innovationExplanation = innovationDirectionExplanation(row.innovation_status);
+  const innovationDirection = innovationDirectionText(row.innovation_sign);
+  const innovationDirectionLabel = preprocessMode === "diff" || preprocessMode === "detrend_diff"
+    ? "当前分析变化方向"
+    : "变化量相关方向";
+  const innovationExplanation = innovationDirectionExplanation(row.innovation_status, preprocessMode);
   const equalScoreNote = factor === 1 && row.candidate_class === "upstream_driver_candidate"
     ? "<p>当前候选属于上游驱动候选，优先系数为 1.00，因此两个得分相同。</p>"
     : "";
@@ -4636,16 +4684,17 @@ function renderScreeningScoreDetails(row) {
     <h4>方向性解释</h4>
     <p><strong>组合摘要：</strong><span id="directionalitySummary" data-correlation-direction="${escapeHtml(correlationDirection)}">${escapeHtml(directionalitySummary(row.lag, correlationDirection))}</span></p>
     <div class="detail-grid">
+      <div class="detail-field"><strong>分析口径</strong><span>${escapeHtml(preprocessModeLabel(preprocessMode))}</span></div>
       <div class="detail-field"><strong>最佳滞后</strong><span>${escapeHtml(formatSignedLag(row.lag))}</span></div>
       <div class="detail-field"><strong>时间关系</strong><span>${escapeHtml(timeRelationship)}</span></div>
       <div class="detail-field"><strong>主导相关方法</strong><span>${escapeHtml(displayCellValue("method", row.method))}</span></div>
       <div class="detail-field"><strong>主导相关系数</strong><span>${escapeHtml(displayCellValue("dominant_corr", row.dominant_corr))}</span></div>
       <div class="detail-field"><strong>相关方向</strong><span>${escapeHtml(correlationDirection)}</span></div>
-      <div class="detail-field"><strong>变化量相关方向</strong><span>${escapeHtml(innovationDirection)}</span></div>
-      <div class="detail-field"><strong>原始值与变化量方向一致性</strong><span>${escapeHtml(innovationExplanation)}</span></div>
+      <div class="detail-field"><strong>${escapeHtml(innovationDirectionLabel)}</strong><span>${escapeHtml(innovationDirection)}</span></div>
+      <div class="detail-field"><strong>主筛查—变化量一致性</strong><span>${escapeHtml(innovationExplanation)}</span></div>
     </div>
     <p id="directionalityTimeExplanation">${escapeHtml(timeRelationshipExplanation(row.lag))}</p>
-    <p>${escapeHtml(correlationDirectionExplanation(correlationDirection))}</p>
+    <p>${escapeHtml(correlationDirectionExplanation(correlationDirection, preprocessMode))}</p>
     <p>${escapeHtml(directionInteractionExplanation(row.lag, correlationDirection))}</p>
     <p>${escapeHtml(correlationConsistencyMessage(row.pearson, row.spearman))}</p>
     <p class="help">时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。闭环控制、共同负荷、上游扰动和工况切换均可能产生类似结果。</p>
@@ -4868,8 +4917,12 @@ function formatSignedLag(value, includeUnit = true) {
   return includeUnit ? `${signed} 点` : signed;
 }
 
-function lagDirectionText(lag) {
-  return lag > 0 ? "变量领先目标" : lag < 0 ? "变量滞后目标" : "同步变化";
+function lagDirectionText(lag, missingText = "未计算") {
+  const value = lagProfileNumber(lag);
+  if (value === null) return missingText;
+  if (value > 0) return "变量领先目标";
+  if (value < 0) return "变量滞后目标";
+  return "同步变化";
 }
 
 function lagProfileTimeHint(bestLag, intervalMinutes) {
@@ -6073,6 +6126,7 @@ function reset() {
   clearLagProfileCache();
   fileId = "";
   currentRunId = "";
+  currentAnalysisContext = {};
   recognizedColumns = [];
   recognizedNumericColumns = [];
   lastRows = [];

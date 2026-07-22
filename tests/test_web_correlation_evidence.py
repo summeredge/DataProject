@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -8,7 +9,9 @@ import pytest
 from chem_ts_corr.lag import summarize_best_lags
 from chem_ts_corr.screening import final_ranked_features
 from chem_ts_corr.web import (
+    AnalysisConfig,
     INDEX_HTML,
+    _build_result_payload,
     _correlation_direction,
     _with_correlation_display_fields,
 )
@@ -202,6 +205,40 @@ def test_correlation_display_fields_keep_old_result_payloads_compatible():
     )
 
 
+@pytest.mark.parametrize("preprocess_mode", ["raw", "diff"])
+def test_result_payload_exposes_run_preprocess_context_without_changing_csv_schema(
+    tmp_path: Path, preprocess_mode: str
+):
+    ranked = pd.DataFrame(
+        [
+            {
+                "variable": "x",
+                "pearson": 0.4,
+                "spearman": 0.3,
+                "method": "pearson",
+                "lag": 2,
+                "direction": "变量领先目标",
+            }
+        ]
+    )
+    ranked_path = tmp_path / "ranked_features.csv"
+    ranked.to_csv(ranked_path, index=False)
+    (tmp_path / "summary.md").write_text("- rows_after_preprocess: 10\n", encoding="utf-8")
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv",
+        time_column="time",
+        target="target",
+        output_dir=tmp_path,
+        preprocess_mode=preprocess_mode,
+    )
+
+    payload = _build_result_payload("a" * 32, tmp_path, config)
+
+    assert payload["analysisContext"]["preprocess_mode"] == preprocess_mode
+    assert "preprocess_mode" not in payload["rankedFeatures"][0]
+    assert pd.read_csv(ranked_path).columns.tolist() == ranked.columns.tolist()
+
+
 def test_web_candidate_tables_use_only_requested_correlation_core_columns():
     candidate_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
@@ -278,6 +315,8 @@ def test_candidate_detail_has_structured_correlation_evidence_and_labels():
         "timeRelationshipExplanation",
         "correlationDirectionExplanation",
         "innovationDirectionExplanation",
+        "innovationDirectionText",
+        "preprocessModeLabel",
         "correlationConsistencyMessage",
         "时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。",
     ]
@@ -293,11 +332,11 @@ def test_candidate_detail_has_structured_correlation_evidence_and_labels():
 def test_directionality_detail_maps_all_innovation_statuses_to_chinese_explanations():
     required = [
         "innovation_verified",
-        "原始值与变化量的方向和滞后基本一致。",
+        "主筛查关系与变化量关系的方向和滞后基本一致。",
         "innovation_sign_conflict",
-        "原始值与变化量方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+        "主筛查关系与变化量关系方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
         "innovation_lag_conflict",
-        "原始值与变化量的滞后关系不一致，动态关系可能不稳定。",
+        "主筛查关系与变化量关系的滞后不一致，动态关系可能不稳定。",
         "innovation_sign_unknown",
         "变化量方向无法可靠判断。",
         "not_computed",
@@ -306,6 +345,106 @@ def test_directionality_detail_maps_all_innovation_statuses_to_chinese_explanati
     ]
     for marker in required:
         assert marker in INDEX_HTML
+
+
+def _javascript_function(name: str, next_name: str) -> str:
+    return INDEX_HTML.split(f"function {name}", 1)[1].split(f"function {next_name}", 1)[0]
+
+
+def test_direction_explanations_use_the_current_run_preprocess_semantics():
+    source = _javascript_function(
+        "correlationDirectionExplanation", "innovationDirectionExplanation"
+    )
+    expected = {
+        "raw": [
+            "候选变量水平较高时，目标变量水平通常也较高",
+            "候选变量水平较高时，目标变量水平通常较低",
+            "原始水平相关系数接近零",
+        ],
+        "detrend": [
+            "候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常也较高",
+            "候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常较低",
+            "去趋势后相关系数接近零",
+        ],
+        "diff": [
+            "候选变量增加时，目标变量通常也呈增加趋势",
+            "候选变量增加时，目标变量通常呈下降趋势",
+            "变化量相关系数接近零，变化方向关系较弱",
+        ],
+        "detrend_diff": [
+            "候选变量去趋势后的变化增加时，目标变量去趋势后的变化通常也增加",
+            "候选变量去趋势后的变化增加时，目标变量去趋势后的变化通常下降",
+            "去趋势后变化量相关系数接近零，变化方向关系较弱",
+        ],
+    }
+
+    for mode, texts in expected.items():
+        assert f"{mode}:" in source
+        for text in texts:
+            assert text in source
+    assert "在当前预处理口径和最佳滞后对齐下" in source
+    assert 'el("preprocessMode")' not in source
+
+
+def test_diff_modes_do_not_claim_independent_innovation_verification():
+    source = _javascript_function("innovationDirectionExplanation", "innovationDirectionText")
+
+    assert 'mode === "diff" || mode === "detrend_diff"' in source
+    assert "来自同一组证据" in source
+    assert "未形成独立的主筛查—变化量一致性验证" in source
+    assert "原始值与变化量" not in source
+    assert source.index('mode === "diff"') < source.index("innovation_verified")
+
+
+def test_innovation_direction_missing_values_are_rendered_as_not_computed():
+    source = _javascript_function("innovationDirectionText", "preprocessModeLabel")
+    detail = _javascript_function("renderScreeningScoreDetails", "lagProfileCacheKey")
+
+    for marker in [
+        "value === null",
+        "value === undefined",
+        'value === ""',
+        '["-1", "0", "1"]',
+        'return "未计算"',
+    ]:
+        assert marker in source
+    for value, expected in [("1", "正向"), ("-1", "负向"), ("0", "方向较弱")]:
+        assert f'"{value}": "{expected}"' in INDEX_HTML
+    assert 'displayCellValue("innovation_sign", row.innovation_sign) || "未计算"' not in detail
+    assert "innovationDirectionText(row.innovation_sign)" in detail
+
+
+def test_frontend_uses_one_lag_direction_function_for_all_direction_details():
+    assert INDEX_HTML.count("function lagDirectionText") == 1
+    assert "function timeRelationshipFromLag" not in INDEX_HTML
+    lag_source = _javascript_function("lagDirectionText", "lagProfileTimeHint")
+    assert 'lagDirectionText(lag, missingText = "未计算")' in INDEX_HTML
+    assert "lagProfileNumber(lag)" in lag_source
+    assert 'return "变量领先目标"' in lag_source
+    assert 'return "变量滞后目标"' in lag_source
+    assert 'return "同步变化"' in lag_source
+    for function_name, next_name in [
+        ("timeRelationshipExplanation", "correlationDirectionExplanation"),
+        ("directionalitySummary", "directionInteractionExplanation"),
+        ("directionInteractionExplanation", "updateDirectionalityTimeDetails"),
+        ("renderScreeningScoreDetails", "lagProfileCacheKey"),
+        ("lagProfileTimeHint", "correlationConsistencyMessage"),
+    ]:
+        assert "lagDirectionText(" in _javascript_function(function_name, next_name)
+
+
+def test_analysis_context_is_replaced_and_cleared_without_reading_current_form():
+    render = _javascript_function("renderAnalysisResult(data) {", "sleep")
+    upload = _javascript_function("uploadFile() {", "loadColumns")
+    reset = INDEX_HTML.split("function reset() {", 1)[1].split("\n}", 1)[0]
+    detail = _javascript_function("renderScreeningScoreDetails", "lagProfileCacheKey")
+
+    assert "let currentAnalysisContext = {};" in INDEX_HTML
+    assert "currentAnalysisContext = data.analysisContext || {};" in render
+    assert "currentAnalysisContext = {};" in upload
+    assert "currentAnalysisContext = {};" in reset
+    assert "currentAnalysisContext.preprocess_mode" in detail
+    assert 'el("preprocessMode")' not in detail
 
 
 def test_p_q_r2_and_sample_size_are_only_in_collapsed_detail_without_highlighting():

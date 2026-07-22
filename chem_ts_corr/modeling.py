@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.feature_alignment import (
-    bind_model_feature_names,
+    fit_tabular_model,
     predict_tabular_model,
     validate_feature_alignment,
 )
@@ -89,9 +89,7 @@ def fit_explainable_model(
         n_jobs=-1,
         random_state=random_state,
     )
-    bind_model_feature_names(model, x_train)
-    validate_feature_alignment(x_test, model)
-    model.fit(x_train, y_train)
+    fit_tabular_model(model, x_train, y_train, aligned_frames=(x_test,))
     predictions = predict_tabular_model(model, x_test)
     metrics: dict[str, float | str] = {
         "model_status": "ok",

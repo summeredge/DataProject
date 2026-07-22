@@ -68,6 +68,22 @@ def bind_model_feature_names(model: Any, X: pd.DataFrame) -> None:
     model.feature_names = _frame_feature_names(X)
 
 
+def fit_tabular_model(
+    model: Any,
+    X: pd.DataFrame,
+    y: object,
+    *,
+    aligned_frames: Sequence[pd.DataFrame] = (),
+    **fit_kwargs: object,
+) -> Any:
+    feature_names = _frame_feature_names(X)
+    for frame in aligned_frames:
+        _validate_feature_names(_frame_feature_names(frame), feature_names)
+    model.fit(X, y, **fit_kwargs)
+    model.feature_names = feature_names
+    return model
+
+
 def predict_tabular_model(model: Any, X: pd.DataFrame) -> object:
     validate_feature_alignment(X, model)
     return model.predict(X)

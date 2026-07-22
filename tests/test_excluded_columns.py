@@ -6,11 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from chem_ts_corr import modeling, screening, web
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import drop_excluded_columns
 from chem_ts_corr.pipeline import run_analysis
-from chem_ts_corr import web
-from chem_ts_corr import screening
 
 
 def _input_frame(rows: int = 120) -> pd.DataFrame:
@@ -151,12 +150,20 @@ def test_primary_request_validation_rejects_protected_and_overbroad_exclusions(
 
 
 def test_scaled_frame_cache_key_isolated_by_excluded_columns(tmp_path: Path):
-    config_a = _config(tmp_path, excluded_columns=["drop_a"])
+    config_a = _config(tmp_path, excluded_columns=[])
     config_b = AnalysisConfig(
+        **{**config_a.__dict__, "excluded_columns": ["drop_a"]}
+    )
+    config_c = AnalysisConfig(
         **{**config_a.__dict__, "excluded_columns": ["drop_b"]}
+    )
+    config_b_same = AnalysisConfig(
+        **{**config_a.__dict__, "excluded_columns": ["drop_a"]}
     )
 
     assert web._scaled_frame_cache_key(config_a) != web._scaled_frame_cache_key(config_b)
+    assert web._scaled_frame_cache_key(config_b) != web._scaled_frame_cache_key(config_c)
+    assert web._scaled_frame_cache_key(config_b) == web._scaled_frame_cache_key(config_b_same)
 
 
 def test_run_config_round_trip_preserves_excluded_columns(tmp_path: Path):
@@ -192,7 +199,9 @@ def test_second_analysis_with_one_of_eleven_variables_excluded_refits_aligned_mo
     frame.to_csv(input_path, index=False, encoding="utf-8-sig")
 
     fitted: list[tuple[object, tuple[object, ...]]] = []
+    tabular_fitted: list[tuple[object, tuple[object, ...]]] = []
     original_fit = screening.fit_linear_model
+    original_tabular_fit = modeling.fit_tabular_model
 
     def recording_fit(X: pd.DataFrame, y: object, **kwargs: object):
         model = original_fit(X, y, **kwargs)
@@ -200,12 +209,22 @@ def test_second_analysis_with_one_of_eleven_variables_excluded_refits_aligned_mo
         return model
 
     monkeypatch.setattr(screening, "fit_linear_model", recording_fit)
+
+    def recording_tabular_fit(
+        model: object, X: pd.DataFrame, y: object, **fit_kwargs: object
+    ):
+        fitted_model = original_tabular_fit(model, X, y, **fit_kwargs)
+        tabular_fitted.append((fitted_model, tuple(X.columns)))
+        return fitted_model
+
+    monkeypatch.setattr(modeling, "fit_tabular_model", recording_tabular_fit)
     common = dict(
         input_path=input_path,
         time_column="time",
         target="target",
         max_lag=3,
         top_k=11,
+        enable_model=True,
         skip_rolling_corr=False,
     )
     first = AnalysisConfig(
@@ -222,13 +241,28 @@ def test_second_analysis_with_one_of_eleven_variables_excluded_refits_aligned_mo
     run_analysis(first)
     first_models = [model for model, _ in fitted]
     first_count = len(first_models)
+    first_tabular_models = [model for model, _ in tabular_fitted]
+    first_tabular_count = len(first_tabular_models)
     run_analysis(second)
     second_models = [model for model, _ in fitted[first_count:]]
+    second_tabular_models = [model for model, _ in tabular_fitted[first_tabular_count:]]
 
     assert first_models
     assert second_models
+    assert first_tabular_models
+    assert second_tabular_models
     assert all(second_model is not first_model for second_model in second_models for first_model in first_models)
+    assert all(
+        second_model is not first_model
+        for second_model in second_tabular_models
+        for first_model in first_tabular_models
+    )
     assert all(model.feature_names == columns for model, columns in fitted)
+    assert all(model.feature_names == columns for model, columns in tabular_fitted)
+    assert all(
+        not any(str(column).startswith("x10__") for column in columns)
+        for _, columns in tabular_fitted[first_tabular_count:]
+    )
     ranked = pd.read_csv(second.output_dir / "ranked_features.csv", encoding="utf-8-sig")
     assert not ranked.empty
     assert "x10" not in set(ranked["variable"].astype(str))

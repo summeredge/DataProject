@@ -9,9 +9,8 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.feature_alignment import (
-    bind_model_feature_names,
+    fit_tabular_model,
     predict_tabular_model,
-    validate_feature_alignment,
 )
 
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
@@ -535,12 +534,11 @@ def train_xgb_fold(
     model_params = {**DEFAULT_XGB_PARAMS, **(params or {})}
     model_params["early_stopping_rounds"] = early_stopping_rounds
     model = XGBRegressor(**model_params)
-    bind_model_feature_names(model, X_train)
-    validate_feature_alignment(X_valid, model)
-    validate_feature_alignment(X_test, model)
-    model.fit(
+    fit_tabular_model(
+        model,
         X_train,
         y_train,
+        aligned_frames=(X_valid, X_test),
         eval_set=[(X_valid, y_valid)],
         verbose=False,
     )

@@ -39,6 +39,7 @@ class RecordingRegressor:
         eval_set: list[tuple[pd.DataFrame, pd.Series]],
         verbose: bool,
     ) -> "RecordingRegressor":
+        assert not hasattr(self, "feature_names")
         self.fit_calls.append(
             {
                 "X": X.copy(deep=True),

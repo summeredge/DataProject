@@ -53,7 +53,9 @@ def _series_times(response: dict[str, object]) -> list[pd.Timestamp]:
     return [pd.Timestamp(point["x"]) for point in points]
 
 
-def test_auto_range_uses_max_points_times_one_minute_interval(tmp_path, monkeypatch):
+def test_auto_range_keeps_start_and_uses_max_points_times_one_minute_interval(
+    tmp_path, monkeypatch
+):
     file_id, times = _write_upload(
         tmp_path, monkeypatch, periods=10 * 24 * 60, frequency="1min"
     )
@@ -62,16 +64,16 @@ def test_auto_range_uses_max_points_times_one_minute_interval(tmp_path, monkeypa
     response = web._trend_response(_params(file_id, 5000))
     plotted_times = _series_times(response)
 
-    assert metadata["trendStartDefault"] == "2025-01-07T23:59"
-    assert metadata["trendEndDefault"] == "2025-01-10T23:59"
+    assert metadata["trendStartDefault"] == "2025-01-01T00:00"
+    assert metadata["trendEndDefault"] == "2025-01-04T00:00"
     assert metadata["trendSamplingIntervalMs"] == 60_000
-    assert plotted_times[0] == times[-1] - pd.Timedelta(minutes=5000)
-    assert plotted_times[-1] == times[-1]
-    assert response["raw_rows"] == 5001
+    assert plotted_times[0] == times[0]
+    assert plotted_times[-1] == times[0] + pd.Timedelta(minutes=4999)
+    assert response["raw_rows"] == 5000
     assert response["rows"] == 5000
 
 
-def test_increasing_max_points_moves_auto_start_back_and_keeps_end(tmp_path, monkeypatch):
+def test_increasing_max_points_keeps_auto_start_and_moves_end_forward(tmp_path, monkeypatch):
     file_id, times = _write_upload(
         tmp_path, monkeypatch, periods=10 * 24 * 60, frequency="1min"
     )
@@ -79,8 +81,16 @@ def test_increasing_max_points_moves_auto_start_back_and_keeps_end(tmp_path, mon
     smaller = _series_times(web._trend_response(_params(file_id, 5000)))
     larger = _series_times(web._trend_response(_params(file_id, 20000)))
 
-    assert larger[0] < smaller[0]
-    assert smaller[-1] == larger[-1] == times[-1]
+    assert smaller[0] == larger[0] == times[0]
+    assert larger[-1] > smaller[-1]
+    assert larger[-1] == times[-1]
+    assert web._trend_time_bounds(
+        times,
+        times[0],
+        times[0] + pd.Timedelta(days=3),
+        max_points=20000,
+        mode="auto",
+    ) == (times[0], times[-1])
 
 
 def test_manual_range_is_unchanged_when_max_points_changes(tmp_path, monkeypatch):
@@ -111,9 +121,9 @@ def test_auto_range_uses_actual_five_minute_interval(tmp_path, monkeypatch):
     response = web._trend_response(_params(file_id, 1000))
     plotted_times = _series_times(response)
 
-    assert plotted_times[0] == times[-1] - pd.Timedelta(minutes=5000)
-    assert plotted_times[-1] == times[-1]
-    assert response["raw_rows"] == 1001
+    assert plotted_times[0] == times[0]
+    assert plotted_times[-1] == times[0] + pd.Timedelta(minutes=4995)
+    assert response["raw_rows"] == 1000
 
 
 def test_auto_range_falls_back_to_existing_bounds_without_sampling_interval():
@@ -127,7 +137,24 @@ def test_auto_range_falls_back_to_existing_bounds_without_sampling_interval():
 
 def test_frontend_tracks_auto_and_manual_trend_time_modes():
     assert 'let trendTimeRangeMode = "auto";' in INDEX_HTML
-    assert 'params.set("time_range_mode", trendTimeRangeMode);' in INDEX_HTML
+    assert "let trendAutoWindowActive = false;" in INDEX_HTML
+    assert 'id="trendMaxPoints" type="number" min="100" max="100000" value="10000"' in INDEX_HTML
     assert 'el("trendStart").addEventListener("input", markTrendTimeRangeManual);' in INDEX_HTML
     assert 'el("trendEnd").addEventListener("input", markTrendTimeRangeManual);' in INDEX_HTML
     assert 'el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);' in INDEX_HTML
+    load_columns_body = INDEX_HTML.split("async function loadColumns()", 1)[1].split(
+        "async function analyze()", 1
+    )[0]
+    assert 'el("trendMaxPoints"' not in load_columns_body
+    assert "updateAutoTrendTimeRange();" not in load_columns_body
+    auto_range_body = INDEX_HTML.split("function updateAutoTrendTimeRange()", 1)[1].split(
+        "function appendChartQueryParams", 1
+    )[0]
+    assert 'el("trendEnd").value =' in auto_range_body
+    assert 'el("trendStart").value =' not in auto_range_body
+    assert "(maxPoints - 1) * trendSamplingIntervalMs" in auto_range_body
+    assert "calculatedEnd > latest ? latest : calculatedEnd" in auto_range_body
+    draw_body = INDEX_HTML.split("async function drawTrend()", 1)[1].split(
+        "async function drawScatterMatrix()", 1
+    )[0]
+    assert 'params.set("time_range_mode", trendAutoWindowActive ? "auto" : "manual");' in draw_body

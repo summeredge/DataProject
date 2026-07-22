@@ -359,13 +359,13 @@ def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dic
 
     start = values.iloc[0]
     end = values.iloc[-1]
-    default_start = max(start, end - pd.Timedelta(days=3))
+    default_end = min(start + pd.Timedelta(days=3), end)
     metadata = {
         "timeColumn": candidate,
         "timeStart": _datetime_local(start),
         "timeEnd": _datetime_local(end),
-        "trendStartDefault": _datetime_local(default_start),
-        "trendEndDefault": _datetime_local(end),
+        "trendStartDefault": _datetime_local(start),
+        "trendEndDefault": _datetime_local(default_end),
     }
     sampling_interval = _median_sampling_interval(pd.DatetimeIndex(values))
     if sampling_interval is not None:
@@ -1697,8 +1697,14 @@ def _trend_time_bounds(
     sampling_interval = _median_sampling_interval(index)
     if sampling_interval is None:
         return start_time, end_time
+    first_time = pd.Timestamp(index.min())
     latest_time = pd.Timestamp(index.max())
-    return latest_time - max_points * sampling_interval, latest_time
+    effective_start = start_time if start_time is not None else first_time
+    effective_end = min(
+        effective_start + (max_points - 1) * sampling_interval,
+        latest_time,
+    )
+    return effective_start, effective_end
 
 
 def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
@@ -2642,6 +2648,8 @@ let lastTrendAxisMode = "shared";
 let trendResizeTimer = null;
 let trendTimeRangeMode = "auto";
 let trendSamplingIntervalMs = null;
+let trendLatestTime = "";
+let trendAutoWindowActive = false;
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
 
@@ -2952,9 +2960,10 @@ async function loadColumns() {
   }
   trendTimeRangeMode = "auto";
   trendSamplingIntervalMs = Number(data.trendSamplingIntervalMs);
+  trendLatestTime = data.timeEnd || "";
+  trendAutoWindowActive = false;
   if (data.trendStartDefault) el("trendStart").value = data.trendStartDefault;
   if (data.trendEndDefault) el("trendEnd").value = data.trendEndDefault;
-  updateAutoTrendTimeRange();
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
@@ -3631,17 +3640,21 @@ function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段"
 
 function markTrendTimeRangeManual() {
   trendTimeRangeMode = "manual";
+  trendAutoWindowActive = false;
 }
 
 function updateAutoTrendTimeRange() {
   if (trendTimeRangeMode !== "auto" || !Number.isFinite(trendSamplingIntervalMs) || trendSamplingIntervalMs <= 0) return;
-  const end = new Date(el("trendEnd").value);
+  const start = new Date(el("trendStart").value);
   const requestedPoints = Number(el("trendMaxPoints").value || "10000");
-  if (Number.isNaN(end.getTime()) || !Number.isFinite(requestedPoints)) return;
+  if (Number.isNaN(start.getTime()) || !Number.isFinite(requestedPoints)) return;
   const maxPoints = Math.min(100000, Math.max(100, Math.trunc(requestedPoints)));
-  const start = new Date(end.getTime() - maxPoints * trendSamplingIntervalMs);
+  const latest = new Date(trendLatestTime);
+  const calculatedEnd = new Date(start.getTime() + (maxPoints - 1) * trendSamplingIntervalMs);
+  const end = !Number.isNaN(latest.getTime()) && calculatedEnd > latest ? latest : calculatedEnd;
   const pad = (value) => String(value).padStart(2, "0");
-  el("trendStart").value = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}T${pad(start.getHours())}:${pad(start.getMinutes())}`;
+  el("trendEnd").value = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T${pad(end.getHours())}:${pad(end.getMinutes())}`;
+  trendAutoWindowActive = true;
 }
 
 function appendChartQueryParams(params) {
@@ -3667,7 +3680,7 @@ async function drawTrend() {
     if (new Set(variables).size !== variables.length) return setStatus("趋势变量不能重复选择。");
     const params = new URLSearchParams();
     appendChartQueryParams(params);
-    params.set("time_range_mode", trendTimeRangeMode);
+    params.set("time_range_mode", trendAutoWindowActive ? "auto" : "manual");
     params.set("variables", variables.join(","));
     setStatus("正在生成趋势图...", "loading");
     const response = await fetch(`/api/trend?${params.toString()}`);
@@ -5523,6 +5536,8 @@ function reset() {
   lastTrendAxisMode = "shared";
   trendTimeRangeMode = "auto";
   trendSamplingIntervalMs = null;
+  trendLatestTime = "";
+  trendAutoWindowActive = false;
   lastScatterMatrixPayload = null;
   tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";

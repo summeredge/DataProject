@@ -332,7 +332,7 @@ def _resolve_encoding(path: Path, encoding: str) -> str:
     return used_encoding
 
 
-def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, str]:
+def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dict[str, Any]:
     candidate = next(
         (column for column in sample.columns if _looks_like_time_column(str(column))),
         None,
@@ -359,14 +359,19 @@ def _time_range_metadata(path: Path, sample: pd.DataFrame, encoding: str) -> dic
 
     start = values.iloc[0]
     end = values.iloc[-1]
-    default_end = min(start + pd.Timedelta(days=3), end)
+    default_start = max(start, end - pd.Timedelta(days=3))
     metadata = {
         "timeColumn": candidate,
         "timeStart": _datetime_local(start),
         "timeEnd": _datetime_local(end),
-        "trendStartDefault": _datetime_local(start),
-        "trendEndDefault": _datetime_local(default_end),
+        "trendStartDefault": _datetime_local(default_start),
+        "trendEndDefault": _datetime_local(end),
     }
+    sampling_interval = _median_sampling_interval(pd.DatetimeIndex(values))
+    if sampling_interval is not None:
+        metadata["trendSamplingIntervalMs"] = int(
+            sampling_interval.total_seconds() * 1000
+        )
     if automatically_detected:
         metadata["autoTimeColumn"] = candidate
     return metadata
@@ -1616,12 +1621,22 @@ def _chart_frame_from_params(
 
     raw = load_timeseries_csv(input_path, time_column, encoding=resolved_encoding)
     raw = drop_excluded_columns(raw, excluded_columns)
-    start_time = _single(params, "trend_start", "")
-    end_time = _single(params, "trend_end", "")
-    if start_time:
-        raw = raw.loc[raw.index >= pd.to_datetime(start_time)]
-    if end_time:
-        raw = raw.loc[raw.index <= pd.to_datetime(end_time)]
+    max_points = min(100000, max(100, int(_single(params, "trend_max_points", "10000") or 10000)))
+    start_value = _single(params, "trend_start", "")
+    end_value = _single(params, "trend_end", "")
+    start_time = pd.to_datetime(start_value) if start_value else None
+    end_time = pd.to_datetime(end_value) if end_value else None
+    start_time, end_time = _trend_time_bounds(
+        raw.index,
+        start_time,
+        end_time,
+        max_points=max_points,
+        mode=_single(params, "time_range_mode", "manual"),
+    )
+    if start_time is not None:
+        raw = raw.loc[raw.index >= start_time]
+    if end_time is not None:
+        raw = raw.loc[raw.index <= end_time]
     if raw.empty:
         raise ValueError("图表时间范围内没有数据")
     numeric = select_numeric_frame(raw, variables[0])
@@ -1647,13 +1662,43 @@ def _chart_frame_from_params(
         _single(params, "preprocess_mode", "raw"),
         int(_single(params, "detrend_window", "24") or 24),
     )
-    max_points = min(100000, max(100, int(_single(params, "trend_max_points", "10000") or 10000)))
     raw_rows = len(transformed)
     if len(transformed) > max_points:
         positions = [int(index * (len(transformed) - 1) / (max_points - 1)) for index in range(max_points)]
         positions = list(dict.fromkeys(positions))
         transformed = transformed.iloc[positions]
     return transformed, int(raw_rows), int(max_points)
+
+
+def _median_sampling_interval(index: pd.Index) -> pd.Timedelta | None:
+    if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+        return None
+    values = pd.Series(index).dropna().drop_duplicates().sort_values()
+    positive_deltas = values.diff().dropna()
+    positive_deltas = positive_deltas.loc[positive_deltas > pd.Timedelta(0)]
+    if positive_deltas.empty:
+        return None
+    interval = positive_deltas.median()
+    if pd.isna(interval) or interval <= pd.Timedelta(0):
+        return None
+    return pd.Timedelta(interval)
+
+
+def _trend_time_bounds(
+    index: pd.Index,
+    start_time: pd.Timestamp | None,
+    end_time: pd.Timestamp | None,
+    *,
+    max_points: int,
+    mode: str,
+) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    if mode != "auto" or len(index) == 0:
+        return start_time, end_time
+    sampling_interval = _median_sampling_interval(index)
+    if sampling_interval is None:
+        return start_time, end_time
+    latest_time = pd.Timestamp(index.max())
+    return latest_time - max_points * sampling_interval, latest_time
 
 
 def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
@@ -2595,6 +2640,8 @@ const llmPromptEndpoint = "/api/llm_prompt";
 let lastTrendSeries = [];
 let lastTrendAxisMode = "shared";
 let trendResizeTimer = null;
+let trendTimeRangeMode = "auto";
+let trendSamplingIntervalMs = null;
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
 
@@ -2604,6 +2651,9 @@ for (const button of document.querySelectorAll(".tab-button")) {
 }
 activateTab("trendTab");
 el("drawTrend").addEventListener("click", drawTrend);
+el("trendStart").addEventListener("input", markTrendTimeRangeManual);
+el("trendEnd").addEventListener("input", markTrendTimeRangeManual);
+el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
@@ -2900,8 +2950,11 @@ async function loadColumns() {
   } else if (timeCandidate) {
     el("timeColumn").value = timeCandidate;
   }
+  trendTimeRangeMode = "auto";
+  trendSamplingIntervalMs = Number(data.trendSamplingIntervalMs);
   if (data.trendStartDefault) el("trendStart").value = data.trendStartDefault;
   if (data.trendEndDefault) el("trendEnd").value = data.trendEndDefault;
+  updateAutoTrendTimeRange();
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
@@ -3576,6 +3629,21 @@ function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段"
   }
 }
 
+function markTrendTimeRangeManual() {
+  trendTimeRangeMode = "manual";
+}
+
+function updateAutoTrendTimeRange() {
+  if (trendTimeRangeMode !== "auto" || !Number.isFinite(trendSamplingIntervalMs) || trendSamplingIntervalMs <= 0) return;
+  const end = new Date(el("trendEnd").value);
+  const requestedPoints = Number(el("trendMaxPoints").value || "10000");
+  if (Number.isNaN(end.getTime()) || !Number.isFinite(requestedPoints)) return;
+  const maxPoints = Math.min(100000, Math.max(100, Math.trunc(requestedPoints)));
+  const start = new Date(end.getTime() - maxPoints * trendSamplingIntervalMs);
+  const pad = (value) => String(value).padStart(2, "0");
+  el("trendStart").value = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}T${pad(start.getHours())}:${pad(start.getMinutes())}`;
+}
+
 function appendChartQueryParams(params) {
   params.set("file_id", fileId);
   params.set("encoding", el("encoding").value);
@@ -3599,6 +3667,7 @@ async function drawTrend() {
     if (new Set(variables).size !== variables.length) return setStatus("趋势变量不能重复选择。");
     const params = new URLSearchParams();
     appendChartQueryParams(params);
+    params.set("time_range_mode", trendTimeRangeMode);
     params.set("variables", variables.join(","));
     setStatus("正在生成趋势图...", "loading");
     const response = await fetch(`/api/trend?${params.toString()}`);
@@ -5452,6 +5521,8 @@ function reset() {
   lastXgbValidationSummary = {};
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
+  trendTimeRangeMode = "auto";
+  trendSamplingIntervalMs = null;
   lastScatterMatrixPayload = null;
   tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";

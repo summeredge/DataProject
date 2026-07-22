@@ -7,7 +7,11 @@ import pytest
 
 from chem_ts_corr.lag import summarize_best_lags
 from chem_ts_corr.screening import final_ranked_features
-from chem_ts_corr.web import INDEX_HTML, _with_correlation_display_fields
+from chem_ts_corr.web import (
+    INDEX_HTML,
+    _correlation_direction,
+    _with_correlation_display_fields,
+)
 
 
 def _lag_row(
@@ -82,8 +86,73 @@ def test_web_correlation_fields_come_from_one_unified_best_lag_row():
     assert candidate["method"] == "spearman"
     assert candidate["corr_q_value"] == pytest.approx(0.024)
     assert candidate["dominant_corr"] == pytest.approx(-0.96)
+    assert candidate["correlation_direction"] == "负向"
     assert candidate["dominant_corr"] != candidate["raw_corr"]
     assert bool(candidate["lag_boundary_flag"])
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (0.051, "正向"),
+        (0.050, "方向较弱"),
+        (-0.050, "方向较弱"),
+        (-0.051, "负向"),
+        (float("nan"), "未计算"),
+    ],
+)
+def test_correlation_direction_has_fixed_weak_direction_boundaries(value, expected):
+    assert _correlation_direction(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("pearson", "spearman", "method", "expected_corr", "expected_direction"),
+    [
+        (-0.40, 0.70, "spearman", 0.70, "正向"),
+        (-0.80, -0.50, "pearson", -0.80, "负向"),
+    ],
+)
+def test_dominant_correlation_uses_the_signed_value_for_the_selected_method(
+    pearson, spearman, method, expected_corr, expected_direction
+):
+    display = _with_correlation_display_fields(
+        pd.DataFrame(
+            [{"variable": "x", "pearson": pearson, "spearman": spearman, "method": method}]
+        )
+    )
+
+    assert display.loc[0, "dominant_corr"] == pytest.approx(expected_corr)
+    assert display.loc[0, "correlation_direction"] == expected_direction
+
+
+@pytest.mark.parametrize(
+    ("lag", "time_relationship", "dominant_corr", "correlation_direction"),
+    [
+        (5, "变量领先目标", -0.8, "负向"),
+        (0, "同步变化", -0.8, "负向"),
+        (-5, "变量滞后目标", 0.8, "正向"),
+    ],
+)
+def test_time_relationship_and_correlation_direction_remain_independent(
+    lag, time_relationship, dominant_corr, correlation_direction
+):
+    display = _with_correlation_display_fields(
+        pd.DataFrame(
+            [
+                {
+                    "variable": "x",
+                    "lag": lag,
+                    "direction": time_relationship,
+                    "pearson": dominant_corr,
+                    "spearman": -dominant_corr,
+                    "method": "pearson",
+                }
+            ]
+        )
+    )
+
+    assert display.loc[0, "direction"] == time_relationship
+    assert display.loc[0, "correlation_direction"] == correlation_direction
 
 
 def test_correlation_display_fields_do_not_change_scores_or_top_k_order():
@@ -117,6 +186,8 @@ def test_correlation_display_fields_do_not_change_scores_or_top_k_order():
         after["driver_priority_score"], before["driver_priority_score"]
     )
     pd.testing.assert_series_equal(after["final_score"], before["final_score"])
+    for field in ["raw_corr", "association_score", "correlation_evidence_score"]:
+        pd.testing.assert_series_equal(after[field], before[field])
 
 
 def test_correlation_display_fields_keep_old_result_payloads_compatible():
@@ -125,14 +196,17 @@ def test_correlation_display_fields_keep_old_result_payloads_compatible():
     display = _with_correlation_display_fields(old_ranked)
 
     assert pd.isna(display.loc[0, "dominant_corr"])
-    pd.testing.assert_frame_equal(display.drop(columns="dominant_corr"), old_ranked)
+    assert display.loc[0, "correlation_direction"] == "未计算"
+    pd.testing.assert_frame_equal(
+        display.drop(columns=["dominant_corr", "correlation_direction"]), old_ranked
+    )
 
 
 def test_web_candidate_tables_use_only_requested_correlation_core_columns():
     candidate_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
 
-    for field in ["pearson", "spearman", "method"]:
+    for field in ["pearson", "spearman", "method", "correlation_direction"]:
         assert f'"{field}"' in candidate_columns
     for field in [
         "corr_q_value",
@@ -145,8 +219,34 @@ def test_web_candidate_tables_use_only_requested_correlation_core_columns():
         "spearman_r2",
     ]:
         assert f'"{field}"' not in candidate_columns
-    assert '"dominant_corr"' in overview_columns
-    assert '"method"' in overview_columns
+    for field in ["pearson", "spearman", "method", "correlation_direction"]:
+        assert f'"{field}"' in overview_columns
+
+
+def test_candidate_table_labels_separate_time_relationship_and_correlation_direction():
+    core_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+    labels = INDEX_HTML.split("function columnLabel(column)", 1)[1].split(
+        "function resetUI", 1
+    )[0]
+
+    expected_order = [
+        "variable",
+        "driver_rank",
+        "driver_priority_score",
+        "pearson",
+        "spearman",
+        "method",
+        "correlation_direction",
+        "lag",
+        "direction",
+        "candidate_class",
+        "risk_flags",
+        "recommended_use",
+    ]
+    positions = [core_columns.index(f'"{field}"') for field in expected_order]
+    assert positions == sorted(positions)
+    assert 'direction: "时间关系"' in labels
+    assert 'correlation_direction: "相关方向"' in labels
 
 
 def test_candidate_detail_has_structured_correlation_evidence_and_labels():
@@ -172,6 +272,14 @@ def test_candidate_detail_has_structured_correlation_evidence_and_labels():
         'spearman_r2: "Spearman ρ²"',
         'n: "有效样本数"',
         'lag_boundary_flag: "是否触及滞后边界"',
+        "方向性解释",
+        "directionalityTimeExplanation",
+        "directionalitySummary",
+        "timeRelationshipExplanation",
+        "correlationDirectionExplanation",
+        "innovationDirectionExplanation",
+        "correlationConsistencyMessage",
+        "时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。",
     ]
     for marker in required:
         assert marker in INDEX_HTML
@@ -180,6 +288,24 @@ def test_candidate_detail_has_structured_correlation_evidence_and_labels():
     assert "scoreValue.toFixed(3)" in INDEX_HTML
     assert "scoreValue.toPrecision(3)" in INDEX_HTML
     assert 'return value ? "是" : "否";' in INDEX_HTML
+
+
+def test_directionality_detail_maps_all_innovation_statuses_to_chinese_explanations():
+    required = [
+        "innovation_verified",
+        "原始值与变化量的方向和滞后基本一致。",
+        "innovation_sign_conflict",
+        "原始值与变化量方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+        "innovation_lag_conflict",
+        "原始值与变化量的滞后关系不一致，动态关系可能不稳定。",
+        "innovation_sign_unknown",
+        "变化量方向无法可靠判断。",
+        "not_computed",
+        "未完成变化量方向验证。",
+        '"0": "方向较弱"',
+    ]
+    for marker in required:
+        assert marker in INDEX_HTML
 
 
 def test_p_q_r2_and_sample_size_are_only_in_collapsed_detail_without_highlighting():
@@ -222,6 +348,7 @@ def test_display_only_implementation_has_no_rescan_or_score_dependency():
     assert "compute_lag_scores" not in display_source
     assert "summarize_best_lags" not in display_source
     assert "raw_corr" not in display_source
+    assert "abs(" not in display_source
     for field in [
         "pearson",
         "spearman",

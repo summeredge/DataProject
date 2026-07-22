@@ -101,6 +101,7 @@ SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
 SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
+CORRELATION_DIRECTION_EPSILON = 0.05
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -1939,7 +1940,24 @@ def _with_correlation_display_fields(ranked: pd.DataFrame) -> pd.DataFrame:
     display["dominant_corr"] = pearson.where(
         method.eq("pearson"), spearman.where(method.eq("spearman"))
     )
+    display["correlation_direction"] = display["dominant_corr"].map(
+        _correlation_direction
+    )
     return display
+
+
+def _correlation_direction(value: object) -> str:
+    try:
+        correlation = float(value)
+    except (TypeError, ValueError):
+        return "未计算"
+    if not math.isfinite(correlation):
+        return "未计算"
+    if correlation > CORRELATION_DIRECTION_EPSILON:
+        return "正向"
+    if correlation < -CORRELATION_DIRECTION_EPSILON:
+        return "负向"
+    return "方向较弱"
 
 
 def _summary_metrics(summary: str) -> dict[str, str]:
@@ -4419,7 +4437,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"];
+  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4492,7 +4510,7 @@ function renderGenericDetailModalBody(row, options = {}) {
       "driver_rank", "driver_priority_score", "final_score", "candidate_class",
       "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items",
       "evidence_completeness", "data_quality_score", "evidence_confidence",
-      "dominant_corr", ...CORRELATION_OVERVIEW_COLUMNS, ...CORRELATION_DETAIL_COLUMNS,
+      "dominant_corr", "correlation_direction", ...CORRELATION_OVERVIEW_COLUMNS, ...CORRELATION_DETAIL_COLUMNS,
     ] : []);
   const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags" && !groupedColumns.has(column));
   const fields = rawFieldColumnsWithoutRiskFlags.map((column) => `
@@ -4514,6 +4532,75 @@ function renderGenericDetailModalBody(row, options = {}) {
   `;
 }
 
+function timeRelationshipFromLag(lag) {
+  const value = lagProfileNumber(lag);
+  if (value === null) return "未计算";
+  return value > 0 ? "变量领先目标" : value < 0 ? "变量滞后目标" : "同步变化";
+}
+
+function timeRelationshipExplanation(lag, intervalMinutes = null) {
+  const value = lagProfileNumber(lag);
+  if (value === null) return "当前缺少可用的最佳滞后，无法判断时间关系，建议复核数据和时间对齐。";
+  if (value === 0) return "候选变量与目标变量主要表现为同步变化。";
+  const interval = lagProfileNumber(intervalMinutes);
+  const distance = interval !== null && interval > 0
+    ? `约 ${Math.abs(value) * interval} 分钟`
+    : ` ${Math.abs(value)} 个采样点`;
+  if (value > 0) return `候选变量领先目标变量${distance}。`;
+  return `候选变量滞后目标变量${distance}，更可能表现为响应变量、反馈动作或下游状态，建议复核工艺关系。`;
+}
+
+function correlationDirectionExplanation(direction) {
+  const messages = {
+    正向: "在当前最佳滞后对齐下，候选变量较高时，目标变量通常也较高。",
+    负向: "在当前最佳滞后对齐下，候选变量较高时，目标变量通常较低。",
+    方向较弱: "当前最佳滞后点的带符号相关系数接近零，相关方向较弱。",
+    未计算: "当前缺少可用的带符号相关结果，无法判断相关方向。",
+  };
+  return messages[direction] || messages.未计算;
+}
+
+function innovationDirectionExplanation(status) {
+  const messages = {
+    innovation_verified: "原始值与变化量的方向和滞后基本一致。",
+    innovation_sign_conflict: "原始值与变化量方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+    innovation_lag_conflict: "原始值与变化量的滞后关系不一致，动态关系可能不稳定。",
+    innovation_sign_unknown: "变化量方向无法可靠判断。",
+    not_computed: "未完成变化量方向验证。",
+  };
+  return messages[String(status ?? "")] || "变化量方向验证状态未知，建议复核原始结果。";
+}
+
+function directionalitySummary(lag, correlationDirection, intervalMinutes = null) {
+  const value = lagProfileNumber(lag);
+  if (value === null) return `时间关系未计算，${correlationDirection || "相关方向未计算"}。`;
+  const interval = lagProfileNumber(intervalMinutes);
+  const distance = interval !== null && interval > 0
+    ? `约 ${Math.abs(value) * interval} 分钟`
+    : ` ${Math.abs(value)} 个采样点`;
+  const correlation = correlationDirection === "方向较弱"
+    ? "相关方向较弱"
+    : correlationDirection === "未计算" ? "相关方向未计算" : `${correlationDirection}相关`;
+  if (value > 0) return `变量领先目标${distance}，${correlation}。`;
+  if (value < 0) return `变量滞后目标${distance}，${correlation}，更可能表现为响应或反馈关系。`;
+  return `与目标同步变化，${correlation}。`;
+}
+
+function directionInteractionExplanation(lag, correlationDirection) {
+  const value = lagProfileNumber(lag);
+  if (value !== null && value > 0 && correlationDirection === "负向") {
+    return "候选变量先变化，并与之后的目标变化呈反向关系。";
+  }
+  return "时间关系与相关方向是两种独立信息，建议结合工艺机理和时间对齐复核。";
+}
+
+function updateDirectionalityTimeDetails(lag, intervalMinutes) {
+  const explanation = el("directionalityTimeExplanation");
+  const summary = el("directionalitySummary");
+  if (explanation) explanation.textContent = timeRelationshipExplanation(lag, intervalMinutes);
+  if (summary) summary.textContent = directionalitySummary(lag, summary.dataset.correlationDirection, intervalMinutes);
+}
+
 function renderScreeningScoreDetails(row) {
   if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
   const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
@@ -4525,6 +4612,10 @@ function renderScreeningScoreDetails(row) {
     </div>
   `).join("");
   const factor = numericValue(row.driver_priority_factor);
+  const timeRelationship = timeRelationshipFromLag(row.lag);
+  const correlationDirection = row.correlation_direction || "未计算";
+  const innovationDirection = displayCellValue("innovation_sign", row.innovation_sign) || "未计算";
+  const innovationExplanation = innovationDirectionExplanation(row.innovation_status);
   const equalScoreNote = factor === 1 && row.candidate_class === "upstream_driver_candidate"
     ? "<p>当前候选属于上游驱动候选，优先系数为 1.00，因此两个得分相同。</p>"
     : "";
@@ -4542,6 +4633,22 @@ function renderScreeningScoreDetails(row) {
       <p class="help">大样本与时序自相关下，P/Q 值、R² 和样本数仅供参考，不参与评分、筛选、排序或颜色强调。</p>
       <div class="detail-grid">${renderFields(CORRELATION_DETAIL_COLUMNS)}</div>
     </details>
+    <h4>方向性解释</h4>
+    <p><strong>组合摘要：</strong><span id="directionalitySummary" data-correlation-direction="${escapeHtml(correlationDirection)}">${escapeHtml(directionalitySummary(row.lag, correlationDirection))}</span></p>
+    <div class="detail-grid">
+      <div class="detail-field"><strong>最佳滞后</strong><span>${escapeHtml(formatSignedLag(row.lag))}</span></div>
+      <div class="detail-field"><strong>时间关系</strong><span>${escapeHtml(timeRelationship)}</span></div>
+      <div class="detail-field"><strong>主导相关方法</strong><span>${escapeHtml(displayCellValue("method", row.method))}</span></div>
+      <div class="detail-field"><strong>主导相关系数</strong><span>${escapeHtml(displayCellValue("dominant_corr", row.dominant_corr))}</span></div>
+      <div class="detail-field"><strong>相关方向</strong><span>${escapeHtml(correlationDirection)}</span></div>
+      <div class="detail-field"><strong>变化量相关方向</strong><span>${escapeHtml(innovationDirection)}</span></div>
+      <div class="detail-field"><strong>原始值与变化量方向一致性</strong><span>${escapeHtml(innovationExplanation)}</span></div>
+    </div>
+    <p id="directionalityTimeExplanation">${escapeHtml(timeRelationshipExplanation(row.lag))}</p>
+    <p>${escapeHtml(correlationDirectionExplanation(correlationDirection))}</p>
+    <p>${escapeHtml(directionInteractionExplanation(row.lag, correlationDirection))}</p>
+    <p>${escapeHtml(correlationConsistencyMessage(row.pearson, row.spearman))}</p>
+    <p class="help">时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。闭环控制、共同负荷、上游扰动和工况切换均可能产生类似结果。</p>
     <h4>滞后相关曲线</h4>
     <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
@@ -4666,6 +4773,7 @@ function renderLagProfile(payload, panel = el("lagProfilePanel")) {
     lagProfileBestMarker(bestPoint, "spearman", xScale, yScale, "#c2410c", -8, "S", bestAtRight),
   ].join("") : "";
 
+  updateDirectionalityTimeDetails(bestLag, payload.sampling_interval_minutes);
   panel.className = "lag-profile-panel";
   panel.innerHTML = `
     <div class="lag-profile-chart" role="img" aria-label="${escapeHtml(payload.variable)} 的 Pearson 与 Spearman 滞后相关曲线">
@@ -4778,15 +4886,15 @@ function correlationConsistencyMessage(pearson, spearman) {
   if (p === null || s === null) return "Pearson 或 Spearman 数据缺失，方法一致性暂无法判断。";
   const pStrength = Math.abs(p);
   const sStrength = Math.abs(s);
-  const bothAwayFromZero = pStrength >= 0.05 && sStrength >= 0.05;
+  const bothAwayFromZero = pStrength > 0.05 && sStrength > 0.05;
   if (bothAwayFromZero && Math.sign(p) !== Math.sign(s)) {
-    return "Pearson 与 Spearman 方向不一致，关系可能不稳定，建议检查异常点、工况混合和时间对齐。";
+    return "Pearson 与 Spearman 的方向不一致，建议检查异常点、工况混合、分群和时间对齐。";
   }
   if (sStrength - pStrength >= 0.15) {
-    return "Spearman 明显高于 Pearson，可能存在单调非线性、异常值影响或分群结构，建议结合散点图复核。";
+    return "Spearman 明显高于 Pearson，关系可能具有单调非线性、异常值影响或工况分群。";
   }
   if (pStrength - sStrength >= 0.15) {
-    return "Pearson 明显高于 Spearman，可能受少数极端值、局部线性关系或数据分群影响，建议结合散点图复核。";
+    return "Pearson 明显高于 Spearman，结果可能受局部线性关系、极端值或数据分群影响。";
   }
   if (Math.sign(p) === Math.sign(s) && Math.abs(p - s) < 0.15) {
     return "Pearson 与 Spearman 方向和强度基本一致。";
@@ -4836,7 +4944,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "driver_rank", "driver_priority_score", "dominant_corr", "method", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -5439,7 +5547,7 @@ function formatCellValue(column, value) {
     innovation_sign: {
       "1": "正向",
       "-1": "负向",
-      "0": "零相关",
+      "0": "方向较弱",
     },
     integrated_review_decision: {
       priority_review: "优先复核",
@@ -5765,8 +5873,9 @@ function columnLabel(column) {
     trend_action: "趋势验证",
     final_score: "稳健综合得分",
     candidate_class: "候选类别",
-    lag: "滞后",
-    direction: "方向",
+    lag: "最佳滞后",
+    direction: "时间关系",
+    correlation_direction: "相关方向",
     raw_corr: "原始相关",
     association_score: "原始关联规范化得分",
     innovation_score: "变化量关联得分",

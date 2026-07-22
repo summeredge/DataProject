@@ -72,7 +72,7 @@ def test_innovation_statuses_and_sign_values_are_chinese_ready():
         'innovation_sign: {',
         '"1": "正向"',
         '"-1": "负向"',
-        '"0": "零相关"',
+        '"0": "方向较弱"',
     ]
     for marker in required:
         assert marker in INDEX_HTML
@@ -92,7 +92,7 @@ def test_table_width_uses_content_fit_with_page_maximum():
 
 def test_overview_recommendations_default_to_driver_rank_ascending():
     assert 'tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };' in INDEX_HTML
-    assert 'overviewTop: ["variable", "driver_rank", "driver_priority_score", "dominant_corr", "method"' in INDEX_HTML
+    assert 'overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction"' in INDEX_HTML
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
     assert "final_score" not in overview_columns
     assert "evidence_confidence" not in overview_columns

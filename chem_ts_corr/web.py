@@ -94,6 +94,7 @@ MAX_TASKS = 100
 TASKS: dict[str, dict[str, Any]] = {}
 TASKS_LOCK = threading.Lock()
 _FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_RUN_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _MINUTE_RESAMPLE_RE = re.compile(r"([1-9]\d*)(?:min)?")
 _RESAMPLE_MINUTES_ERROR = "重采样间隔必须是大于 0 的整数分钟"
 SCALED_FRAME_CACHE: dict[tuple[Any, ...], pd.DataFrame] = {}
@@ -146,6 +147,15 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 params = parse_qs(parsed.query)
                 self._send_json(_scatter_matrix_response(params))
+            except Exception as exc:
+                if _is_client_disconnect(exc):
+                    return
+                self._send_json({"error": str(exc)}, status=400)
+            return
+        if parsed.path == "/api/lag_profile":
+            try:
+                params = parse_qs(parsed.query)
+                self._send_json(_lag_profile_response(params))
             except Exception as exc:
                 if _is_client_disconnect(exc):
                     return
@@ -615,8 +625,8 @@ def _non_negative_seconds(value: object) -> float:
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    display_ranked = _with_correlation_display_fields(ranked)
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
-    lag_scores = _safe_read_result_csv(output_dir / "lag_scores.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
@@ -629,16 +639,12 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
-    top10_variables = set(ranked.head(20)["variable"].astype(str)) if not ranked.empty else set()
-    visible_lag_scores = lag_scores[
-        lag_scores.get("variable", pd.Series(dtype=str)).astype(str).isin(top10_variables)
-    ] if not lag_scores.empty else lag_scores
     return {
         "run_id": run_id,
-        "overview": _overview_payload(ranked, risk, config, _summary_metrics(summary)),
-        "rankedFeatures": _records(ranked.head(50)),
+        "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary)),
+        "rankedFeatures": _records(display_ranked.head(50)),
         "riskFlags": _records(risky.head(50)),
-        "lagScores": _records(visible_lag_scores),
+        "lagScores": [],
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
         "modelLiftScores": _records(lift.head(50)),
@@ -1823,6 +1829,119 @@ def _overview_payload(
     }
 
 
+def _lag_profile_response(params: dict[str, list[str]]) -> dict[str, Any]:
+    run_id = _single(params, "run_id")
+    variable = _single(params, "variable")
+    if not _RUN_ID_RE.fullmatch(run_id):
+        raise ValueError("运行 ID 格式无效")
+    if not variable:
+        raise ValueError("变量名称不能为空")
+
+    output_dir = _resolve_run_dir(run_id)
+    lag_path = output_dir / "lag_scores.csv"
+    if not lag_path.exists() or lag_path.stat().st_size == 0:
+        raise FileNotFoundError("滞后相关结果不存在")
+    lag_scores = _safe_read_result_csv(lag_path)
+    if "variable" not in lag_scores.columns:
+        raise ValueError("滞后相关结果缺少变量字段")
+    profile = lag_scores[lag_scores["variable"].astype(str).eq(variable)].copy()
+    if profile.empty:
+        raise ValueError(f"变量 {variable} 没有滞后相关记录")
+    if "lag" not in profile.columns:
+        raise ValueError("滞后相关结果缺少 lag 字段")
+    profile["lag"] = pd.to_numeric(profile["lag"], errors="coerce")
+    profile = profile[profile["lag"].notna()].sort_values("lag", kind="stable")
+    if profile.empty:
+        raise ValueError(f"变量 {variable} 没有有效滞后点")
+
+    ranked_path = output_dir / "ranked_features.csv"
+    if not ranked_path.exists() or ranked_path.stat().st_size == 0:
+        raise FileNotFoundError("候选结果不存在")
+    ranked = _safe_read_result_csv(ranked_path)
+    if "variable" not in ranked.columns:
+        raise ValueError("候选结果缺少变量字段")
+    candidate = ranked[ranked["variable"].astype(str).eq(variable)]
+    if candidate.empty:
+        raise ValueError(f"变量 {variable} 不在当前候选结果中")
+    candidate_row = candidate.iloc[0]
+    best_lag = _finite_json_number(candidate_row.get("lag"), integer=True)
+    if best_lag is None:
+        raise ValueError(f"变量 {variable} 的最佳滞后无效")
+    method = str(candidate_row.get("method", "")).strip().lower()
+    if method not in {"pearson", "spearman"}:
+        raise ValueError(f"变量 {variable} 的主导相关方法无效")
+
+    points: list[dict[str, Any]] = []
+    for _, row in profile.iterrows():
+        point = {
+            "variable": variable,
+            "lag": _finite_json_number(row.get("lag"), integer=True),
+            "pearson": _finite_json_number(row.get("pearson")),
+            "spearman": _finite_json_number(row.get("spearman")),
+            "pearson_q": _finite_json_number(row.get("pearson_q")),
+            "spearman_q": _finite_json_number(row.get("spearman_q")),
+            "n": _finite_json_number(row.get("n"), integer=True),
+            "lag_boundary_flag": _bool_value(row.get("lag_boundary_flag", False)),
+        }
+        points.append(point)
+
+    max_lag = max(abs(point["lag"]) for point in points if point["lag"] is not None)
+    return {
+        "variable": variable,
+        "best_lag": best_lag,
+        "method": method,
+        "max_lag": max_lag,
+        "sampling_interval_minutes": _lag_profile_sampling_minutes(output_dir),
+        "points": points,
+    }
+
+
+def _finite_json_number(value: object, *, integer: bool = False) -> float | int | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return int(number) if integer else number
+
+
+def _bool_value(value: object) -> bool:
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "是"}
+    return bool(value)
+
+
+def _lag_profile_sampling_minutes(output_dir: Path) -> int | None:
+    config_path = output_dir / "run_config.json"
+    if not config_path.exists():
+        return None
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        rule = str(data.get("resample_rule") or "").strip()
+        match = _MINUTE_RESAMPLE_RE.fullmatch(rule)
+    except (OSError, ValueError, TypeError):
+        return None
+    return int(match.group(1)) if match else None
+
+
+def _with_correlation_display_fields(ranked: pd.DataFrame) -> pd.DataFrame:
+    display = ranked.copy()
+    method = display.get("method", pd.Series(index=display.index, dtype=str)).astype(str)
+    pearson = pd.to_numeric(
+        display.get("pearson", pd.Series(index=display.index, dtype=float)), errors="coerce"
+    )
+    spearman = pd.to_numeric(
+        display.get("spearman", pd.Series(index=display.index, dtype=float)), errors="coerce"
+    )
+    display["dominant_corr"] = pearson.where(
+        method.eq("pearson"), spearman.where(method.eq("spearman"))
+    )
+    return display
+
+
 def _summary_metrics(summary: str) -> dict[str, str]:
     metrics: dict[str, str] = {}
     for line in summary.splitlines():
@@ -2149,6 +2268,22 @@ INDEX_HTML = r"""<!doctype html>
     .metric-label { color:var(--muted); font-size:var(--font-sm); line-height:1.25; }
     .chart { min-height:280px; border:1px solid var(--line); border-radius:6px; background:var(--panel); overflow:hidden; }
     .chart svg { width:100%; height:320px; display:block; }
+    .lag-profile-panel { min-height:300px; display:grid; gap:10px; margin-top:8px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--surface-muted); }
+    .lag-profile-panel.loading, .lag-profile-panel.error { min-height:120px; place-items:center; color:var(--muted); }
+    .lag-profile-panel.error { color:var(--danger-text); }
+    .lag-profile-chart { min-width:0; overflow:hidden; border:1px solid var(--line-soft); border-radius:6px; background:var(--panel); }
+    .lag-profile-chart svg { display:block; width:100%; height:300px; }
+    .lag-profile-legend { display:flex; justify-content:center; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-sm); }
+    .lag-profile-legend span { display:inline-flex; align-items:center; gap:6px; }
+    .lag-profile-line { width:24px; height:0; border-top:3px solid; }
+    .lag-profile-line.spearman { border-top-style:dashed; }
+    .lag-profile-directions { display:grid; grid-template-columns:1fr auto 1fr; gap:8px; color:var(--muted); font-size:var(--font-xs); }
+    .lag-profile-directions span:last-child { text-align:right; }
+    .lag-profile-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px; }
+    .lag-profile-summary div { padding:7px 8px; border:1px solid var(--line-soft); border-radius:6px; background:var(--panel); }
+    .lag-profile-summary strong { display:block; margin-bottom:3px; color:var(--muted); font-size:var(--font-xs); }
+    .lag-profile-message { margin:0; color:var(--text); font-size:var(--font-sm); }
+    .lag-profile-warning { margin:0; color:var(--warn); font-size:var(--font-sm); font-weight:650; }
     .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .scatter-matrix-section { display:grid; gap:12px; margin-top:10px; }
@@ -2652,6 +2787,10 @@ let trendLatestTime = "";
 let trendAutoWindowActive = false;
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
+const lagProfileCache = new Map();
+let lagProfileRequestSerial = 0;
+let lastLagProfile = null;
+let lagProfileResizeTimer = null;
 
 for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
@@ -2685,6 +2824,13 @@ window.addEventListener("resize", () => {
     if (isElementVisible(scatterContainer)) {
       clearTimeout(scatterMatrixResizeTimer);
       scatterMatrixResizeTimer = setTimeout(() => renderScatterMatrix(lastScatterMatrixPayload), 120);
+    }
+  }
+  if (lastLagProfile) {
+    const lagPanel = el("lagProfilePanel");
+    if (lagPanel && lagPanel.isConnected && lagPanel.dataset.lagProfileKey === lastLagProfile.key) {
+      clearTimeout(lagProfileResizeTimer);
+      lagProfileResizeTimer = setTimeout(() => renderLagProfile(lastLagProfile.payload, lagPanel), 120);
     }
   }
 });
@@ -2907,6 +3053,7 @@ function appendSecondaryValidationOptions(form) {
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
+  clearLagProfileCache();
   try {
     setStatus("正在上传文件...", "loading");
     const form = new FormData();
@@ -2986,6 +3133,7 @@ async function analyze() {
   if (!fileId) return setStatus("请先上传文件。");
   const validationError = validateAnalysisColumnSelection();
   if (validationError) return setStatus(validationError, "error");
+  clearLagProfileCache();
   setStatus("Python 后台正在分析，数据较大时请等待...", "loading");
   el("analyze").disabled = true;
   try {
@@ -4146,6 +4294,14 @@ function candidateDetailColumns(row) {
   return Object.keys(row || {}).filter((column) => !core.has(column));
 }
 
+const CORRELATION_OVERVIEW_COLUMNS = [
+  "lag", "direction", "method", "pearson", "spearman", "lag_boundary_flag",
+];
+const CORRELATION_DETAIL_COLUMNS = [
+  "pearson_p", "pearson_q", "pearson_r2", "spearman_p", "spearman_q",
+  "spearman_r2", "corr_q_value", "n",
+];
+
 const CANONICAL_RISK_GROUPS = [
   {
     key: "lag_boundary_risk",
@@ -4263,7 +4419,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "candidate_class", "evidence_coverage_status", "lag", "direction", "risk_flags", "recommended_use", "recommended_action"];
+  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4336,6 +4492,7 @@ function renderGenericDetailModalBody(row, options = {}) {
       "driver_rank", "driver_priority_score", "final_score", "candidate_class",
       "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items",
       "evidence_completeness", "data_quality_score", "evidence_confidence",
+      "dominant_corr", ...CORRELATION_OVERVIEW_COLUMNS, ...CORRELATION_DETAIL_COLUMNS,
     ] : []);
   const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags" && !groupedColumns.has(column));
   const fields = rawFieldColumnsWithoutRiskFlags.map((column) => `
@@ -4361,9 +4518,9 @@ function renderScreeningScoreDetails(row) {
   if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
   const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
   const evidenceColumns = ["evidence_coverage_status", "evidence_missing_items", "evidence_completeness", "data_quality_score", "evidence_confidence"];
-  const renderFields = (columns) => columns.map((column) => `
+  const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
-      <strong>${escapeHtml(columnLabel(column))}</strong>
+      <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
     </div>
   `).join("");
@@ -4378,9 +4535,263 @@ function renderScreeningScoreDetails(row) {
     ${equalScoreNote}
     <h4>证据覆盖</h4>
     <div class="detail-grid">${renderFields(evidenceColumns)}</div>
+    <h4>相关性证据</h4>
+    <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
+    <details class="correlation-evidence-details">
+      <summary>展开 P/Q、R² 与样本数</summary>
+      <p class="help">大样本与时序自相关下，P/Q 值、R² 和样本数仅供参考，不参与评分、筛选、排序或颜色强调。</p>
+      <div class="detail-grid">${renderFields(CORRELATION_DETAIL_COLUMNS)}</div>
+    </details>
+    <h4>滞后相关曲线</h4>
+    <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
     <p>证据修正系数由证据覆盖度和数据质量共同计算，用于修正综合证据得分，不表示统计概率或因果置信度。</p>
   `;
+}
+
+function lagProfileCacheKey(runId, variable) {
+  return JSON.stringify({ run_id: runId, variable });
+}
+
+function clearLagProfileCache() {
+  lagProfileCache.clear();
+  lagProfileRequestSerial += 1;
+  lastLagProfile = null;
+  clearTimeout(lagProfileResizeTimer);
+}
+
+async function loadLagProfile(row) {
+  const panel = el("lagProfilePanel");
+  if (!panel) return;
+  const runId = currentRunId;
+  const variable = String(row && row.variable || "");
+  const key = lagProfileCacheKey(runId, variable);
+  const requestId = ++lagProfileRequestSerial;
+  lastLagProfile = null;
+  panel.dataset.lagProfileKey = key;
+  panel.className = "lag-profile-panel loading";
+  panel.textContent = "正在加载滞后相关曲线……";
+  if (!runId || !variable) {
+    panel.className = "lag-profile-panel error";
+    panel.textContent = "无法加载滞后相关曲线：缺少当前运行或变量信息。";
+    return;
+  }
+
+  const cached = lagProfileCache.get(key);
+  if (cached) {
+    lastLagProfile = { key, payload: cached };
+    renderLagProfile(cached, panel);
+    return;
+  }
+
+  try {
+    const params = new URLSearchParams({ run_id: runId, variable });
+    const response = await fetch(`/api/lag_profile?${params.toString()}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "滞后相关曲线加载失败");
+    lagProfileCache.set(key, data);
+    if (
+      requestId !== lagProfileRequestSerial
+      || currentRunId !== runId
+      || !panel.isConnected
+      || panel.dataset.lagProfileKey !== key
+      || el("lagProfilePanel") !== panel
+    ) return;
+    lastLagProfile = { key, payload: data };
+    renderLagProfile(data, panel);
+  } catch (error) {
+    if (
+      requestId !== lagProfileRequestSerial
+      || currentRunId !== runId
+      || !panel.isConnected
+      || panel.dataset.lagProfileKey !== key
+      || el("lagProfilePanel") !== panel
+    ) return;
+    panel.className = "lag-profile-panel error";
+    panel.textContent = `滞后相关曲线加载失败：${error.message || String(error)}`;
+  }
+}
+
+function renderLagProfile(payload, panel = el("lagProfilePanel")) {
+  if (!panel || !panel.isConnected) return;
+  const points = (payload.points || [])
+    .map((point) => ({ ...point, lag: Number(point.lag), pearson: lagProfileNumber(point.pearson), spearman: lagProfileNumber(point.spearman) }))
+    .filter((point) => Number.isFinite(point.lag))
+    .sort((left, right) => left.lag - right.lag);
+  if (!points.length || !points.some((point) => point.pearson !== null || point.spearman !== null)) {
+    panel.className = "lag-profile-panel error";
+    panel.textContent = "该变量没有可绘制的滞后相关数据。";
+    return;
+  }
+
+  const bestLag = Number(payload.best_lag);
+  const bestPoint = points.find((point) => point.lag === bestLag) || null;
+  const zeroPoint = points.find((point) => point.lag === 0) || null;
+  const maxLag = Number(payload.max_lag);
+  const boundary = Boolean(bestPoint && bestPoint.lag_boundary_flag)
+    || (Number.isFinite(maxLag) && Math.abs(bestLag) === maxLag);
+  const width = Math.max(560, Math.floor(panel.clientWidth || 760));
+  const height = 300;
+  const pad = { left: 54, right: 24, top: 28, bottom: 54 };
+  let xMin = points[0].lag;
+  let xMax = points[points.length - 1].lag;
+  if (xMin === xMax) {
+    xMin -= 1;
+    xMax += 1;
+  }
+  const xScale = (lag) => pad.left + ((lag - xMin) / (xMax - xMin)) * (width - pad.left - pad.right);
+  const yScale = (value) => pad.top + ((1 - value) / 2) * (height - pad.top - pad.bottom);
+  const yTicks = [-1, -0.5, 0, 0.5, 1];
+  const xTicks = Array.from(new Set([xMin, ...(xMin < 0 && xMax > 0 ? [0] : []), xMax]));
+  const grid = yTicks.map((tick) => `
+    <line x1="${pad.left}" y1="${yScale(tick)}" x2="${width - pad.right}" y2="${yScale(tick)}" stroke="var(--line-soft)"/>
+    <text x="${pad.left - 8}" y="${yScale(tick) + 4}" text-anchor="end" fill="var(--muted)" font-size="11">${tick.toFixed(1)}</text>
+  `).join("");
+  const xLabels = xTicks.map((tick) => `
+    <text x="${xScale(tick)}" y="${height - 30}" text-anchor="middle" fill="var(--muted)" font-size="11">${formatSignedLag(tick, false)}</text>
+  `).join("");
+  const zeroLine = xMin <= 0 && xMax >= 0 ? `
+    <line x1="${xScale(0)}" y1="${pad.top}" x2="${xScale(0)}" y2="${height - pad.bottom}" stroke="#64748b" stroke-dasharray="4 4"/>
+    <text x="${xScale(0) + 4}" y="${pad.top + 12}" fill="#64748b" font-size="11">lag = 0</text>
+  ` : "";
+  const bestAtRight = bestLag >= xMax;
+  const bestLabelX = xScale(bestLag) + (bestAtRight ? -4 : 4);
+  const bestLabelAnchor = bestAtRight ? "end" : "start";
+  const bestLine = Number.isFinite(bestLag) ? `
+    <line x1="${xScale(bestLag)}" y1="${pad.top}" x2="${xScale(bestLag)}" y2="${height - pad.bottom}" stroke="#d97706" stroke-width="1.5" stroke-dasharray="6 3"/>
+    <text x="${bestLabelX}" y="${pad.top + 13}" text-anchor="${bestLabelAnchor}" fill="#b45309" font-size="11">当前最佳滞后 ${formatSignedLag(bestLag, false)}</text>
+  ` : "";
+  const bestMarkers = bestPoint ? [
+    lagProfileBestMarker(bestPoint, "pearson", xScale, yScale, "#176b87", -22, "P", bestAtRight),
+    lagProfileBestMarker(bestPoint, "spearman", xScale, yScale, "#c2410c", -8, "S", bestAtRight),
+  ].join("") : "";
+
+  panel.className = "lag-profile-panel";
+  panel.innerHTML = `
+    <div class="lag-profile-chart" role="img" aria-label="${escapeHtml(payload.variable)} 的 Pearson 与 Spearman 滞后相关曲线">
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet">
+        ${grid}
+        ${zeroLine}
+        ${bestLine}
+        <path d="${lagProfilePath(points, "pearson", xScale, yScale)}" fill="none" stroke="#176b87" stroke-width="2.3" vector-effect="non-scaling-stroke"/>
+        <path d="${lagProfilePath(points, "spearman", xScale, yScale)}" fill="none" stroke="#c2410c" stroke-width="2.3" stroke-dasharray="7 4" vector-effect="non-scaling-stroke"/>
+        ${lagProfileBoundaryMarkers(points, "pearson", xScale, yScale)}
+        ${lagProfileBoundaryMarkers(points, "spearman", xScale, yScale)}
+        ${bestMarkers}
+        ${xLabels}
+        <text x="${width / 2}" y="${height - 8}" text-anchor="middle" fill="var(--muted)" font-size="12">滞后点数</text>
+        <text x="15" y="${height / 2}" text-anchor="middle" transform="rotate(-90 15 ${height / 2})" fill="var(--muted)" font-size="12">相关系数</text>
+      </svg>
+    </div>
+    <div class="lag-profile-legend">
+      <span><i class="lag-profile-line" style="border-color:#176b87"></i>Pearson 曲线</span>
+      <span><i class="lag-profile-line spearman" style="border-color:#c2410c"></i>Spearman 曲线</span>
+      <span>虚线标记：lag = 0 / 当前最佳滞后</span>
+      <span>红圈：搜索边界点</span>
+    </div>
+    <div class="lag-profile-directions"><span>负值：变量滞后目标</span><span>0：同步变化</span><span>正值：变量领先目标</span></div>
+    <div class="lag-profile-summary">
+      ${lagProfileSummaryItem("同步 Pearson", zeroPoint && zeroPoint.pearson, "correlation")}
+      ${lagProfileSummaryItem("同步 Spearman", zeroPoint && zeroPoint.spearman, "correlation")}
+      ${lagProfileSummaryItem("最佳滞后", Number.isFinite(bestLag) ? formatSignedLag(bestLag) : "-")}
+      ${lagProfileSummaryItem("最佳 Pearson", bestPoint && bestPoint.pearson, "correlation")}
+      ${lagProfileSummaryItem("最佳 Spearman", bestPoint && bestPoint.spearman, "correlation")}
+      ${lagProfileSummaryItem("主导方法", displayCellValue("method", payload.method))}
+      ${lagProfileSummaryItem("是否触及边界", boundary ? "是" : "否")}
+    </div>
+    ${lagProfileTimeHint(bestLag, payload.sampling_interval_minutes)}
+    <p class="lag-profile-message">${escapeHtml(correlationConsistencyMessage(bestPoint && bestPoint.pearson, bestPoint && bestPoint.spearman))}</p>
+    ${boundary ? '<p class="lag-profile-warning">最佳滞后触及搜索边界，当前最大滞后点数可能偏小，建议结合工艺时间尺度复核。</p>' : ""}
+    <p class="help">曲线来自本次主筛查已生成的 lag_scores.csv，仅用于人工观察，不参与评分、排序或因果判断。P/Q 值在大样本与时序自相关下仅供参考。</p>
+  `;
+}
+
+function lagProfilePath(points, column, xScale, yScale) {
+  let path = "";
+  let drawing = false;
+  for (const point of points) {
+    const value = point[column];
+    if (value === null || !Number.isFinite(value)) {
+      drawing = false;
+      continue;
+    }
+    path += `${drawing ? " L" : "M"}${xScale(point.lag).toFixed(2)},${yScale(value).toFixed(2)}`;
+    drawing = true;
+  }
+  return path;
+}
+
+function lagProfileBoundaryMarkers(points, column, xScale, yScale) {
+  return points.filter((point) => point.lag_boundary_flag && point[column] !== null).map((point) => `
+    <circle cx="${xScale(point.lag)}" cy="${yScale(point[column])}" r="4.5" fill="var(--panel)" stroke="#dc2626" stroke-width="2"><title>搜索边界点；${columnLabel(column)} ${formatLagCorrelation(point[column])}</title></circle>
+  `).join("");
+}
+
+function lagProfileBestMarker(point, column, xScale, yScale, color, labelOffset, prefix, alignRight) {
+  const value = point[column];
+  if (value === null || !Number.isFinite(value)) return "";
+  const x = xScale(point.lag);
+  const y = yScale(value);
+  const labelX = x + (alignRight ? -6 : 6);
+  const anchor = alignRight ? "end" : "start";
+  return `<circle cx="${x}" cy="${y}" r="3" fill="${color}"/><text x="${labelX}" y="${y + labelOffset}" text-anchor="${anchor}" fill="${color}" font-size="11">${prefix} ${formatLagCorrelation(value)}</text>`;
+}
+
+function lagProfileSummaryItem(label, value, type = "text") {
+  const text = type === "correlation" ? formatLagCorrelation(value) : String(value ?? "-");
+  return `<div><strong>${escapeHtml(label)}</strong><span>${escapeHtml(text)}</span></div>`;
+}
+
+function formatLagCorrelation(value) {
+  const number = lagProfileNumber(value);
+  return number === null ? "-" : number.toFixed(3);
+}
+
+function lagProfileNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatSignedLag(value, includeUnit = true) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  const signed = number > 0 ? `+${number}` : String(number);
+  return includeUnit ? `${signed} 点` : signed;
+}
+
+function lagDirectionText(lag) {
+  return lag > 0 ? "变量领先目标" : lag < 0 ? "变量滞后目标" : "同步变化";
+}
+
+function lagProfileTimeHint(bestLag, intervalMinutes) {
+  const interval = Number(intervalMinutes);
+  if (!Number.isFinite(bestLag) || !Number.isFinite(interval) || interval <= 0) return "";
+  const points = Math.abs(bestLag);
+  const minutes = points * interval;
+  return `<p class="lag-profile-message">时间换算：${points} 点 ≈ ${minutes} 分钟（${lagDirectionText(bestLag)}）。</p>`;
+}
+
+function correlationConsistencyMessage(pearson, spearman) {
+  const p = lagProfileNumber(pearson);
+  const s = lagProfileNumber(spearman);
+  if (p === null || s === null) return "Pearson 或 Spearman 数据缺失，方法一致性暂无法判断。";
+  const pStrength = Math.abs(p);
+  const sStrength = Math.abs(s);
+  const bothAwayFromZero = pStrength >= 0.05 && sStrength >= 0.05;
+  if (bothAwayFromZero && Math.sign(p) !== Math.sign(s)) {
+    return "Pearson 与 Spearman 方向不一致，关系可能不稳定，建议检查异常点、工况混合和时间对齐。";
+  }
+  if (sStrength - pStrength >= 0.15) {
+    return "Spearman 明显高于 Pearson，可能存在单调非线性、异常值影响或分群结构，建议结合散点图复核。";
+  }
+  if (pStrength - sStrength >= 0.15) {
+    return "Pearson 明显高于 Spearman，可能受少数极端值、局部线性关系或数据分群影响，建议结合散点图复核。";
+  }
+  if (Math.sign(p) === Math.sign(s) && Math.abs(p - s) < 0.15) {
+    return "Pearson 与 Spearman 方向和强度基本一致。";
+  }
+  return "Pearson 与 Spearman 存在一定差异，建议结合散点图、工况分层和时间对齐复核。";
 }
 
 
@@ -4425,7 +4836,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "driver_rank", "driver_priority_score", "candidate_class", "evidence_coverage_status", "lag", "direction", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "driver_rank", "driver_priority_score", "dominant_corr", "method", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -4731,6 +5142,9 @@ function openDetailModal(row, options = {}) {
   el("detailModalBody").innerHTML = buildDetailModalBody(row, options);
   modal.hidden = false;
   modal.classList.add("open");
+  if ("driver_priority_score" in (row || {}) && "final_score" in (row || {})) {
+    loadLagProfile(row);
+  }
   el("detailModalClose").focus();
 }
 
@@ -4739,6 +5153,9 @@ function closeDetailModal() {
   if (!modal) return;
   modal.classList.remove("open");
   modal.hidden = true;
+  lagProfileRequestSerial += 1;
+  lastLagProfile = null;
+  clearTimeout(lagProfileResizeTimer);
   if (lastModalTrigger && typeof lastModalTrigger.focus === "function") {
     lastModalTrigger.focus();
   }
@@ -4989,14 +5406,36 @@ const THREE_DECIMAL_SCORE_COLUMNS = new Set([
   "evidence_completeness", "evidence_confidence", "data_quality_score",
   "evidence_strength", "evidence_score", "evidence_score_low", "evidence_score_high",
 ]);
+const THREE_DECIMAL_CORRELATION_COLUMNS = new Set([
+  "dominant_corr", "pearson", "spearman", "pearson_r2", "spearman_r2",
+]);
+const SIGNIFICANCE_COLUMNS = new Set([
+  "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value",
+]);
 
 function formatCellValue(column, value) {
   const scoreValue = value === null || value === undefined || value === "" ? NaN : Number(value);
+  if (column === "lag_boundary_flag" && typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
   if (THREE_DECIMAL_SCORE_COLUMNS.has(column) && Number.isFinite(scoreValue)) {
     return scoreValue.toFixed(3);
   }
+  if (THREE_DECIMAL_CORRELATION_COLUMNS.has(column) && Number.isFinite(scoreValue)) {
+    return scoreValue.toFixed(3);
+  }
+  if (SIGNIFICANCE_COLUMNS.has(column) && Number.isFinite(scoreValue)) {
+    return scoreValue.toPrecision(3);
+  }
+  if (column === "n" && Number.isFinite(scoreValue)) {
+    return String(Math.round(scoreValue));
+  }
   const text = String(value ?? "");
   const maps = {
+    method: {
+      pearson: "Pearson",
+      spearman: "Spearman",
+    },
     innovation_sign: {
       "1": "正向",
       "-1": "负向",
@@ -5357,7 +5796,7 @@ function columnLabel(column) {
     target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",
-    lag_boundary_flag: "滞后边界命中",
+    lag_boundary_flag: "是否触及滞后边界",
     low_model_lift_flag: "低模型增益",
     poor_data_quality_flag: "数据质量较差",
     residual_collinearity_flag: "残差共线性风险",
@@ -5366,12 +5805,21 @@ function columnLabel(column) {
     weak_risk_count: "弱风险数量",
     risk_level: "风险等级",
     human_reason: "风险说明",
-    pearson: "Pearson",
-    spearman: "Spearman",
+    pearson: "Pearson 相关系数",
+    spearman: "Spearman 相关系数",
+    dominant_corr: "主导相关系数",
+    pearson_p: "Pearson P 值",
+    spearman_p: "Spearman P 值",
+    pearson_q: "Pearson Q 值",
+    spearman_q: "Spearman Q 值",
+    corr_q_value: "主导方法 Q 值",
+    pearson_r2: "Pearson R²",
+    spearman_r2: "Spearman ρ²",
+    n: "有效样本数",
     score: "得分",
     p_value: "P值",
     r2: "R²",
-    method: "方法",
+    method: "主导相关方法",
     feature: "模型特征",
     importance: "重要性",
     residual_p_value: "残差P值",
@@ -5513,6 +5961,7 @@ function clearOptionalElement(targetId) {
 }
 
 function reset() {
+  clearLagProfileCache();
   fileId = "";
   currentRunId = "";
   recognizedColumns = [];

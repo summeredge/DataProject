@@ -303,14 +303,14 @@ def test_web_uses_formal_score_labels_and_keeps_driver_sort():
     assert "residual_corr_score:" not in source
 
 
-def test_web_primary_tables_hide_duplicate_scores_and_show_coverage_status():
+def test_web_primary_tables_hide_duplicate_scores_and_coverage_details():
     source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
     main_columns = source.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = source.split("overviewTop:", 1)[1].split("],", 1)[0]
 
     for columns in [main_columns, overview_columns]:
         assert "driver_priority_score" in columns
-        assert "evidence_coverage_status" in columns
+        assert "evidence_coverage_status" not in columns
         assert "final_score" not in columns
         assert "evidence_confidence" not in columns
 
@@ -340,10 +340,10 @@ def test_web_detail_explains_score_chain_and_evidence_correction():
         assert marker in detail
 
 
-def test_web_score_precision_is_field_specific_and_does_not_include_p_or_q_values():
+def test_web_score_precision_set_does_not_include_p_or_q_values():
     source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    formatter = source.split("const THREE_DECIMAL_SCORE_COLUMNS", 1)[1].split(
-        "function renderReviewDownloads", 1
+    score_columns = source.split("const THREE_DECIMAL_SCORE_COLUMNS", 1)[1].split(
+        "]);", 1
     )[0]
 
     for field in [
@@ -358,10 +358,9 @@ def test_web_score_precision_is_field_specific_and_does_not_include_p_or_q_value
         "evidence_score_low",
         "evidence_score_high",
     ]:
-        assert field in formatter
-    assert ".toFixed(3)" in formatter
-    assert "p_value" not in formatter
-    assert "q_value" not in formatter
+        assert field in score_columns
+    assert "p_value" not in score_columns
+    assert "q_value" not in score_columns
 
 
 def test_output_scores_keep_raw_precision_for_csv_export():

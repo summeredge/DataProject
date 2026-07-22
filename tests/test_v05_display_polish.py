@@ -92,7 +92,7 @@ def test_table_width_uses_content_fit_with_page_maximum():
 
 def test_overview_recommendations_default_to_driver_rank_ascending():
     assert 'tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };' in INDEX_HTML
-    assert 'overviewTop: ["variable", "driver_rank", "driver_priority_score", "candidate_class", "evidence_coverage_status"' in INDEX_HTML
+    assert 'overviewTop: ["variable", "driver_rank", "driver_priority_score", "dominant_corr", "method"' in INDEX_HTML
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
     assert "final_score" not in overview_columns
     assert "evidence_confidence" not in overview_columns

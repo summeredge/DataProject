@@ -1059,18 +1059,73 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
             final.loc[confirmed, "driver_priority_factor"],
             CLASS_PRIORITY_FACTORS["closed_loop_related"],
         )
+    final = _finalize_driver_ranking(
+        final,
+        force_include_variables=force_include_variables,
+        top_k=top_k,
+        control_columns=control_columns,
+        candidate_decision_records=candidate_decision_records,
+        primary_rank_column=PRIMARY_RANK_COLUMN,
+    )
+    final = final.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable")
+    if top_k is not None and not final["force_included"].any():
+        final = final.head(top_k)
+
+    for c in cols:
+        if c not in final.columns:
+            final[c] = np.nan
+    return final.reset_index(drop=True)[cols]
+
+
+def reorder_ranked_features(
+    ranked_features: pd.DataFrame,
+    closed_loop_evidence: pd.DataFrame | None = None,
+    candidate_decision_records: pd.DataFrame | None = None,
+    force_include_variables: list[str] | None = None,
+    top_k: int | None = None,
+    control_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Reapply the driver-ranking tail to persisted analysis results only."""
+    if ranked_features.empty:
+        return ranked_features.copy()
+    output_columns = list(ranked_features.columns)
+    final = ranked_features.copy()
+    if closed_loop_evidence is not None and {"variable", "closed_loop_evidence_level"}.issubset(closed_loop_evidence.columns):
+        evidence = closed_loop_evidence[["variable", "closed_loop_evidence_level"]].drop_duplicates("variable")
+        final = final.drop(columns=["closed_loop_evidence_level"], errors="ignore").merge(evidence, on="variable", how="left")
+        confirmed = final["closed_loop_evidence_level"].eq("confirmed")
+        final.loc[confirmed, "candidate_class"] = "closed_loop_related"
+        final.loc[confirmed, "driver_priority_factor"] = np.minimum(
+            final.loc[confirmed, "driver_priority_factor"],
+            CLASS_PRIORITY_FACTORS["closed_loop_related"],
+        )
+    final = _finalize_driver_ranking(
+        final,
+        force_include_variables=force_include_variables,
+        top_k=top_k,
+        control_columns=control_columns,
+        candidate_decision_records=candidate_decision_records,
+    )
+    return final.reset_index(drop=True).reindex(columns=output_columns)
+
+
+def _finalize_driver_ranking(
+    final: pd.DataFrame,
+    force_include_variables: list[str] | None = None,
+    top_k: int | None = None,
+    control_columns: list[str] | None = None,
+    candidate_decision_records: pd.DataFrame | None = None,
+    primary_rank_column: str = PRIMARY_RANK_COLUMN,
+) -> pd.DataFrame:
+    final = final.copy()
     if candidate_decision_records is not None and {"variable", "new_status"}.issubset(candidate_decision_records.columns):
         decisions = candidate_decision_records[["variable", "new_status"]].drop_duplicates("variable", keep="last")
-        final = final.merge(decisions, on="variable", how="left")
+        final = final.drop(columns=["new_status"], errors="ignore").merge(decisions, on="variable", how="left")
         confirmed_recommendation = final["new_status"].eq("confirmed_recommendation")
         closed_loop_confirmed = final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed")
         final.loc[confirmed_recommendation & ~closed_loop_confirmed, "driver_priority_factor"] = 1.0
-    final["driver_priority_score"] = (
-        final["final_score"] * final["driver_priority_factor"]
-    ).clip(0, 1)
-    final["driver_rank"] = final["driver_priority_score"].rank(
-        method="first", ascending=False
-    ).astype(int)
+    final["driver_priority_score"] = (final["final_score"] * final["driver_priority_factor"]).clip(0, 1)
+    final["driver_rank"] = final["driver_priority_score"].rank(method="first", ascending=False).astype(int)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
@@ -1094,24 +1149,23 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         final.loc[excluded, "recommended_action"] = "人工排除，不进入当前推荐列表"
         final.loc[needs_review, "recommended_use"] = "manual_review_required"
         final.loc[needs_review, "recommended_action"] = "人工标记需复核"
-        final.loc[confirmed_recommendation & ~final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed"), "recommended_use"] = "manual_confirmed_recommendation"
-        final.loc[confirmed_recommendation & ~final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed"), "recommended_action"] = "人工确认推荐"
-
+        non_closed = ~final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed")
+        final.loc[confirmed_recommendation & non_closed, "recommended_use"] = "manual_confirmed_recommendation"
+        final.loc[confirmed_recommendation & non_closed, "recommended_action"] = "人工确认推荐"
     if top_k is not None:
         rank_base = final
         if "new_status" in final.columns:
             rank_base = rank_base[~rank_base["new_status"].eq("excluded_recommendation")]
         if control_set:
-            rank_base = final[~final["variable"].astype(str).isin(control_set)]
-        top = rank_base.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable").head(top_k)
+            rank_base = rank_base[~rank_base["variable"].astype(str).isin(control_set)]
+        top = rank_base.sort_values(primary_rank_column, ascending=True, kind="stable").head(top_k)
         forced_rows = final[final["force_included"]]
+        if "new_status" in final.columns:
+            forced_rows = forced_rows[~forced_rows["new_status"].eq("excluded_recommendation")]
         final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
-    final = final.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable")
-
-    for c in cols:
-        if c not in final.columns:
-            final[c] = np.nan
-    return final.reset_index(drop=True)[cols]
+    elif "new_status" in final.columns:
+        final = final[~final["new_status"].eq("excluded_recommendation")]
+    return final.sort_values(primary_rank_column, ascending=True, kind="stable")
 
 
 def _grade_candidate(row: pd.Series) -> str:

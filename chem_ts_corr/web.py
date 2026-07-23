@@ -79,6 +79,7 @@ DOWNLOAD_FILES = {
     "closed_loop_evidence.csv",
     "candidate_decision_records.json",
     "reordered_recommendations.csv",
+    "recommended_candidates_reordered.csv",
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
@@ -1907,7 +1908,7 @@ def _read_candidate_decision_records(output_dir: Path) -> list[dict[str, str]]:
 
 def _update_candidate_decision_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     from chem_ts_corr.report import build_recommended_candidates
-    from chem_ts_corr.screening import final_ranked_features
+    from chem_ts_corr.screening import reorder_ranked_features
 
     form = _multipart_form(handler)
     output_dir = _resolve_run_dir(_field(form, "run_id"))
@@ -1921,19 +1922,15 @@ def _update_candidate_decision_response(handler: BaseHTTPRequestHandler) -> dict
     records = _read_candidate_decision_records(output_dir)
     old_status = next((item["new_status"] for item in reversed(records) if item["variable"] == variable), "unknown")
     records.append({"variable": variable, "old_status": old_status, "new_status": status, "source": "result_page", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
-    (output_dir / "candidate_decision_records.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     config = _read_run_config(output_dir)
-    base = original.rename(columns={"raw_corr": "score"}).copy()
-    if "raw_corr" in base.columns:
-        base = base.drop(columns=["raw_corr"])
-    reordered = final_ranked_features(
-        base, _safe_read_result_csv(output_dir / "residual_corr_scores.csv"), base,
-        _safe_read_result_csv(output_dir / "model_lift_scores.csv"), _safe_read_result_csv(output_dir / "risk_flags.csv"),
-        _safe_read_result_csv(output_dir / "lag_peak_quality.csv"), _safe_read_result_csv(output_dir / "rolling_corr_scores.csv"),
-        force_include_variables=config.force_include_variables, top_k=config.top_k,
-        control_columns=list(set(config.residual_control_columns or []) | set(config.capacity_columns or [])) if config.exclude_control_columns_from_candidates else [], closed_loop_evidence=_safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
+    reordered = reorder_ranked_features(
+        original,
+        closed_loop_evidence=_safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
         candidate_decision_records=pd.DataFrame(records),
+        force_include_variables=config.force_include_variables, top_k=config.top_k,
+        control_columns=list(set(config.residual_control_columns or []) | set(config.capacity_columns or [])) if config.exclude_control_columns_from_candidates else [],
     )
+    (output_dir / "candidate_decision_records.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     reordered.to_csv(output_dir / "reordered_recommendations.csv", index=False, encoding="utf-8-sig")
     build_recommended_candidates(reordered).to_csv(output_dir / "recommended_candidates_reordered.csv", index=False, encoding="utf-8-sig")
     payload = _build_result_payload(output_dir.name, output_dir, config)
@@ -2661,6 +2658,18 @@ INDEX_HTML = r"""<!doctype html>
         <section id="candidatesTab">
           <h2>候选变量</h2>
           <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
+          <div class="actions" id="candidateDecisionControls" hidden>
+            <label>变量<select id="candidateDecisionVariable"></select></label>
+            <label>人工推荐决策
+              <select id="candidateDecisionStatus">
+                <option value="unknown">未确认</option>
+                <option value="confirmed_recommendation">确认推荐</option>
+                <option value="excluded_recommendation">排除推荐</option>
+                <option value="needs_review">标记需复核</option>
+              </select>
+            </label>
+            <button id="applyCandidateDecision" type="button">保存并重排</button>
+          </div>
           <h3>结果质量提示</h3>
           <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
           <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
@@ -2991,6 +3000,7 @@ el("copyLlmReport").addEventListener("click", copyLlmReport);
 
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
+el("applyCandidateDecision").addEventListener("click", updateCandidateDecision);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
@@ -3456,6 +3466,7 @@ function renderAnalysisResult(data) {
   renderOverview(data.overview || {});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
   renderScreeningQualityHints(lastRows);
+  renderCandidateDecisionControls(lastRows, data.candidateDecisionRecords || []);
   tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
   renderTable(lastRows);
   tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };
@@ -3483,6 +3494,44 @@ function renderAnalysisResult(data) {
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
   updateXgbRunAvailability();
+}
+
+function renderCandidateDecisionControls(rows, records) {
+  const controls = el("candidateDecisionControls");
+  const variableSelect = el("candidateDecisionVariable");
+  const statusSelect = el("candidateDecisionStatus");
+  if (!rows.length) {
+    controls.hidden = true;
+    return;
+  }
+  const selectedVariable = variableSelect.value;
+  const latestStatus = new Map();
+  records.forEach((record) => latestStatus.set(String(record.variable), record.new_status));
+  variableSelect.innerHTML = rows.map((row) => `<option value="${escapeHtml(String(row.variable))}">${escapeHtml(String(row.variable))}</option>`).join("");
+  variableSelect.value = rows.some((row) => String(row.variable) === selectedVariable) ? selectedVariable : String(rows[0].variable);
+  statusSelect.value = latestStatus.get(variableSelect.value) || "unknown";
+  variableSelect.onchange = () => {
+    statusSelect.value = latestStatus.get(variableSelect.value) || "unknown";
+  };
+  controls.hidden = false;
+}
+
+async function updateCandidateDecision() {
+  if (!currentRunId) return setStatus("请先完成主筛查。", "error");
+  const form = new FormData();
+  form.append("run_id", currentRunId);
+  form.append("variable", el("candidateDecisionVariable").value);
+  form.append("status", el("candidateDecisionStatus").value);
+  el("applyCandidateDecision").disabled = true;
+  try {
+    const data = await postForm("/api/update_candidate_decision", form);
+    renderAnalysisResult(data);
+    setStatus("人工推荐决策已保存并完成重排。", "success");
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  } finally {
+    el("applyCandidateDecision").disabled = false;
+  }
 }
 
 function sleep(ms) {

@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.closed_loop import build_closed_loop_evidence
 from chem_ts_corr.data import drop_excluded_columns, load_timeseries_csv
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_numeric_frame
@@ -51,11 +50,7 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, fl
         rolling_corr_scores=tables.rolling_corr_scores,
     )
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    build_closed_loop_evidence(
-        tables.risk_flags,
-        config.manual_closed_loop_variables,
-        config.manual_non_closed_loop_variables,
-    ).to_csv(
+    tables.closed_loop_evidence.to_csv(
         config.output_dir / "closed_loop_evidence.csv",
         index=False,
         encoding="utf-8-sig",

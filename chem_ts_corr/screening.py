@@ -896,7 +896,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     return pd.DataFrame(rows, columns=cols)
 
 
-def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
+def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -1050,6 +1050,15 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["driver_priority_factor"] = (
         final["candidate_class"].map(CLASS_PRIORITY_FACTORS).fillna(0.80)
     )
+    if closed_loop_evidence is not None and {"variable", "closed_loop_evidence_level"}.issubset(closed_loop_evidence.columns):
+        evidence = closed_loop_evidence[["variable", "closed_loop_evidence_level"]].drop_duplicates("variable")
+        final = final.merge(evidence, on="variable", how="left")
+        confirmed = final["closed_loop_evidence_level"].eq("confirmed")
+        final.loc[confirmed, "candidate_class"] = "closed_loop_related"
+        final.loc[confirmed, "driver_priority_factor"] = np.minimum(
+            final.loc[confirmed, "driver_priority_factor"],
+            CLASS_PRIORITY_FACTORS["closed_loop_related"],
+        )
     final["driver_priority_score"] = (
         final["final_score"] * final["driver_priority_factor"]
     ).clip(0, 1)
@@ -1064,6 +1073,13 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     if control_set:
         final.loc[final["variable"].astype(str).isin(control_set), "recommended_use"] = "control_variable_reference"
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
+    if "closed_loop_evidence_level" in final.columns:
+        confirmed = final["closed_loop_evidence_level"].eq("confirmed")
+        conflict = final["closed_loop_evidence_level"].eq("conflict")
+        final.loc[confirmed, "recommended_use"] = "closed_loop_confirmed"
+        final.loc[confirmed, "recommended_action"] = "已确认闭环控制关系，不作为上游驱动优先候选"
+        final.loc[conflict, "recommended_use"] = "closed_loop_conflict"
+        final.loc[conflict, "recommended_action"] = "人工确认非闭环，但自动判断存在闭环嫌疑，需人工复核"
 
     if top_k is not None:
         rank_base = final
@@ -1128,6 +1144,8 @@ def _recommended_action(row: pd.Series) -> str:
         "prediction_candidate": "可作为预测候选",
         "capacity_driven": "疑似共同负荷驱动",
         "closed_loop_suspect": "疑似闭环反馈",
+        "closed_loop_confirmed": "已确认闭环控制关系，不作为上游驱动优先候选",
+        "closed_loop_conflict": "人工确认非闭环，但自动判断存在闭环嫌疑，需人工复核",
         "formula_coupled_reference": "疑似公式耦合，仅参考",
         "unstable_candidate": "跨工况/时间不稳定，建议复核",
         "poor_quality_variable": "数据质量风险，建议剔除",

@@ -113,11 +113,25 @@ def test_evidence_output_does_not_change_ranked_or_risk_flags(tmp_path: Path):
     run_analysis(baseline)
     run_analysis(annotated)
 
-    for filename in ["ranked_features.csv", "risk_flags.csv"]:
+    for filename in ["risk_flags.csv"]:
         pd.testing.assert_frame_equal(
             pd.read_csv(baseline.output_dir / filename),
             pd.read_csv(annotated.output_dir / filename),
         )
+    baseline_ranked = pd.read_csv(baseline.output_dir / "ranked_features.csv").set_index("variable").sort_index()
+    annotated_ranked = pd.read_csv(annotated.output_dir / "ranked_features.csv").set_index("variable").sort_index()
+    allowed = {
+        "candidate_class",
+        "driver_priority_factor",
+        "driver_priority_score",
+        "driver_rank",
+        "recommended_use",
+        "recommended_action",
+    }
+    pd.testing.assert_frame_equal(
+        baseline_ranked[[column for column in baseline_ranked.columns if column not in allowed]],
+        annotated_ranked[[column for column in annotated_ranked.columns if column not in allowed]],
+    )
     evidence = pd.read_csv(annotated.output_dir / "closed_loop_evidence.csv")
     assert evidence.columns.tolist() == CLOSED_LOOP_EVIDENCE_COLUMNS
     assert not evidence.empty
@@ -146,8 +160,8 @@ def test_old_run_without_evidence_file_returns_empty_evidence_payload(tmp_path: 
         assert marker in web.INDEX_HTML
 
 
-def test_screening_does_not_read_closed_loop_evidence_fields():
+def test_screening_only_reads_fused_closed_loop_evidence():
     source = (Path(__file__).parents[1] / "chem_ts_corr" / "screening.py").read_text(encoding="utf-8")
 
-    for field in CLOSED_LOOP_EVIDENCE_COLUMNS[1:]:
+    for field in ["manual_closed_loop_variables", "manual_non_closed_loop_variables"]:
         assert field not in source

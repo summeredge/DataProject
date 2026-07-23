@@ -8,6 +8,7 @@ import pandas as pd
 
 from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.closed_loop import build_closed_loop_evidence
 from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import fit_explainable_model
@@ -45,6 +46,7 @@ class AnalysisTables:
     model_lift_scores: pd.DataFrame
     lag_peak_quality: pd.DataFrame
     rolling_corr_scores: pd.DataFrame
+    closed_loop_evidence: pd.DataFrame
     metrics: dict[str, float | str]
 
 
@@ -229,6 +231,11 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         )
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
+    closed_loop_evidence = build_closed_loop_evidence(
+        risks,
+        config.manual_closed_loop_variables,
+        config.manual_non_closed_loop_variables,
+    )
     ranked = final_ranked_features(
         raw_ranked,
         residual,
@@ -240,6 +247,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         force_include_variables=config.force_include_variables,
         top_k=config.top_k,
         control_columns=list(excluded_controls),
+        closed_loop_evidence=closed_loop_evidence,
     )
     candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
 
@@ -255,7 +263,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
 
     metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "skip_model_lift": str(config.skip_model_lift), "skip_rolling_corr": str(config.skip_rolling_corr), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
-    return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
+    return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, closed_loop_evidence, metrics)
 
 
 def _best_lag_map(ranked: pd.DataFrame) -> dict[str, int]:

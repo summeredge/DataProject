@@ -579,8 +579,6 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
         "manual_non_closed_loop_variables",
         "confirmed_closed_loop",
         "confirmed_not_closed_loop",
-        "closed_loop_evidence",
-        "closed_loop_conflict",
         "auto_closed_loop_score",
         "update_risk_annotations",
         "original_driver_rank",

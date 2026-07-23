@@ -220,7 +220,7 @@ def test_invalid_manual_request_creates_no_background_task_or_run_directory(
     assert not runs_dir.exists()
 
 
-def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
+def test_manual_annotations_only_change_allowed_ranking_outputs(tmp_path: Path):
     settings = {
         "segment_column": "load",
         "capacity_columns": ["load"],
@@ -252,7 +252,6 @@ def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
         "original_driver_rank",
     }
     for filename in [
-        "ranked_features.csv",
         "risk_flags.csv",
         "residual_corr_scores.csv",
         "regime_scores.csv",
@@ -274,30 +273,19 @@ def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
         "recommended_use",
         "recommended_action",
     }.issubset(ranked.columns)
-    assert_frame = pd.read_csv(baseline.output_dir / "ranked_features.csv", encoding="utf-8-sig")
+    baseline_ranked = pd.read_csv(baseline.output_dir / "ranked_features.csv", encoding="utf-8-sig")
+    allowed = {
+        "candidate_class",
+        "driver_priority_factor",
+        "driver_priority_score",
+        "driver_rank",
+        "recommended_use",
+        "recommended_action",
+    }
+    unaffected = [column for column in baseline_ranked.columns if column not in allowed and column != "variable"]
     pd.testing.assert_frame_equal(
-        assert_frame[
-            [
-                "final_score",
-                "candidate_class",
-                "driver_priority_factor",
-                "driver_priority_score",
-                "driver_rank",
-                "recommended_use",
-                "recommended_action",
-            ]
-        ],
-        ranked[
-            [
-                "final_score",
-                "candidate_class",
-                "driver_priority_factor",
-                "driver_priority_score",
-                "driver_rank",
-                "recommended_use",
-                "recommended_action",
-            ]
-        ],
+        baseline_ranked.set_index("variable").sort_index()[unaffected],
+        ranked.set_index("variable").sort_index()[unaffected],
     )
 
 
@@ -308,7 +296,7 @@ def test_web_ui_contains_manual_annotation_controls_and_lifecycle_contract():
         "已确认闭环/控制相关变量",
         "已确认非闭环变量",
         "该确认针对当前目标变量",
-        "本阶段仅保存确认信息，不改变评分和排名",
+        "已确认闭环会降低工程推荐优先级",
         "fillManualAnnotationOptions",
         "getManualClosedLoopSelection",
         "setManualClosedLoopSelection",
@@ -331,9 +319,6 @@ def test_screening_does_not_read_manual_annotations_or_future_fields():
         "confirmed_closed_loop",
         "confirmed_not_closed_loop",
         "manual_closed_loop_status",
-        "closed_loop_evidence_level",
-        "closed_loop_evidence_source",
-        "closed_loop_conflict",
         "auto_closed_loop_score",
         "original_driver_rank",
     ]:

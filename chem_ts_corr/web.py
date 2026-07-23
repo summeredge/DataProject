@@ -2578,7 +2578,7 @@ INDEX_HTML = r"""<!doctype html>
             <div id="manualNonClosedLoopOptions" class="multi-options"></div>
           </details>
         </label>
-        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系。本阶段仅保存确认信息，不改变评分和排名。</div>
+        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系。已确认闭环会降低工程推荐优先级，但不改变统计评分或自动风险判断。</div>
         <div class="help">已确认非闭环变量仅表示不应因闭环风险降级，不代表该变量一定是上游根因。</div>
       </div>
       <div id="status" class="status info" role="status" aria-live="polite"></div>
@@ -6005,6 +6005,8 @@ function formatValue(value) {
       state_indicator: "状态指示量",
       capacity_driven: "共同负荷驱动",
       closed_loop_suspect: "疑似闭环反馈",
+      closed_loop_confirmed: "已确认闭环",
+      closed_loop_conflict: "闭环判断冲突",
       unstable_candidate: "不稳定候选",
       poor_quality_variable: "低质量变量",
       manual_review_required: "需要人工复核",

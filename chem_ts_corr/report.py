@@ -119,7 +119,7 @@ def build_markdown_summary(
     closed_loop = _risk_subset(risky, "closed_loop_suspect_flag")
     strong = _recommended_subset(ranked_features, "strong_screening_candidate")
     predictive = _recommended_subset(ranked_features, "prediction_candidate")
-    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven","formula_coupled_reference","closed_loop_suspect","unstable_candidate","poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
+    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "closed_loop_suspect", "closed_loop_confirmed", "closed_loop_conflict", "unstable_candidate", "poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
 
     lines = [f"# 四层工业时序筛查摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
@@ -269,7 +269,10 @@ def _format_cell(value: object, column: str = "") -> str:
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
         return pd.DataFrame(columns=["variable","candidate_grade","recommended_use","final_score","fallback_reason"])
-    ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(dtype=str)).isin(["A","B"])].copy()
+    ab = ranked_features[
+        ranked_features.get("candidate_grade", pd.Series(dtype=str)).isin(["A", "B"])
+        & ~ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["closed_loop_confirmed", "closed_loop_conflict"])
+    ].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:
             ab["fallback_reason"] = ""

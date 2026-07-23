@@ -37,9 +37,10 @@ def test_closed_loop_evidence_fuses_manual_and_existing_risk_flags():
     assert evidence.loc["manual_closed_and_auto", "closed_loop_evidence_source"] == "manual_and_automatic"
     assert evidence.loc["manual_non_closed", "closed_loop_evidence_level"] == "rejected"
     assert evidence.loc["conflict", "closed_loop_evidence_level"] == "conflict"
+    assert evidence.loc["conflict", "closed_loop_evidence_source"] == "manual_and_automatic"
     assert bool(evidence.loc["conflict", "closed_loop_conflict"])
     assert evidence.loc["automatic", "closed_loop_evidence_level"] == "suspected"
-    assert evidence.loc["unknown", "closed_loop_evidence_level"] == "none"
+    assert evidence.loc["unknown", "closed_loop_evidence_level"] == "unknown"
     assert json.loads(evidence.loc["conflict", "closed_loop_reason"]) == ["人工确认非闭环", "自动检测存在闭环嫌疑"]
 
 
@@ -59,6 +60,21 @@ def test_closed_loop_evidence_csv_schema_is_frozen():
     evidence = build_closed_loop_evidence(_risk_flags())
 
     assert evidence.columns.tolist() == CLOSED_LOOP_EVIDENCE_COLUMNS
+
+
+def test_manual_only_variable_is_preserved_without_automatic_risk_result():
+    evidence = build_closed_loop_evidence(
+        _risk_flags(),
+        manual_closed_loop_variables=["manual_only"],
+        manual_non_closed_loop_variables=["manual_only_non_closed"],
+    )
+
+    assert evidence["variable"].tolist()[-2:] == ["manual_only", "manual_only_non_closed"]
+    manual_only = evidence.set_index("variable").loc["manual_only"]
+    assert manual_only["manual_closed_loop_status"] == "confirmed_closed_loop"
+    assert manual_only["auto_closed_loop_status"] == "unknown"
+    assert manual_only["closed_loop_evidence_level"] == "confirmed"
+    assert json.loads(manual_only["closed_loop_reason"])[-1] == "未获得自动闭环判断结果"
 
 
 def _analysis_config(tmp_path: Path, output_name: str, **kwargs: object) -> AnalysisConfig:
@@ -115,8 +131,19 @@ def test_old_run_without_evidence_file_returns_empty_evidence_payload(tmp_path: 
     payload = web._build_result_payload("old", config.output_dir, config)
 
     assert payload["closedLoopEvidence"] == []
-    assert "闭环风险证据" in web.INDEX_HTML
-    assert "暂无闭环证据" in web.INDEX_HTML
+    for marker in [
+        "闭环风险证据",
+        "暂无闭环证据",
+        "人工确认",
+        "自动判断",
+        "综合闭环状态",
+        "证据来源",
+        "证据冲突",
+        "判断依据",
+        "人工与自动判断冲突",
+        "reasons.join(\"；\")",
+    ]:
+        assert marker in web.INDEX_HTML
 
 
 def test_screening_does_not_read_closed_loop_evidence_fields():

@@ -5728,6 +5728,17 @@ const SIGNIFICANCE_COLUMNS = new Set([
 
 function formatCellValue(column, value) {
   const scoreValue = value === null || value === undefined || value === "" ? NaN : Number(value);
+  if (column === "closed_loop_conflict") {
+    return value === true || String(value).toLowerCase() === "true" ? "是" : "否";
+  }
+  if (column === "closed_loop_reason") {
+    try {
+      const reasons = JSON.parse(String(value ?? ""));
+      if (Array.isArray(reasons)) return reasons.join("；");
+    } catch (_) {
+      // Older or manually edited results may not contain JSON reasons.
+    }
+  }
   if (column === "lag_boundary_flag" && typeof value === "boolean") {
     return value ? "是" : "否";
   }
@@ -5796,6 +5807,28 @@ function formatCellValue(column, value) {
       weak: "弱",
       medium: "中",
       strong: "强",
+    },
+    manual_closed_loop_status: {
+      confirmed_closed_loop: "已确认闭环",
+      confirmed_not_closed_loop: "已确认非闭环",
+      unknown: "未确认",
+    },
+    auto_closed_loop_status: {
+      suspected_closed_loop: "存在闭环嫌疑",
+      unknown: "未确认",
+    },
+    closed_loop_evidence_level: {
+      confirmed: "已确认闭环",
+      rejected: "已排除闭环风险",
+      suspected: "疑似闭环",
+      conflict: "人工与自动判断冲突",
+      unknown: "未形成判断",
+    },
+    closed_loop_evidence_source: {
+      manual: "人工",
+      automatic: "自动",
+      manual_and_automatic: "人工与自动",
+      none: "无",
     },
   };
   return maps[column]?.[text] || formatValue(value);
@@ -6107,6 +6140,12 @@ function columnLabel(column) {
     strong_formula_leakage_flag: "强公式泄漏",
     common_capacity_driver_flag: "疑似共同负荷驱动",
     closed_loop_suspect_flag: "疑似闭环反馈",
+    manual_closed_loop_status: "人工确认",
+    auto_closed_loop_status: "自动判断",
+    closed_loop_evidence_level: "综合闭环状态",
+    closed_loop_evidence_source: "证据来源",
+    closed_loop_conflict: "证据冲突",
+    closed_loop_reason: "判断依据",
     target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",

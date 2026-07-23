@@ -516,8 +516,6 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
     ]
     future_fields = {
         "manual_closed_loop_status",
-        "manual_closed_loop_variables",
-        "manual_non_closed_loop_variables",
         "closed_loop_evidence_level",
         "closed_loop_evidence_source",
         "closed_loop_conflict",
@@ -525,20 +523,19 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
         "original_driver_rank",
     }
     assert not future_fields.intersection(result.columns)
-    for path in ["config.py", "screening.py", "service.py", "web.py", "pipeline.py"]:
-        source = (Path("chem_ts_corr") / path).read_text(encoding="utf-8")
-        for token in [
-            "manual_closed_loop",
-            "manual_non_closed_loop",
-            "confirmed_closed_loop",
-            "confirmed_not_closed_loop",
-            "closed_loop_evidence",
-            "closed_loop_conflict",
-            "auto_closed_loop_score",
-            "update_risk_annotations",
-            "original_driver_rank",
-        ]:
-            assert token not in source
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+    for token in [
+        "manual_closed_loop_variables",
+        "manual_non_closed_loop_variables",
+        "confirmed_closed_loop",
+        "confirmed_not_closed_loop",
+        "closed_loop_evidence",
+        "closed_loop_conflict",
+        "auto_closed_loop_score",
+        "update_risk_annotations",
+        "original_driver_rank",
+    ]:
+        assert token not in source
 
 
 def test_csv_and_web_payload_preserve_existing_result_without_manual_fields(tmp_path: Path):

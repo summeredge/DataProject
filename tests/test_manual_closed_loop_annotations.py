@@ -62,7 +62,10 @@ def test_manual_closed_loop_annotations_default_to_empty_lists(tmp_path: Path):
     ],
 )
 def test_manual_annotation_list_parser_is_stable(value: str, expected: list[str]):
-    assert web._list_field({"manual_closed_loop_variables": value}, "manual_closed_loop_variables") == expected
+    assert (
+        web._list_field({"manual_closed_loop_variables": value}, "manual_closed_loop_variables")
+        == expected
+    )
     assert web._list_field({}, "manual_closed_loop_variables") == []
 
 
@@ -144,14 +147,18 @@ def test_analyze_request_propagates_manual_annotations_before_background_task(
 
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path / "runs")
     monkeypatch.setattr(web, "_resolve_upload", lambda file_id: config.input_path)
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: {
-        "file_id": "file-id",
-        "encoding": "utf-8-sig",
-        "time_column": "time",
-        "target": "target",
-        "manual_closed_loop_variables": "FCV101.PV，反应器蒸汽阀位,FCV101.PV",
-        "manual_non_closed_loop_variables": "",
-    })
+    monkeypatch.setattr(
+        web,
+        "_multipart_form",
+        lambda handler: {
+            "file_id": "file-id",
+            "encoding": "utf-8-sig",
+            "time_column": "time",
+            "target": "target",
+            "manual_closed_loop_variables": "FCV101.PV，反应器蒸汽阀位,FCV101.PV",
+            "manual_non_closed_loop_variables": "",
+        },
+    )
     monkeypatch.setattr(web.threading, "Thread", RecordingThread)
 
     response = web._analyze_response(object())
@@ -169,14 +176,18 @@ def test_invalid_manual_request_creates_no_background_task_or_run_directory(
     runs_dir = tmp_path / "runs"
     monkeypatch.setattr(web, "RUNS_DIR", runs_dir)
     monkeypatch.setattr(web, "_resolve_upload", lambda file_id: config.input_path)
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: {
-        "file_id": "file-id",
-        "encoding": "utf-8-sig",
-        "time_column": "time",
-        "target": "target",
-        "manual_closed_loop_variables": "FCV101.PV",
-        "manual_non_closed_loop_variables": "FCV101.PV",
-    })
+    monkeypatch.setattr(
+        web,
+        "_multipart_form",
+        lambda handler: {
+            "file_id": "file-id",
+            "encoding": "utf-8-sig",
+            "time_column": "time",
+            "target": "target",
+            "manual_closed_loop_variables": "FCV101.PV",
+            "manual_non_closed_loop_variables": "FCV101.PV",
+        },
+    )
 
     with pytest.raises(ValueError, match="不能同时标记"):
         web._analyze_response(object())
@@ -201,10 +212,20 @@ def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
         before = pd.read_csv(baseline.output_dir / filename, encoding="utf-8-sig")
         after = pd.read_csv(annotated.output_dir / filename, encoding="utf-8-sig")
         pd.testing.assert_frame_equal(before, after)
-        assert not {"manual_closed_loop_variables", "manual_non_closed_loop_variables"}.intersection(after.columns)
+        assert not {
+            "manual_closed_loop_variables",
+            "manual_non_closed_loop_variables",
+        }.intersection(after.columns)
 
     ranked = pd.read_csv(annotated.output_dir / "ranked_features.csv", encoding="utf-8-sig")
-    assert {"final_score", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "recommended_use"}.issubset(ranked.columns)
+    assert {
+        "final_score",
+        "candidate_class",
+        "driver_priority_factor",
+        "driver_priority_score",
+        "driver_rank",
+        "recommended_use",
+    }.issubset(ranked.columns)
 
 
 def test_web_ui_contains_manual_annotation_controls_and_lifecycle_contract():

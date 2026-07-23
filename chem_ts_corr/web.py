@@ -76,6 +76,7 @@ DOWNLOAD_FILES = {
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
+    "closed_loop_evidence.csv",
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
@@ -688,6 +689,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
+    closed_loop_evidence = _safe_read_result_csv(output_dir / "closed_loop_evidence.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
@@ -702,6 +704,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary)),
         "rankedFeatures": _records(display_ranked.head(50)),
         "riskFlags": _records(risky.head(50)),
+        "closedLoopEvidence": _records(closed_loop_evidence.head(200)),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
@@ -2602,6 +2605,9 @@ INDEX_HTML = r"""<!doctype html>
         <h2>前 10 个推荐变量</h2>
         <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低证据覆盖度与修正系数，不会放大其他分项。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
+        <h2>闭环风险证据</h2>
+        <div class="help">汇总人工确认与现有自动风险标记，仅供证据复核，不改变评分、分类或排序。</div>
+        <div id="closedLoopEvidenceTable" class="empty">暂无闭环证据</div>
         <section id="candidatesTab">
           <h2>候选变量</h2>
           <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
@@ -3404,6 +3410,7 @@ function renderAnalysisResult(data) {
   renderTable(lastRows);
   tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
+  renderGenericTable("closedLoopEvidenceTable", data.closedLoopEvidence || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
@@ -5141,6 +5148,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 const GENERIC_TABLE_CORE_COLUMNS = {
   overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
+  closedLoopEvidenceTable: ["variable", "manual_closed_loop_status", "auto_closed_loop_status", "closed_loop_evidence_level", "closed_loop_evidence_source", "closed_loop_conflict", "closed_loop_reason"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -5523,6 +5531,7 @@ function missingText(targetId) {
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
+  if (targetId === "closedLoopEvidenceTable") return "暂无闭环证据";
   return "无可展示结果。";
 }
 
@@ -6348,6 +6357,8 @@ function reset() {
   el("analysisTimingBreakdown").hidden = true;
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
+  el("closedLoopEvidenceTable").className = "empty";
+  el("closedLoopEvidenceTable").textContent = "暂无闭环证据";
   el("screeningQualityHints").className = "empty";
   el("screeningQualityHints").textContent = "完成主筛查后显示结果质量提示。";
   el("table").className = "empty";

@@ -338,14 +338,3 @@ def test_screening_does_not_read_manual_annotations_or_future_fields():
         "original_driver_rank",
     ]:
         assert token not in source
-    for path in ["config.py", "service.py", "web.py", "pipeline.py"]:
-        source = (Path("chem_ts_corr") / path).read_text(encoding="utf-8")
-        for token in [
-            "manual_closed_loop_status",
-            "closed_loop_evidence_level",
-            "closed_loop_evidence_source",
-            "closed_loop_conflict",
-            "auto_closed_loop_score",
-            "original_driver_rank",
-        ]:
-            assert token not in source

@@ -164,6 +164,7 @@ def test_current_closed_loop_auto_detection_contract():
         [
             {"variable": "mv_negative_lag", "score": 0.8, "lag": -1},
             {"variable": "pv_negative_lag", "score": 0.8, "lag": -1},
+            {"variable": "mv_zero_lag", "score": 0.8, "lag": 0},
             {"variable": "mv_positive_lag", "score": 0.8, "lag": 1},
         ]
     )
@@ -175,6 +176,7 @@ def test_current_closed_loop_auto_detection_contract():
         {
             "mv_negative_lag": "MV",
             "pv_negative_lag": "PV",
+            "mv_zero_lag": "MV",
             "mv_positive_lag": "MV",
         },
         [],
@@ -182,6 +184,9 @@ def test_current_closed_loop_auto_detection_contract():
 
     assert risks.loc["mv_negative_lag", "risk_flags"] == "closed_loop_suspect;target_leads_variable"
     assert risks.loc["pv_negative_lag", "risk_flags"] == "target_leads_variable"
+    assert not bool(risks.loc["mv_zero_lag", "closed_loop_suspect_flag"])
+    assert not bool(risks.loc["mv_zero_lag", "target_leads_variable_flag"])
+    assert risks.loc["mv_zero_lag", "risk_flags"] == ""
     assert risks.loc["mv_positive_lag", "risk_flags"] == ""
 
 
@@ -232,6 +237,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             1,
             "A",
             "strong_screening_candidate",
+            "优先进入机理复核",
         ),
         "boundary_signal": (
             "lag_boundary",
@@ -250,6 +256,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             2,
             "A",
             "strong_screening_candidate",
+            "优先进入机理复核",
         ),
         "unstable_signal": (
             "unstable_across_regimes;unstable_over_time",
@@ -268,6 +275,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             3,
             "B",
             "unstable_candidate",
+            "跨工况/时间不稳定，建议复核",
         ),
         "common_load": (
             "common_capacity_driver",
@@ -286,6 +294,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             4,
             "A",
             "capacity_driven",
+            "疑似共同负荷驱动",
         ),
         "mv_negative_lag": (
             "closed_loop_suspect;target_leads_variable",
@@ -304,6 +313,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             5,
             "A",
             "closed_loop_suspect",
+            "疑似闭环反馈",
         ),
         "pv_negative_lag": (
             "target_leads_variable",
@@ -322,6 +332,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             6,
             "A",
             "state_indicator",
+            "更可能是状态指示量",
         ),
         "poor_signal": (
             "poor_data_quality",
@@ -340,6 +351,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             7,
             "D",
             "poor_quality_variable",
+            "数据质量风险，建议剔除",
         ),
         "total_formula": (
             "formula_like;strong_formula_leakage",
@@ -358,6 +370,7 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             8,
             "E",
             "formula_coupled_reference",
+            "疑似公式耦合，仅参考",
         ),
     }
     fields = ["risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level"]
@@ -379,8 +392,45 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
         assert row["driver_rank"] == values[13]
         assert row["candidate_grade"] == values[14]
         assert row["recommended_use"] == values[15]
-    assert result.loc["safe_upstream", "recommended_action"] == "优先进入机理复核"
-    assert result.loc["total_formula", "recommended_action"] == "疑似公式耦合，仅参考"
+        assert row["recommended_action"] == values[16]
+
+
+def test_risk_flags_csv_schema_is_frozen(tmp_path: Path):
+    risk_path = tmp_path / "risk_flags.csv"
+    _golden_inputs()[4].to_csv(risk_path, index=False, encoding="utf-8-sig")
+    frame = pd.read_csv(risk_path, encoding="utf-8-sig")
+
+    assert frame.columns.tolist() == [
+        "variable",
+        "formula_like_flag",
+        "strong_formula_leakage_flag",
+        "common_capacity_driver_flag",
+        "closed_loop_suspect_flag",
+        "target_leads_variable_flag",
+        "unstable_across_regimes_flag",
+        "unstable_over_time_flag",
+        "lag_boundary_flag",
+        "low_model_lift_flag",
+        "poor_data_quality_flag",
+        "residual_collinearity_flag",
+        "data_quality_score",
+        "risk_flags",
+        "risk_count",
+        "strong_risk_count",
+        "weak_risk_count",
+        "risk_level",
+        "human_reason",
+    ]
+    assert not {
+        "manual_closed_loop_variables",
+        "manual_non_closed_loop_variables",
+        "manual_closed_loop_status",
+        "closed_loop_evidence_level",
+        "closed_loop_evidence_source",
+        "closed_loop_conflict",
+        "auto_closed_loop_score",
+        "original_driver_rank",
+    }.intersection(frame.columns)
 
 
 def test_no_manual_input_keeps_golden_result_deterministic_and_statistics_separate():

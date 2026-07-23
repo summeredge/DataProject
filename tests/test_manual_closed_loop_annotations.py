@@ -20,6 +20,7 @@ def _frame(rows: int = 120) -> pd.DataFrame:
             "target": np.sin(values / 8),
             "FCV101.PV": np.sin((values - 2) / 8),
             "反应器蒸汽阀位": np.cos(values / 9),
+            "load": values,
             "note": ["text"] * rows,
         }
     )
@@ -28,17 +29,18 @@ def _frame(rows: int = 120) -> pd.DataFrame:
 def _config(tmp_path: Path, output_name: str, **kwargs: object) -> AnalysisConfig:
     input_path = tmp_path / "input.csv"
     _frame().to_csv(input_path, index=False, encoding="utf-8-sig")
-    return AnalysisConfig(
-        input_path=input_path,
-        time_column="time",
-        target="target",
-        output_dir=tmp_path / output_name,
-        max_lag=3,
-        top_k=10,
-        skip_model_lift=True,
-        skip_rolling_corr=True,
-        **kwargs,
-    )
+    settings: dict[str, object] = {
+        "input_path": input_path,
+        "time_column": "time",
+        "target": "target",
+        "output_dir": tmp_path / output_name,
+        "max_lag": 3,
+        "top_k": 10,
+        "skip_model_lift": True,
+        "skip_rolling_corr": True,
+    }
+    settings.update(kwargs)
+    return AnalysisConfig(**settings)
 
 
 def test_manual_closed_loop_annotations_default_to_empty_lists(tmp_path: Path):
@@ -96,6 +98,29 @@ def test_manual_annotation_backend_rejects_invalid_candidates(
             manual_closed_loop_variables=closed,
             manual_non_closed_loop_variables=non_closed,
         )
+
+
+def test_empty_manual_annotations_do_not_read_data_file(monkeypatch: pytest.MonkeyPatch):
+    calls = 0
+
+    def fail_if_called(*args: object, **kwargs: object) -> tuple[pd.DataFrame, str]:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("empty annotations must not read the data file")
+
+    monkeypatch.setattr(web, "read_timeseries_table", fail_if_called)
+
+    web._validate_manual_closed_loop_annotations(
+        Path("unused.csv"),
+        "utf-8-sig",
+        time_column="time",
+        target="target",
+        excluded_columns=[],
+        manual_closed_loop_variables=[],
+        manual_non_closed_loop_variables=[],
+    )
+
+    assert calls == 0
 
 
 def test_run_config_persists_manual_annotations_in_utf8_and_round_trips(tmp_path: Path):
@@ -196,26 +221,48 @@ def test_invalid_manual_request_creates_no_background_task_or_run_directory(
 
 
 def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
-    baseline = _config(tmp_path, "baseline")
+    settings = {
+        "segment_column": "load",
+        "capacity_columns": ["load"],
+        "residual_control_columns": ["load"],
+        "skip_model_lift": False,
+        "skip_rolling_corr": False,
+    }
+    baseline = _config(tmp_path, "baseline", **settings)
     annotated = _config(
         tmp_path,
         "annotated",
         manual_closed_loop_variables=["FCV101.PV"],
         manual_non_closed_loop_variables=["反应器蒸汽阀位"],
+        **settings,
     )
 
     web._write_run_config(annotated.output_dir, annotated, "file-id")
     run_analysis(baseline)
     run_analysis(annotated)
 
-    for filename in ["ranked_features.csv", "risk_flags.csv"]:
+    forbidden_fields = {
+        "manual_closed_loop_variables",
+        "manual_non_closed_loop_variables",
+        "manual_closed_loop_status",
+        "closed_loop_evidence_level",
+        "closed_loop_evidence_source",
+        "closed_loop_conflict",
+        "auto_closed_loop_score",
+        "original_driver_rank",
+    }
+    for filename in [
+        "ranked_features.csv",
+        "risk_flags.csv",
+        "residual_corr_scores.csv",
+        "regime_scores.csv",
+        "model_lift_scores.csv",
+        "rolling_corr_scores.csv",
+    ]:
         before = pd.read_csv(baseline.output_dir / filename, encoding="utf-8-sig")
         after = pd.read_csv(annotated.output_dir / filename, encoding="utf-8-sig")
         pd.testing.assert_frame_equal(before, after)
-        assert not {
-            "manual_closed_loop_variables",
-            "manual_non_closed_loop_variables",
-        }.intersection(after.columns)
+        assert not forbidden_fields.intersection(after.columns)
 
     ranked = pd.read_csv(annotated.output_dir / "ranked_features.csv", encoding="utf-8-sig")
     assert {
@@ -225,7 +272,33 @@ def test_manual_annotations_do_not_change_analysis_outputs(tmp_path: Path):
         "driver_priority_score",
         "driver_rank",
         "recommended_use",
+        "recommended_action",
     }.issubset(ranked.columns)
+    assert_frame = pd.read_csv(baseline.output_dir / "ranked_features.csv", encoding="utf-8-sig")
+    pd.testing.assert_frame_equal(
+        assert_frame[
+            [
+                "final_score",
+                "candidate_class",
+                "driver_priority_factor",
+                "driver_priority_score",
+                "driver_rank",
+                "recommended_use",
+                "recommended_action",
+            ]
+        ],
+        ranked[
+            [
+                "final_score",
+                "candidate_class",
+                "driver_priority_factor",
+                "driver_priority_score",
+                "driver_rank",
+                "recommended_use",
+                "recommended_action",
+            ]
+        ],
+    )
 
 
 def test_web_ui_contains_manual_annotation_controls_and_lifecycle_contract():

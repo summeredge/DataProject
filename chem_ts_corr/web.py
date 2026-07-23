@@ -578,6 +578,8 @@ def _validate_manual_closed_loop_annotations(
         )
 
     selected = closed + non_closed
+    if not selected:
+        return
     if target in selected:
         raise ValueError(f"人工闭环确认不能包含目标变量：{target}")
     if time_column in selected:

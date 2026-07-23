@@ -66,6 +66,11 @@ HARD_DOWNGRADE_FLAGS = {
     "target_leads_variable",
 }
 
+MANUAL_CLOSED_LOOP_RECOMMENDATIONS = {
+    "closed_loop_confirmed",
+    "closed_loop_conflict",
+}
+
 STATISTICAL_LIMIT_LEVELS = {
     "high_collinearity_risk": "medium",
     "closed_loop_suspect": "medium",
@@ -296,15 +301,20 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, st
         rolling_stability=rolling_stability,
     )
     evidence_level = _evidence_level(score, risk_level, conditional_status)
-    decision = _integrated_decision(
-        evidence_level,
-        risk_level,
-        data_priority,
-        statistical_limit_level,
-        has_hard_downgrade,
-        row=row,
-    )
     integrated_reasons = list(reasons)
+    recommended_use = _text(row.get("recommended_use"))
+    if recommended_use in MANUAL_CLOSED_LOOP_RECOMMENDATIONS:
+        decision = "manual_review_only"
+        integrated_reasons.append(recommended_use)
+    else:
+        decision = _integrated_decision(
+            evidence_level,
+            risk_level,
+            data_priority,
+            statistical_limit_level,
+            has_hard_downgrade,
+            row=row,
+        )
     if has_hard_downgrade:
         integrated_reasons.append("hard_downgrade_risk")
     if decision in {"priority_review_with_statistical_limit", "secondary_review_with_statistical_limit"}:

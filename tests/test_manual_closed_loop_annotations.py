@@ -257,6 +257,8 @@ def test_manual_annotations_only_change_allowed_ranking_outputs(tmp_path: Path):
         "regime_scores.csv",
         "model_lift_scores.csv",
         "rolling_corr_scores.csv",
+        "lag_scores.csv",
+        "lag_peak_quality.csv",
     ]:
         before = pd.read_csv(baseline.output_dir / filename, encoding="utf-8-sig")
         after = pd.read_csv(annotated.output_dir / filename, encoding="utf-8-sig")

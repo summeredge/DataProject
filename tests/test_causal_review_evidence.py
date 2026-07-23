@@ -1,6 +1,8 @@
 import pandas as pd
+import pytest
 
 from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
+from chem_ts_corr.final_review_summary import build_final_review_summary
 
 
 def _ranked(**extra):
@@ -233,6 +235,25 @@ def test_low_risk_strong_evidence_keeps_priority_review():
     assert float(row["evidence_score"]) >= 4
     assert row["statistical_limit_level"] == "none"
     assert row["integrated_review_decision"] == "priority_review"
+
+
+@pytest.mark.parametrize("recommended_use", ["closed_loop_confirmed", "closed_loop_conflict"])
+def test_manual_closed_loop_recommendations_remain_manual_review_only(recommended_use: str):
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
+    ])
+
+    evidence = build_causal_review_evidence(
+        _ranked(candidate_grade="A", recommended_use=recommended_use), conditional
+    )
+    row = evidence.iloc[0]
+    summary = build_final_review_summary(evidence)
+
+    assert row["evidence_score"] >= 4.0
+    assert row["data_priority"] == "high"
+    assert row["integrated_review_decision"] == "manual_review_only"
+    assert recommended_use in row["integrated_review_reason"]
+    assert summary.loc[0, "final_recommendation"] == "manual_review_only"
 
 
 def test_moderate_evidence_with_statistical_limit_records_limit_reason():

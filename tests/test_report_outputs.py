@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from chem_ts_corr.report import write_outputs
+from chem_ts_corr.report import build_recommended_candidates, write_outputs
 
 
 def test_write_outputs_writes_expected_files(tmp_path: Path):
@@ -99,3 +99,14 @@ def test_write_outputs_uses_metrics_top_k_for_near_miss_candidates(tmp_path: Pat
 
     near_miss = pd.read_csv(tmp_path / "near_miss_candidates.csv", encoding="utf-8-sig")
     assert near_miss["variable"].tolist() == ["v2"]
+
+
+def test_recommended_candidates_fallback_excludes_manual_closed_loop_recommendations():
+    ranked = pd.DataFrame(
+        [
+            {"variable": "confirmed", "candidate_grade": "A", "recommended_use": "closed_loop_confirmed", "final_score": 0.9},
+            {"variable": "conflict", "candidate_grade": "A", "recommended_use": "closed_loop_conflict", "final_score": 0.8},
+        ]
+    )
+
+    assert build_recommended_candidates(ranked).empty

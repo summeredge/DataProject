@@ -269,14 +269,15 @@ def _format_cell(value: object, column: str = "") -> str:
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
         return pd.DataFrame(columns=["variable","candidate_grade","recommended_use","final_score","fallback_reason"])
-    ab = ranked_features[
-        ranked_features.get("candidate_grade", pd.Series(dtype=str)).isin(["A", "B"])
-        & ~ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["closed_loop_confirmed", "closed_loop_conflict"])
+    excluded_uses = {"closed_loop_confirmed", "closed_loop_conflict"}
+    eligible = ranked_features[
+        ~ranked_features.get("recommended_use", pd.Series(index=ranked_features.index, dtype=str)).isin(excluded_uses)
     ].copy()
+    ab = eligible[eligible.get("candidate_grade", pd.Series(index=eligible.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:
             ab["fallback_reason"] = ""
         return ab
-    top = ranked_features.head(10).copy()
+    top = eligible.head(10).copy()
     top["fallback_reason"] = "no_A_or_B_candidates"
     return top

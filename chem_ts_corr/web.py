@@ -77,6 +77,8 @@ DOWNLOAD_FILES = {
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
     "closed_loop_evidence.csv",
+    "candidate_decision_records.json",
+    "reordered_recommendations.csv",
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
@@ -199,6 +201,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/analyze":
                 self._send_json(_analyze_response(self))
+                return
+            if self.path == "/api/update_candidate_decision":
+                self._send_json(_update_candidate_decision_response(self))
                 return
             if self.path == "/api/run_granger":
                 self._send_json(_run_granger_response(self))
@@ -682,7 +687,9 @@ def _non_negative_seconds(value: object) -> float:
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    ranked = _safe_read_result_csv(output_dir / "reordered_recommendations.csv")
+    if ranked.empty:
+        ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     display_ranked = _with_correlation_display_fields(ranked)
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
@@ -705,6 +712,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "rankedFeatures": _records(display_ranked.head(50)),
         "riskFlags": _records(risky.head(50)),
         "closedLoopEvidence": _records(closed_loop_evidence.head(200)),
+        "candidateDecisionRecords": _read_candidate_decision_records(output_dir),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
@@ -1888,6 +1896,48 @@ def _overview_payload(
         "rows_after_preprocess": metrics.get("rows_after_preprocess", ""),
         "rows_after_segment": metrics.get("rows_after_segment", ""),
     }
+
+
+def _read_candidate_decision_records(output_dir: Path) -> list[dict[str, str]]:
+    path = output_dir / "candidate_decision_records.json"
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _update_candidate_decision_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    from chem_ts_corr.report import build_recommended_candidates
+    from chem_ts_corr.screening import final_ranked_features
+
+    form = _multipart_form(handler)
+    output_dir = _resolve_run_dir(_field(form, "run_id"))
+    variable = _field(form, "variable").strip()
+    status = _field(form, "status")
+    if status not in {"unknown", "confirmed_recommendation", "excluded_recommendation", "needs_review"}:
+        raise ValueError("无效的候选确认状态")
+    original = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    if variable not in set(original.get("variable", pd.Series(dtype=str)).astype(str)):
+        raise ValueError("候选变量不存在")
+    records = _read_candidate_decision_records(output_dir)
+    old_status = next((item["new_status"] for item in reversed(records) if item["variable"] == variable), "unknown")
+    records.append({"variable": variable, "old_status": old_status, "new_status": status, "source": "result_page", "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    (output_dir / "candidate_decision_records.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    config = _read_run_config(output_dir)
+    base = original.rename(columns={"raw_corr": "score"}).copy()
+    if "raw_corr" in base.columns:
+        base = base.drop(columns=["raw_corr"])
+    reordered = final_ranked_features(
+        base, _safe_read_result_csv(output_dir / "residual_corr_scores.csv"), base,
+        _safe_read_result_csv(output_dir / "model_lift_scores.csv"), _safe_read_result_csv(output_dir / "risk_flags.csv"),
+        _safe_read_result_csv(output_dir / "lag_peak_quality.csv"), _safe_read_result_csv(output_dir / "rolling_corr_scores.csv"),
+        force_include_variables=config.force_include_variables, top_k=config.top_k,
+        control_columns=list(set(config.residual_control_columns or []) | set(config.capacity_columns or [])) if config.exclude_control_columns_from_candidates else [], closed_loop_evidence=_safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
+        candidate_decision_records=pd.DataFrame(records),
+    )
+    reordered.to_csv(output_dir / "reordered_recommendations.csv", index=False, encoding="utf-8-sig")
+    build_recommended_candidates(reordered).to_csv(output_dir / "recommended_candidates_reordered.csv", index=False, encoding="utf-8-sig")
+    payload = _build_result_payload(output_dir.name, output_dir, config)
+    return {**payload, "candidateDecisionRecords": records}
 
 
 def _lag_profile_response(params: dict[str, list[str]]) -> dict[str, Any]:

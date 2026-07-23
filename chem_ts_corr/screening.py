@@ -896,7 +896,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     return pd.DataFrame(rows, columns=cols)
 
 
-def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None) -> pd.DataFrame:
+def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None, candidate_decision_records: pd.DataFrame | None = None) -> pd.DataFrame:
     cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -1059,6 +1059,12 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
             final.loc[confirmed, "driver_priority_factor"],
             CLASS_PRIORITY_FACTORS["closed_loop_related"],
         )
+    if candidate_decision_records is not None and {"variable", "new_status"}.issubset(candidate_decision_records.columns):
+        decisions = candidate_decision_records[["variable", "new_status"]].drop_duplicates("variable", keep="last")
+        final = final.merge(decisions, on="variable", how="left")
+        confirmed_recommendation = final["new_status"].eq("confirmed_recommendation")
+        closed_loop_confirmed = final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed")
+        final.loc[confirmed_recommendation & ~closed_loop_confirmed, "driver_priority_factor"] = 1.0
     final["driver_priority_score"] = (
         final["final_score"] * final["driver_priority_factor"]
     ).clip(0, 1)
@@ -1080,9 +1086,21 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         final.loc[confirmed, "recommended_action"] = "已确认闭环控制关系，不作为上游驱动优先候选"
         final.loc[conflict, "recommended_use"] = "closed_loop_conflict"
         final.loc[conflict, "recommended_action"] = "人工确认非闭环，但自动判断存在闭环嫌疑，需人工复核"
+    if "new_status" in final.columns:
+        excluded = final["new_status"].eq("excluded_recommendation")
+        needs_review = final["new_status"].eq("needs_review")
+        confirmed_recommendation = final["new_status"].eq("confirmed_recommendation")
+        final.loc[excluded, "recommended_use"] = "excluded_recommendation"
+        final.loc[excluded, "recommended_action"] = "人工排除，不进入当前推荐列表"
+        final.loc[needs_review, "recommended_use"] = "manual_review_required"
+        final.loc[needs_review, "recommended_action"] = "人工标记需复核"
+        final.loc[confirmed_recommendation & ~final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed"), "recommended_use"] = "manual_confirmed_recommendation"
+        final.loc[confirmed_recommendation & ~final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed"), "recommended_action"] = "人工确认推荐"
 
     if top_k is not None:
         rank_base = final
+        if "new_status" in final.columns:
+            rank_base = rank_base[~rank_base["new_status"].eq("excluded_recommendation")]
         if control_set:
             rank_base = final[~final["variable"].astype(str).isin(control_set)]
         top = rank_base.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable").head(top_k)

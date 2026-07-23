@@ -439,6 +439,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         _list_field(form, "residual_control_columns") or capacity_columns
     )
     force_include_variables = _list_field(form, "force_include_variables")
+    manual_closed_loop_variables = _list_field(form, "manual_closed_loop_variables")
+    manual_non_closed_loop_variables = _list_field(form, "manual_non_closed_loop_variables")
     segment_column = _field(form, "segment_column", "") or None
     _validate_analysis_excluded_columns(
         input_path,
@@ -450,6 +452,15 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         capacity_columns=capacity_columns,
         residual_control_columns=residual_control_columns,
         force_include_variables=force_include_variables,
+    )
+    _validate_manual_closed_loop_annotations(
+        input_path,
+        resolved_encoding,
+        time_column=time_column,
+        target=target,
+        excluded_columns=excluded_columns,
+        manual_closed_loop_variables=manual_closed_loop_variables,
+        manual_non_closed_loop_variables=manual_non_closed_loop_variables,
     )
     config = AnalysisConfig(
         input_path=input_path,
@@ -470,6 +481,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         capacity_columns=capacity_columns,
         residual_control_columns=residual_control_columns,
         force_include_variables=force_include_variables,
+        manual_closed_loop_variables=manual_closed_loop_variables,
+        manual_non_closed_loop_variables=manual_non_closed_loop_variables,
         excluded_columns=excluded_columns,
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
@@ -544,6 +557,47 @@ def _validate_analysis_excluded_columns(
     ]
     if not candidates:
         raise ValueError("剔除后至少需要保留一个可分析数值候选列")
+
+
+def _validate_manual_closed_loop_annotations(
+    input_path: Path,
+    encoding: str,
+    *,
+    time_column: str,
+    target: str,
+    excluded_columns: list[str],
+    manual_closed_loop_variables: list[str],
+    manual_non_closed_loop_variables: list[str],
+) -> None:
+    closed = list(manual_closed_loop_variables)
+    non_closed = list(manual_non_closed_loop_variables)
+    conflicts = [column for column in closed if column in set(non_closed)]
+    if conflicts:
+        raise ValueError(
+            f'变量不能同时标记为“已确认闭环”和“已确认非闭环”：{"、".join(conflicts)}'
+        )
+
+    selected = closed + non_closed
+    if target in selected:
+        raise ValueError(f"人工闭环确认不能包含目标变量：{target}")
+    if time_column in selected:
+        raise ValueError(f"人工闭环确认不能包含时间列：{time_column}")
+    excluded = set(excluded_columns)
+    excluded_conflicts = [column for column in selected if column in excluded]
+    if excluded_conflicts:
+        raise ValueError(f"人工闭环确认不能包含已剔除列：{'、'.join(excluded_conflicts)}")
+
+    sample, _ = read_timeseries_table(input_path, encoding=encoding, nrows=5000)
+    unknown = [column for column in selected if column not in sample.columns]
+    if unknown:
+        raise ValueError(f"人工闭环确认包含不存在的变量：{'、'.join(unknown)}")
+    non_numeric = [
+        column
+        for column in selected
+        if pd.to_numeric(sample[column], errors="coerce").notna().mean() < 0.7
+    ]
+    if non_numeric:
+        raise ValueError(f"人工闭环确认只能包含数值列：{'、'.join(non_numeric)}")
 
 
 def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
@@ -2149,7 +2203,7 @@ def _optional_int_field(form: dict[str, Any], name: str) -> int | None:
 
 def _list_field(form: dict[str, Any], name: str) -> list[str]:
     value = _field(form, name, "")
-    return [item.strip() for item in value.split(",") if item.strip()]
+    return list(dict.fromkeys(item.strip() for item in re.split(r"[,，]", value) if item.strip()))
 
 
 def _bool_field(form: dict[str, Any], name: str) -> bool:
@@ -2504,6 +2558,23 @@ INDEX_HTML = r"""<!doctype html>
         <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
         <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
       </div>
+      </div>
+      <div class="control-group">
+        <div class="control-group-title">人工闭环风险确认（可选）</div>
+        <label>已确认闭环/控制相关变量
+          <details id="manualClosedLoopDropdown" class="multi-dropdown">
+            <summary id="manualClosedLoopSummary">请选择已确认闭环变量</summary>
+            <div id="manualClosedLoopOptions" class="multi-options"></div>
+          </details>
+        </label>
+        <label>已确认非闭环变量
+          <details id="manualNonClosedLoopDropdown" class="multi-dropdown">
+            <summary id="manualNonClosedLoopSummary">请选择已确认非闭环变量</summary>
+            <div id="manualNonClosedLoopOptions" class="multi-options"></div>
+          </details>
+        </label>
+        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系。本阶段仅保存确认信息，不改变评分和排名。</div>
+        <div class="help">已确认非闭环变量仅表示不应因闭环风险降级，不代表该变量一定是上游根因。</div>
       </div>
       <div id="status" class="status info" role="status" aria-live="polite"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -2930,6 +3001,63 @@ function updateForceIncludeSummary() {
   el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
 }
 
+function fillManualAnnotationOptions(kind, columns) {
+  const box = el(`${kind}Options`);
+  box.innerHTML = "";
+  columns.forEach((name) => {
+    const row = document.createElement("label");
+    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("change", () => {
+      const other = kind === "manualClosedLoop" ? "manualNonClosedLoop" : "manualClosedLoop";
+      if (input.checked) {
+        setManualAnnotationSelection(
+          other,
+          getManualAnnotationSelection(other).filter((value) => value !== name),
+        );
+      }
+      updateManualAnnotationSummary(kind);
+    });
+    box.appendChild(row);
+  });
+  updateManualAnnotationSummary(kind);
+}
+
+function getManualAnnotationSelection(kind) {
+  return Array.from(document.querySelectorAll(`#${kind}Options input[type="checkbox"]:checked`)).map((node) => node.value);
+}
+
+function setManualAnnotationSelection(kind, values) {
+  const selected = new Set(values || []);
+  Array.from(document.querySelectorAll(`#${kind}Options input[type="checkbox"]`)).forEach((node) => {
+    node.checked = selected.has(node.value);
+  });
+  updateManualAnnotationSummary(kind);
+}
+
+function getManualClosedLoopSelection() {
+  return getManualAnnotationSelection("manualClosedLoop");
+}
+
+function getManualNonClosedLoopSelection() {
+  return getManualAnnotationSelection("manualNonClosedLoop");
+}
+
+function setManualClosedLoopSelection(values) {
+  setManualAnnotationSelection("manualClosedLoop", values);
+}
+
+function setManualNonClosedLoopSelection(values) {
+  setManualAnnotationSelection("manualNonClosedLoop", values);
+}
+
+function updateManualAnnotationSummary(kind) {
+  const selected = getManualAnnotationSelection(kind);
+  el(`${kind}Summary`).textContent = selected.length
+    ? `已选 ${selected.length} 项`
+    : (kind === "manualClosedLoop" ? "请选择已确认闭环变量" : "请选择已确认非闭环变量");
+}
+
 function fillSecondaryIncludeOptions(columns) {
   const box = el("secondaryIncludeOptions");
   box.innerHTML = "";
@@ -3016,6 +3144,8 @@ function refreshColumnSelectors() {
   const capacity = getCapacitySelection().filter((name) => !excluded.has(name));
   const forced = getForceIncludeSelection().filter((name) => !excluded.has(name));
   const secondary = getSecondaryIncludeSelection().filter((name) => !excluded.has(name));
+  const manualClosed = getManualClosedLoopSelection();
+  const manualNonClosed = getManualNonClosedLoopSelection();
 
   restoreSelect("targetColumn", available, current.targetColumn);
   restoreSelect("segmentColumn", available, current.segmentColumn, true, "不分段");
@@ -3028,6 +3158,13 @@ function refreshColumnSelectors() {
   setForceIncludeSelection(forced);
   fillSecondaryIncludeOptions(available);
   setSecondaryIncludeSelection(secondary);
+  const manualCandidates = available.filter((name) => name !== el("timeColumn").value && name !== el("targetColumn").value);
+  fillManualAnnotationOptions("manualClosedLoop", manualCandidates);
+  setManualClosedLoopSelection(manualClosed.filter((name) => manualCandidates.includes(name)));
+  fillManualAnnotationOptions("manualNonClosedLoop", manualCandidates);
+  setManualNonClosedLoopSelection(
+    manualNonClosed.filter((name) => manualCandidates.includes(name) && !getManualClosedLoopSelection().includes(name)),
+  );
   const whitelist = el("xgbWhitelist").value.split(/[,，]/).map((value) => value.trim()).filter((value) => value && !excluded.has(value));
   el("xgbWhitelist").value = whitelist.join(",");
   updateExcludedColumnDisabledState();
@@ -3086,6 +3223,8 @@ async function uploadFile() {
     recognizedColumns = [];
     recognizedNumericColumns = [];
     setExcludedColumnSelection([]);
+    setManualClosedLoopSelection([]);
+    setManualNonClosedLoopSelection([]);
     setStatus(`已上传：${data.filename}\n正在识别列...`);
     await loadColumns();
   } catch (error) {
@@ -3178,6 +3317,8 @@ async function analyze() {
     form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
+    form.append("manual_closed_loop_variables", getManualClosedLoopSelection().join(","));
+    form.append("manual_non_closed_loop_variables", getManualNonClosedLoopSelection().join(","));
     form.append("excluded_columns", getExcludedColumnSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
@@ -6165,6 +6306,12 @@ function reset() {
   el("forceIncludeOptions").innerHTML = "";
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
+  el("manualClosedLoopOptions").innerHTML = "";
+  el("manualClosedLoopSummary").textContent = "请选择已确认闭环变量";
+  el("manualClosedLoopDropdown").open = false;
+  el("manualNonClosedLoopOptions").innerHTML = "";
+  el("manualNonClosedLoopSummary").textContent = "请选择已确认非闭环变量";
+  el("manualNonClosedLoopDropdown").open = false;
   el("secondaryIncludeOptions").innerHTML = "";
   el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
   el("secondaryIncludeDropdown").open = false;

@@ -8,6 +8,7 @@ import pytest
 
 from tests.synthetic_cases.evaluate import KEY_FIELDS, metrics, run_case
 from tests.synthetic_cases.four_layer_cases import CASES
+from tests.synthetic_cases.generate_baseline import BASELINE_PATH, build_full_baseline_report
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -95,13 +96,19 @@ def test_baseline_report_is_reproducible(tmp_path):
 
 
 def test_committed_baseline_report_has_all_scenarios_and_required_fields():
-    report = json.loads(Path("tests/baselines/four_layer_ranking_baseline.json").read_text(encoding="utf-8"))
+    report = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
     assert set(report) == set(CASES)
     for entry in report.values():
         assert {"scenario", "seed", "samples", "parameters", "top_k_results", "metrics", "passed", "failure_reason"} <= set(entry)
 
 
+def test_committed_baseline_matches_actual_production_report(tmp_path):
+    actual = build_full_baseline_report(tmp_path)
+    committed = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    assert actual == committed
+
+
 def test_pr_8b_does_not_modify_production_scoring_files():
     import subprocess
-    changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD^", "HEAD"], text=True).splitlines()
-    assert not set(changed).intersection({"chem_ts_corr/screening.py", "chem_ts_corr/service.py", "chem_ts_corr/config.py"})
+    changed = subprocess.check_output(["git", "diff", "--name-only", "2b35c3d98c9c031e45e628a56bfae767a3bd6a87..HEAD"], text=True).splitlines()
+    assert not any(path.startswith("chem_ts_corr/") and path.endswith(".py") for path in changed)

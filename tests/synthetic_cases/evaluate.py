@@ -34,4 +34,8 @@ def metrics(case: SyntheticCase, ranked: pd.DataFrame) -> dict[str, object]:
         "spurious_average_rank": sum(false_ranks.values()) / len(false_ranks) if false_ranks else None,
         "lag_identification_error": {v: abs(int(index.loc[v, "lag"]) - lag) for v, lag in case.lags.items() if v in index.index and lag > 0},
         "noise_high_grade_false_positive_rate": float(index.loc[list(case.spurious_variables.intersection(index.index)), "candidate_grade"].isin(["A", "B"]).mean()) if len(case.spurious_variables.intersection(index.index)) else 0.0,
+        "downstream_average_rank": false_ranks.get("x_downstream"),
+        "common_driver_average_rank": false_ranks.get("x_common"),
+        "proxy_average_rank": false_ranks.get("x2_proxy", false_ranks.get("x_proxy")),
+        "noise_top_k_rate": sum(rank <= 5 for name, rank in false_ranks.items() if "noise" in name) / max(1, sum("noise" in name for name in false_ranks)),
     }

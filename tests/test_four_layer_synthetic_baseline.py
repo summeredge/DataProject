@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -81,3 +82,16 @@ def test_baseline_report_is_reproducible(tmp_path):
         report[name] = {"seed": case.metadata["seed"], "n": case.metadata["n"], "parameters": case.metadata, "top_k": ranked["variable"].tolist(), "key_evidence": ranked[[c for c in KEY_FIELDS if c in ranked]].to_dict("records"), "metrics": metrics(case, ranked)}
     path = tmp_path / "four_layer_ranking_baseline.json"; path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     assert json.loads(path.read_text(encoding="utf-8")) == report
+
+
+def test_committed_baseline_report_has_all_scenarios_and_required_fields():
+    report = json.loads(Path("tests/baselines/four_layer_ranking_baseline.json").read_text(encoding="utf-8"))
+    assert set(report) == set(CASES)
+    for entry in report.values():
+        assert {"scenario", "seed", "samples", "parameters", "top_k_results", "metrics", "passed", "failure_reason"} <= set(entry)
+
+
+def test_pr_8b_does_not_modify_production_scoring_files():
+    import subprocess
+    changed = subprocess.check_output(["git", "diff", "--name-only", "HEAD^", "HEAD"], text=True).splitlines()
+    assert not set(changed).intersection({"chem_ts_corr/screening.py", "chem_ts_corr/service.py", "chem_ts_corr/config.py"})

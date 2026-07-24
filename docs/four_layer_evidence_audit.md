@@ -46,6 +46,35 @@
 
 ## 重复计分与历史残留结论
 
+## 逐字段更正登记（替代上表所有斜杠合并写法）
+
+以下每行均为独立字段；来源、消费者、缺失与负面语义的机器可读完整值以 registry 对应对象为准。本表补齐主排序 `model_lift` 回退、复核评分和最终复核排序字段。
+
+|字段名|生成函数|使用函数|层级|直接评分/排序|缺失值与负面结果|本 PR修改|
+|---|---|---|---|---|---|---|
+|model_lift|model_lift_scores|final_ranked_features,_assess_row|L4|主排序回退输入；复核直接加分|缺失时不作支持；低值负证据|否|
+|predictive_contribution|run_conditional_granger_tests|_assess_row|L4|复核直接加分|缺失/非正不加分|否|
+|conditional_fdr_q_value|run_conditional_granger_tests|_assess_row|L3|复核直接加分|缺失为证据不足；高 q 无支持|否|
+|granger_fdr_q_value|run_granger_tests|_assess_row|L2|复核直接加分|缺失/高 q 无支持|否|
+|model_importance_rank|fit_explainable_model|_assess_row|L4|复核直接加分|缺失/排名靠后无支持|否|
+|rolling_sign_consistency|rolling_corr_scores|_assess_row|stability|复核直接加分|缺失/低值无支持|否|
+|evidence_score|_assess_row|_evidence_level,final_review_summary|复核聚合|复核排序键|无支持时较低；非筛选分|否|
+|evidence_level|_evidence_level|_integrated_decision,final_review_summary|复核聚合|复核决策输入|缺失转 not_supported|否|
+|data_priority|_data_priority|final_review_summary|复核聚合|复核排序键|缺失转 low|否|
+|integrated_review_decision|_integrated_decision|build_final_review_summary|复核聚合|生成最终复核排序键|缺失转 not_recommended|否|
+|final_recommendation|build_final_review_summary|build_final_review_summary sort|复核聚合|最终复核第一排序键|缺失转 not_recommended|否|
+|final_rank|build_final_review_summary|CSV/report|复核聚合|最终复核输出 rank|由复核 sort 产生|否|
+|screening_score|build_final_review_summary|build_final_review_summary sort|复核聚合|最终复核第四排序键|缺失为 -inf|否|
+|screening_lag|build_final_review_summary|final_review_summary|L2|复核输出|缺失为空|否|
+|risk_constraint_level|_risk_constraint_level|final_review_summary|risk|复核限制|缺失为 none|否|
+|statistical_limit_level|_statistical_limit_assessment|_integrated_decision,final_review_summary|risk|复核限制|缺失为 none|否|
+|closed_loop_context|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
+|closed_loop_status|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
+|engineering_context|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
+|closed_loop_reason|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
+
+闭环历史语义并非“完全退出”：它已退出主筛选评分、factor、等级和 `driver_rank`，但仍作为 `final_review_summary.py` 的解释文案残留（闭环控制/闭环关系），与共线性、共同负荷一起提示人工复核。该文案不读取闭环上下文字段，也不改变主排序；已登记为 review-only historical wording，而非不存在。
+
 1. 筛选总分中，原始关联不会以独立加法项重复进入；但 `association_score`、`innovation_score`、`independent_signal_score` 被几何合并，属于同一关联族的多证据约束。是否构成“重复奖励”需要后续用对照数据评估，当前不能据此改公式。
 2. lag 相关/lag_quality 进入筛选；Granger 只在筛选后因果复核中加分。因此不存在 Granger 回写 `final_score` 的重复奖励，但复核层确实同时使用 lag、Granger 和条件 Granger，必须与筛选排序分开解释。
 3. 独立性在筛选层只经 `residual_corr -> independent_signal_score` 进入总分；`common_capacity_driver` 是风险分类，当前无相对 penalty，但可改变类别 factor/用途。存在语义重叠，不是两次直接数值加分。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr import causal_review_evidence, final_review_summary, screening
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.pipeline import run_analysis
 from chem_ts_corr.screening import final_ranked_features
@@ -14,34 +16,58 @@ from chem_ts_corr.service import analyze_numeric_frame
 
 
 REGISTRY_PATH = Path("docs/four_layer_evidence_registry.json")
-DIRECT_SCORE_FIELDS = {
-    "association_score",
-    "correlation_evidence_score",
-    "lag_quality",
-    "stability_score",
-    "prediction_score",
-    "data_quality_score",
-    "evidence_completeness",
-    "evidence_confidence",
-    "evidence_strength",
-    "evidence_score",
-    "risk_penalty_rate",
-    "risk_score_cap",
-    "final_score",
-    "driver_priority_factor",
-    "driver_priority_score",
-    "driver_rank",
-}
-RANKING_INPUT_FIELDS = {
-    "raw_corr", "innovation_score", "residual_corr", "lag", "lag_quality",
-    "rolling_stability", "regime_stability_final", "model_lift_score", "risk_flags",
-    "data_quality_score", "candidate_class", "final_score", "driver_priority_factor",
-    "driver_priority_score", "driver_rank",
+RANKING_FUNCTIONS = {
+    screening: {
+        "risk_flags", "_risk_adjustment", "classify_candidate", "final_ranked_features",
+        "_finalize_driver_ranking", "_grade_candidate", "_recommend_use", "_recommended_action",
+    },
+    causal_review_evidence: {
+        "build_causal_review_evidence", "_assess_row", "_risk_text", "_has_hard_downgrade",
+        "_statistical_limit_assessment", "_risk_constraint_level", "_risk_reasons",
+        "_evidence_level", "_integrated_decision", "_is_high_collinearity_without_independent_strong_evidence",
+    },
+    final_review_summary: {
+        "build_final_review_summary", "_key_reason", "_lag_boundary_hint", "_conflicts",
+    },
 }
 
 
 def _registry() -> list[dict[str, object]]:
     return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+
+
+def _field_accesses(module, function_names: set[str]) -> set[str]:
+    tree = ast.parse(inspect.getsource(module))
+    functions = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in function_names
+    ]
+    assert {node.name for node in functions} == function_names
+    fields: set[str] = set()
+    for function in functions:
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                fields.add(node.args[0].value)
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)
+            ):
+                fields.add(node.slice.value)
+    return fields
+
+
+def _production_ranking_fields() -> set[str]:
+    return set().union(*(
+        _field_accesses(module, names) for module, names in RANKING_FUNCTIONS.items()
+    ))
 
 
 def _ranking_inputs() -> tuple[pd.DataFrame, ...]:
@@ -140,29 +166,32 @@ def test_service_and_pipeline_entries_write_the_same_frozen_ranked_features(tmp_
         service_ranked[fields].reset_index(drop=True), exported[fields].reset_index(drop=True),
         check_dtype=False,
     )
-    assert exported["variable"].tolist() == ["upstream", "other"]
-    assert exported["driver_rank"].tolist() == [1, 2]
+    expected = pd.DataFrame([
+        {"variable": "upstream", "final_score": 0.6360317321967022,
+         "driver_priority_factor": 1.0, "driver_priority_score": 0.6360317321967022,
+         "driver_rank": 1, "candidate_grade": "B", "recommended_use": "manual_review_required"},
+        {"variable": "other", "final_score": 0.25347875635415,
+         "driver_priority_factor": 0.45, "driver_priority_score": 0.11406544035936751,
+         "driver_rank": 2, "candidate_grade": "E", "recommended_use": "state_indicator"},
+    ])
+    pd.testing.assert_frame_equal(exported[fields], expected, check_dtype=False, check_exact=False, rtol=1e-12)
 
 
-def test_registry_direct_score_fields_match_scoring_source():
+def test_registry_covers_all_production_ranking_fields_and_direct_roles_are_ast_accesses():
     registry = _registry()
-    registered = {entry["field"] for entry in registry}
-    assert DIRECT_SCORE_FIELDS <= registered
-    source = inspect.getsource(final_ranked_features) + inspect.getsource(
-        __import__("chem_ts_corr.screening", fromlist=["_finalize_driver_ranking"])._finalize_driver_ranking
-    )
-    for field in DIRECT_SCORE_FIELDS:
-        assert field in source
+    registered = [str(entry["field"]) for entry in registry]
+    actual = _production_ranking_fields()
+    assert not (actual - set(registered))
+    assert len(registered) == len(set(registered))
+    direct = {str(entry["field"]) for entry in registry if "direct" in str(entry["score_role"])}
+    assert direct <= actual
 
 
-def test_all_final_ranking_inputs_are_registered_and_context_is_not_scored():
+def test_engineering_context_is_not_accessed_by_any_scoring_or_review_sort_function():
     registry = _registry()
-    registered = {entry["field"] for entry in registry}
-    assert RANKING_INPUT_FIELDS <= registered
-    source = inspect.getsource(final_ranked_features)
-    score_expression = source.split('final["association_score"]', 1)[1].split(
-        'final["candidate_class"]', 1
-    )[0]
+    accessed = set().union(*(
+        _field_accesses(module, names) for module, names in RANKING_FUNCTIONS.items()
+    ))
     for entry in registry:
         if entry["score_role"] == "not_in_scoring":
-            assert str(entry["field"]) not in score_expression
+            assert str(entry["field"]) not in accessed

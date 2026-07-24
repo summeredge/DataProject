@@ -40,10 +40,8 @@ NEGATIVE_LABEL = "engineering_input_not_closed_loop"
 def build_training_labels(
     manual_closed_loop_variables: list[str] | None,
     manual_non_closed_loop_variables: list[str] | None,
-    candidate_decision_records: list[dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     """Create labels only from explicit human closed-loop decisions."""
-    del candidate_decision_records
     labels: dict[str, tuple[str, str]] = {}
     for variable in manual_closed_loop_variables or []:
         labels[str(variable)] = (POSITIVE_LABEL, "manual_closed_loop")
@@ -88,7 +86,6 @@ def run_closed_loop_calibration(
     output_dir: Path,
     manual_closed_loop_variables: list[str] | None,
     manual_non_closed_loop_variables: list[str] | None,
-    candidate_decision_records: list[dict[str, object]] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object], dict[str, object]]:
     """Train and apply a shadow-only logistic calibration model from saved results."""
     read = lambda name: _read_csv(output_dir / name)
@@ -100,7 +97,6 @@ def run_closed_loop_calibration(
     labels = build_training_labels(
         manual_closed_loop_variables,
         manual_non_closed_loop_variables,
-        candidate_decision_records,
     )
     merged = features.merge(labels, on="variable", how="left")
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

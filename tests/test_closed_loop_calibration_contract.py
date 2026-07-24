@@ -58,7 +58,6 @@ def test_human_labels_are_explicit_and_auto_diagnosis_is_not_a_label():
     labels = build_training_labels(
         ["positive"],
         ["negative"],
-        [],
     ).set_index("variable")
 
     assert labels.loc["positive", "training_label"] == POSITIVE_LABEL
@@ -67,27 +66,10 @@ def test_human_labels_are_explicit_and_auto_diagnosis_is_not_a_label():
     assert labels.loc["negative", "label_source"] == "manual_non_closed_loop"
 
 
-def test_recommendation_decisions_cannot_create_closed_loop_labels():
-    labels = build_training_labels(
-        [],
-        [],
-        [
-            {"variable": "C", "new_status": "confirmed_recommendation"},
-            {"variable": "D", "new_status": "excluded_recommendation"},
-            {"variable": "E", "new_status": "needs_review"},
-            {"variable": "F", "new_status": POSITIVE_LABEL},
-        ],
-    )
-
-    assert labels.empty
-
-
 def test_calibration_outputs_probability_files_and_preserves_original_results(tmp_path):
     ranked = _write_inputs(tmp_path)
     original_files = {name: (tmp_path / name).read_bytes() for name in ["ranked_features.csv", "risk_flags.csv", "auto_closed_loop_diagnosis.csv"]}
-    records = [{"variable": "positive", "new_status": "confirmed_recommendation"}]
-
-    results, model, metrics = run_closed_loop_calibration(tmp_path, ["positive"], ["negative"], records)
+    results, model, metrics = run_closed_loop_calibration(tmp_path, ["positive"], ["negative"])
 
     assert results.columns.tolist() == CALIBRATION_RESULT_COLUMNS
     assert results.loc[results["variable"] == "diagnosis_only", "training_label"].iloc[0] == "unknown"
@@ -106,13 +88,12 @@ def test_calibration_outputs_probability_files_and_preserves_original_results(tm
         pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")[["driver_priority_factor", "driver_priority_score", "driver_rank", "final_score"]],
         ranked[["driver_priority_factor", "driver_priority_score", "driver_rank", "final_score"]],
     )
-    assert records == [{"variable": "positive", "new_status": "confirmed_recommendation"}]
 
 
 def test_single_class_labels_produce_clear_non_model_status(tmp_path):
     _write_inputs(tmp_path)
 
-    results, model, metrics = run_closed_loop_calibration(tmp_path, ["positive"], [], [])
+    results, model, metrics = run_closed_loop_calibration(tmp_path, ["positive"], [])
 
     assert model["status"] == "insufficient_training_labels"
     assert metrics["status"] == "insufficient_training_labels"

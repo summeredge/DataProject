@@ -283,7 +283,7 @@ def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
 def _filter_non_recommendable_closed_loop_candidates(
     ranked_features: pd.DataFrame,
 ) -> pd.DataFrame:
-    excluded_uses = {"closed_loop_confirmed", "closed_loop_conflict", "excluded_recommendation"}
+    excluded_uses = {"closed_loop_confirmed", "closed_loop_conflict"}
     recommended_use = ranked_features.get(
         "recommended_use", pd.Series(index=ranked_features.index, dtype=str)
     )

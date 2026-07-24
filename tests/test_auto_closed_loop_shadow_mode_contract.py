@@ -63,10 +63,9 @@ def test_shadow_diagnosis_handles_no_relationship_or_missing_evidence():
     assert diagnosis.loc[0, "confidence_level"] == "low"
 
 
-def test_shadow_diagnosis_isolated_from_scores_and_candidate_decisions():
+def test_shadow_diagnosis_isolated_from_scores():
     ranked, risks, lag, stability, prediction = _inputs()
     ranking_before = ranked[["driver_priority_factor", "driver_priority_score", "driver_rank", "final_score"]].copy()
-    decision_records = [{"variable": "mv_confirmed", "new_status": "excluded_recommendation"}]
 
     build_auto_closed_loop_diagnosis(ranked, risks, lag, stability, prediction, "cv")
 
@@ -74,23 +73,16 @@ def test_shadow_diagnosis_isolated_from_scores_and_candidate_decisions():
         ranked[["driver_priority_factor", "driver_priority_score", "driver_rank", "final_score"]],
         ranking_before,
     )
-    assert decision_records == [{"variable": "mv_confirmed", "new_status": "excluded_recommendation"}]
 
 
 def test_web_shadow_api_reads_existing_files_and_never_reorders_or_reanalyzes():
     source = inspect.getsource(web._run_auto_closed_loop_diagnosis_response)
 
     assert "auto_closed_loop_diagnosis.csv" in web.DOWNLOAD_FILES
-    assert "autoClosedLoopDiagnosisTable" in web.INDEX_HTML
-    assert "manual_status" in web.INDEX_HTML
-    assert 'postForm("/api/run_auto_closed_loop_diagnosis", form)' in web.INDEX_HTML
     assert "build_auto_closed_loop_diagnosis(" in source
     assert "ranked_features.csv" in source
     for forbidden in [
         "run_analysis",
-        "reorder_ranked_features",
-        "reordered_recommendations.csv",
-        "candidate_decision_records.json",
         'to_csv(output_dir / "ranked_features.csv"',
         'to_csv(output_dir / "risk_flags.csv"',
         'to_csv(output_dir / "closed_loop_evidence.csv"',

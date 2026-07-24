@@ -32,6 +32,18 @@ def test_manual_closed_loop_context_does_not_change_final_ranking():
     pd.testing.assert_frame_equal(_ranking_fields(output), _ranking_fields(baseline))
 
 
+def test_manual_closed_and_non_closed_inputs_do_not_change_final_ranking():
+    baseline = _ranked()
+    context = build_closed_loop_evidence(
+        pd.DataFrame(),
+        manual_closed_loop_variables=["A"],
+        manual_non_closed_loop_variables=["B"],
+    )
+    output = _ranked(context)
+
+    pd.testing.assert_frame_equal(_ranking_fields(output), _ranking_fields(baseline))
+
+
 def test_automatic_closed_loop_indicator_does_not_change_final_ranking():
     baseline = _ranked()
     context = build_closed_loop_evidence(pd.DataFrame([{"variable": "A", "closed_loop_suspect_flag": True}]))

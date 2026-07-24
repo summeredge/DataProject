@@ -4603,11 +4603,6 @@ const CANONICAL_RISK_GROUPS = [
     aliases: ["capacity_driven", "common_capacity_driver"],
   },
   {
-    key: "closed_loop_risk",
-    label: "闭环反馈风险",
-    aliases: ["closed_loop_suspect"],
-  },
-  {
     key: "collinearity_risk",
     label: "共线性风险",
     aliases: ["residual_collinearity", "high_collinearity_risk"],

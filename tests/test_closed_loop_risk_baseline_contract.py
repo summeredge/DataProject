@@ -209,7 +209,6 @@ def test_current_risk_constants_are_frozen():
         "upstream_driver_candidate": 1.00,
         "synchronous_association": 0.90,
         "downstream_response": 0.45,
-        "closed_loop_related": 0.55,
         "capacity_driven": 0.75,
         "formula_or_derived": 0.25,
         "poor_quality": 0.35,

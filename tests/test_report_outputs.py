@@ -101,7 +101,7 @@ def test_write_outputs_uses_metrics_top_k_for_near_miss_candidates(tmp_path: Pat
     assert near_miss["variable"].tolist() == ["v2"]
 
 
-def test_recommended_candidates_fallback_excludes_manual_closed_loop_recommendations():
+def test_recommended_candidates_does_not_filter_historical_closed_loop_statuses():
     ranked = pd.DataFrame(
         [
             {"variable": "confirmed", "candidate_grade": "A", "recommended_use": "closed_loop_confirmed", "final_score": 0.9},
@@ -109,4 +109,4 @@ def test_recommended_candidates_fallback_excludes_manual_closed_loop_recommendat
         ]
     )
 
-    assert build_recommended_candidates(ranked).empty
+    assert build_recommended_candidates(ranked)["variable"].tolist() == ["confirmed", "conflict"]

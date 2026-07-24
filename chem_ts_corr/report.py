@@ -116,10 +116,9 @@ def build_markdown_summary(
 ) -> str:
     risky = risk_flags[risk_flags.get("risk_count", 0) > 0] if not risk_flags.empty else pd.DataFrame()
     common_capacity = _risk_subset(risky, "common_capacity_driver_flag")
-    closed_loop = _risk_subset(risky, "closed_loop_suspect_flag")
     strong = _recommended_subset(ranked_features, "strong_screening_candidate")
     predictive = _recommended_subset(ranked_features, "prediction_candidate")
-    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "closed_loop_suspect", "closed_loop_confirmed", "closed_loop_conflict", "unstable_candidate", "poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
+    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "unstable_candidate", "poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
 
     lines = [f"# 四层工业时序筛查摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
@@ -149,9 +148,6 @@ def build_markdown_summary(
 
     lines.extend(["", "## 疑似共同负荷驱动", ""])
     lines.extend(_table_lines(common_capacity.head(15)))
-
-    lines.extend(["", "## 疑似闭环反馈", ""])
-    lines.extend(_table_lines(closed_loop.head(15)))
 
     lines.extend(["", "## 不建议作为因果结论的变量", ""])
     lines.extend(_table_lines(_core_columns(not_causal).head(15)))
@@ -269,22 +265,11 @@ def _format_cell(value: object, column: str = "") -> str:
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
         return pd.DataFrame(columns=["variable","candidate_grade","recommended_use","final_score","fallback_reason"])
-    eligible = _filter_non_recommendable_closed_loop_candidates(ranked_features)
-    ab = eligible[eligible.get("candidate_grade", pd.Series(index=eligible.index, dtype=str)).isin(["A", "B"])].copy()
+    ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(index=ranked_features.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:
             ab["fallback_reason"] = ""
         return ab
-    top = eligible.head(10).copy()
+    top = ranked_features.head(10).copy()
     top["fallback_reason"] = "no_A_or_B_candidates"
     return top
-
-
-def _filter_non_recommendable_closed_loop_candidates(
-    ranked_features: pd.DataFrame,
-) -> pd.DataFrame:
-    excluded_uses = {"closed_loop_confirmed", "closed_loop_conflict"}
-    recommended_use = ranked_features.get(
-        "recommended_use", pd.Series(index=ranked_features.index, dtype=str)
-    )
-    return ranked_features.loc[~recommended_use.isin(excluded_uses)].copy()

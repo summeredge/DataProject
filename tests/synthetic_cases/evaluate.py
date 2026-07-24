@@ -19,6 +19,7 @@ def run_case(case: SyntheticCase, output_dir: Path) -> pd.DataFrame:
         input_path=output_dir / "unused.csv", time_column="time", target=case.target, output_dir=output_dir,
         max_lag=int(metadata.get("max_lag", 6)), top_k=10, skip_model_lift=True, skip_rolling_corr=False,
         segment_column=metadata.get("segment_column"), residual_control_columns=metadata.get("residual_control_columns"),
+        exclude_control_columns_from_candidates=False,
     )
     return analyze_numeric_frame(case.frame, config).ranked_features
 

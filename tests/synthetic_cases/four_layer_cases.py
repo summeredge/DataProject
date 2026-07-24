@@ -48,7 +48,7 @@ def collinear_proxy(n: int = 360, noise: float = 0.1, seed: int = 104) -> Synthe
 
 
 def nonlinear_stable_driver(n: int = 400, noise: float = 0.08, seed: int = 105) -> SyntheticCase:
-    rng, index, eps = _base(n, seed, noise); x = rng.uniform(-1, 1, size=n); y = np.roll(x ** 3, 2) + eps; y[:2] = eps[:2]
+    rng, index, eps = _base(n, seed, noise); x = rng.uniform(-1, 1, size=n); y = np.roll(x ** 2, 2) + eps; y[:2] = eps[:2]
     return _case("nonlinear_stable_driver", pd.DataFrame({"target": y, "x_nonlinear": x, "noise": rng.normal(size=n)}, index=index), "target", ["x_nonlinear"], ["noise"], {"x_nonlinear": 2}, {"x_nonlinear": "variable_leads_target"}, seed=seed, n=n, noise=noise)
 
 

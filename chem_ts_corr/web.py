@@ -4678,7 +4678,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "candidate_driver_score", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
+  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4842,14 +4842,6 @@ function innovationDirectionText(value) {
 
 function preprocessModeLabel(mode) {
   const labels = {
-    candidate_driver_score: "候选驱动因素可信度",
-    driver_evidence_summary: "四层证据摘要",
-    correlation_strength: "关联强度",
-    statistical_significance: "统计显著性",
-    temporal_score: "时间证据得分",
-    temporal_consistency: "时间一致性",
-    independent_score: "独立驱动证据得分",
-    predictive_score: "预测验证得分",
     raw: "原始数据",
     detrend: "去趋势",
     diff: "一阶差分",
@@ -5819,9 +5811,6 @@ const SIGNIFICANCE_COLUMNS = new Set([
 
 function formatCellValue(column, value) {
   const scoreValue = value === null || value === undefined || value === "" ? NaN : Number(value);
-  if (column === "closed_loop_conflict") {
-    return value === true || String(value).toLowerCase() === "true" ? "是" : "否";
-  }
   if (column === "closed_loop_reason") {
     try {
       const reasons = JSON.parse(String(value ?? ""));
@@ -6100,9 +6089,6 @@ function formatValue(value) {
       prediction_candidate: "预测候选",
       state_indicator: "状态指示量",
       capacity_driven: "共同负荷驱动",
-      closed_loop_suspect: "疑似闭环反馈",
-      closed_loop_confirmed: "已确认闭环",
-      closed_loop_conflict: "闭环判断冲突",
       unstable_candidate: "不稳定候选",
       poor_quality_variable: "低质量变量",
       manual_review_required: "需要人工复核",
@@ -6240,12 +6226,12 @@ function columnLabel(column) {
     closed_loop_suspect_flag: "疑似闭环反馈",
     manual_closed_loop_status: "人工确认",
     automatic_closed_loop_indicator: "自动闭环指标",
+    engineering_context: "工程上下文",
     closed_loop_context: "闭环上下文",
     closed_loop_status: "闭环状态",
     auto_closed_loop_status: "自动判断",
     closed_loop_evidence_level: "综合闭环状态",
     closed_loop_evidence_source: "证据来源",
-    closed_loop_conflict: "证据冲突",
     closed_loop_reason: "判断依据",
     target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",

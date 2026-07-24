@@ -9,6 +9,7 @@ CLOSED_LOOP_EVIDENCE_COLUMNS = [
     "variable",
     "manual_closed_loop_status",
     "automatic_closed_loop_indicator",
+    "engineering_context",
     "closed_loop_context",
     "closed_loop_status",
     "closed_loop_reason",
@@ -57,6 +58,15 @@ def build_closed_loop_evidence(
             "variable": variable,
             "manual_closed_loop_status": manual,
             "automatic_closed_loop_indicator": automatic,
+            # Engineering input and automatic diagnostics are explanatory context,
+            # never candidate classification or ranking inputs.
+            "engineering_context": json.dumps({
+                "closed_loop_status": status,
+                "source": context,
+                "manual_closed_loop_status": manual,
+                "automatic_closed_loop_indicator": automatic,
+                "engineering_notes": reasons,
+            }, ensure_ascii=False),
             "closed_loop_context": context,
             "closed_loop_status": status,
             "closed_loop_reason": json.dumps(reasons, ensure_ascii=False),

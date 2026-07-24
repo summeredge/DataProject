@@ -284,7 +284,7 @@ def test_manual_annotations_only_change_allowed_ranking_outputs(tmp_path: Path):
         "recommended_use",
         "recommended_action",
     }
-    unaffected = [column for column in baseline_ranked.columns if column not in allowed and column not in {"variable", "closed_loop_context", "closed_loop_status", "closed_loop_reason"}]
+    unaffected = [column for column in baseline_ranked.columns if column not in allowed and column not in {"variable", "engineering_context", "closed_loop_context", "closed_loop_status", "closed_loop_reason"}]
     pd.testing.assert_frame_equal(
         baseline_ranked.set_index("variable").sort_index()[unaffected],
         ranked.set_index("variable").sort_index()[unaffected],

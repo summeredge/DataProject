@@ -118,8 +118,8 @@ def test_evidence_output_does_not_change_ranked_or_risk_flags(tmp_path: Path):
     baseline_ranked = pd.read_csv(baseline.output_dir / "ranked_features.csv").set_index("variable").sort_index()
     annotated_ranked = pd.read_csv(annotated.output_dir / "ranked_features.csv").set_index("variable").sort_index()
     pd.testing.assert_frame_equal(
-        baseline_ranked[[column for column in baseline_ranked.columns if not column.startswith("closed_loop_")]],
-        annotated_ranked[[column for column in annotated_ranked.columns if not column.startswith("closed_loop_")]],
+        baseline_ranked[[column for column in baseline_ranked.columns if not column.startswith("closed_loop_") and column != "engineering_context"]],
+        annotated_ranked[[column for column in annotated_ranked.columns if not column.startswith("closed_loop_") and column != "engineering_context"]],
     )
     evidence = pd.read_csv(annotated.output_dir / "closed_loop_evidence.csv")
     assert evidence.columns.tolist() == CLOSED_LOOP_EVIDENCE_COLUMNS
@@ -135,6 +135,7 @@ def test_old_run_without_evidence_file_returns_empty_evidence_payload(tmp_path: 
 
     assert payload["closedLoopEvidence"] == []
     for marker in [
+        "engineering_context",
         "closed_loop_context",
         "closed_loop_status",
         "closed_loop_reason",

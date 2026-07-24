@@ -21,7 +21,7 @@ def _ranked(evidence: pd.DataFrame | None = None) -> pd.DataFrame:
 
 
 def _ranking_fields(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.set_index("variable")[["final_score", "evidence_score", "driver_priority_factor", "driver_priority_score", "driver_rank"]]
+    return frame.set_index("variable")[["final_score", "evidence_score", "driver_priority_factor", "driver_priority_score", "driver_rank", "recommended_use"]]
 
 
 def test_manual_closed_loop_context_does_not_change_final_ranking():
@@ -52,10 +52,12 @@ def test_automatic_closed_loop_indicator_does_not_change_final_ranking():
     pd.testing.assert_frame_equal(_ranking_fields(output), _ranking_fields(baseline))
 
 
-def test_closed_loop_context_fields_are_output_for_explanation():
+def test_engineering_context_is_output_for_explanation():
     context = build_closed_loop_evidence(pd.DataFrame([{"variable": "A", "closed_loop_suspect_flag": True}]), manual_closed_loop_variables=["A"])
     output = _ranked(context).set_index("variable")
 
+    assert '"closed_loop_status": "possible_closed_loop_influence"' in output.loc["A", "engineering_context"]
+    assert '"source": "manual_engineering_input_and_automatic_indicator"' in output.loc["A", "engineering_context"]
     assert output.loc["A", "closed_loop_context"] == "manual_engineering_input_and_automatic_indicator"
     assert output.loc["A", "closed_loop_status"] == "possible_closed_loop_influence"
     assert "人工工程经验输入" in output.loc["A", "closed_loop_reason"]

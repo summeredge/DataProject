@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
+from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.final_review_summary import build_final_review_summary
 
 
@@ -51,6 +52,27 @@ def test_significant_conditional_granger_low_risk_gets_priority_review():
     assert row["evidence_level"] == "strong_predictive_evidence"
     assert row["integrated_review_decision"] == "priority_review"
     assert "conditional_granger_supported" in row["evidence_reason"]
+
+
+def test_engineering_context_does_not_change_review_priority_or_decision():
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "best_lag": 1, "min_p_value": 0.001, "fdr_q_value": 0.01, "predictive_contribution": 0.08}
+    ])
+    baseline = _ranked()
+    contextual = _ranked(
+        engineering_context='{"closed_loop_status": "possible", "source": "manual_engineering_input"}',
+        closed_loop_status="possible_closed_loop_influence",
+        automatic_closed_loop_indicator="possible",
+    )
+
+    pd.testing.assert_frame_equal(
+        build_causal_review_candidates(baseline),
+        build_causal_review_candidates(contextual),
+    )
+    pd.testing.assert_frame_equal(
+        build_causal_review_evidence(baseline, conditional),
+        build_causal_review_evidence(contextual, conditional),
+    )
 
 
 def test_high_collinearity_adds_limited_signal_without_p_value_support():
@@ -235,25 +257,6 @@ def test_low_risk_strong_evidence_keeps_priority_review():
     assert float(row["evidence_score"]) >= 4
     assert row["statistical_limit_level"] == "none"
     assert row["integrated_review_decision"] == "priority_review"
-
-
-@pytest.mark.parametrize("recommended_use", ["closed_loop_confirmed", "closed_loop_conflict"])
-def test_manual_closed_loop_recommendations_remain_manual_review_only(recommended_use: str):
-    conditional = pd.DataFrame([
-        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
-    ])
-
-    evidence = build_causal_review_evidence(
-        _ranked(candidate_grade="A", recommended_use=recommended_use), conditional
-    )
-    row = evidence.iloc[0]
-    summary = build_final_review_summary(evidence)
-
-    assert row["evidence_score"] >= 4.0
-    assert row["data_priority"] == "high"
-    assert row["integrated_review_decision"] == "manual_review_only"
-    assert recommended_use in row["integrated_review_reason"]
-    assert summary.loc[0, "final_recommendation"] == "manual_review_only"
 
 
 def test_moderate_evidence_with_statistical_limit_records_limit_reason():

@@ -28,7 +28,7 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
         risk = "" if pd.isna(r) else str(r)
         score = 0.0 if pd.isna(fs) else float(fs)
 
-        if use in {"capacity_driven", "formula_coupled_reference", "closed_loop_suspect", "closed_loop_confirmed", "closed_loop_conflict", "unstable_candidate", "control_variable_reference"}:
+        if use in {"capacity_driven", "formula_coupled_reference", "unstable_candidate", "control_variable_reference"}:
             return 4, "低优先级：更偏参考/风险提示变量", "tier_4"
         if grade == "A" and use in {"strong_screening_candidate", "prediction_candidate"} and risk in {"none", "weak", ""}:
             return 1, "优先三层复核：高分且低风险", "tier_1"

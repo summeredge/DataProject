@@ -892,7 +892,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "correlation_strength", "correlation_direction", "statistical_significance", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "independent_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "temporal_score", "temporal_consistency", "model_lift_score", "model_lift_status", "prediction_score", "predictive_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "candidate_driver_score", "driver_evidence_summary", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "closed_loop_context", "closed_loop_status", "closed_loop_reason"]
+    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "engineering_context", "closed_loop_context", "closed_loop_status", "closed_loop_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -952,11 +952,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     )
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
     final["association_score"] = pd.to_numeric(final["raw_corr"], errors="coerce").fillna(0.0).clip(0, 1)
-    final["correlation_strength"] = final["association_score"]
-    corr_q = pd.to_numeric(final.get("corr_q_value", pd.Series(np.nan, index=final.index)), errors="coerce")
-    final["statistical_significance"] = np.select(
-        [corr_q.le(0.05), corr_q.notna()], ["significant", "not_significant"], default="not_computed"
-    )
     final["innovation_score"] = pd.to_numeric(innovation_raw, errors="coerce").clip(0, 1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
@@ -964,9 +959,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["model_lift_score"] = lift_raw.clip(0,1)
     model_lift_computed = final["model_lift_status"].astype(str).str.startswith("ok")
     final["prediction_score"] = final["model_lift_score"].where(model_lift_computed)
-    final["predictive_score"] = final["prediction_score"]
     final["independent_signal_score"] = pd.to_numeric(residual_raw, errors="coerce").clip(0, 1)
-    final["independent_score"] = final["independent_signal_score"]
     (
         final["correlation_evidence_score"],
         final["correlation_evidence_status"],
@@ -994,11 +987,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["evidence_confidence"] = np.sqrt(
         final["data_quality_score"] * final["evidence_completeness"]
     )
-    temporal_available = pd.DataFrame({"stability": final["stability_score"], "lag": final["lag_quality"]})
-    final["temporal_score"] = temporal_available.prod(axis=1, skipna=True).pow(
-        1.0 / temporal_available.notna().sum(axis=1).where(temporal_available.notna().sum(axis=1).gt(0))
-    )
-    final["temporal_consistency"] = final["stability_score"]
     evidence_items = {
         "innovation_score": "变化量验证",
         "prediction_score": "模型提升",
@@ -1019,8 +1007,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         default="证据不足",
     )
 
-    # Four-layer candidate-driver evidence fusion: association, temporal stability/lag,
-    # independent residual signal, and predictive lift. The V3 fusion weights remain unchanged.
     components = pd.DataFrame(
         {
             "association": final["correlation_evidence_score"],
@@ -1052,8 +1038,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final["risk_penalty"] = final["evidence_score"] * final["risk_penalty_rate"]
     penalized_score = (final["evidence_score"] - final["risk_penalty"]).clip(0, 1)
     final["final_score"] = np.minimum(penalized_score, final["risk_score_cap"]).clip(0, 1)
-    final["candidate_driver_score"] = final["final_score"]
-    final["driver_evidence_summary"] = final.apply(_driver_evidence_summary, axis=1)
     final["association_rank"] = final["evidence_score"].rank(
         method="first", ascending=False
     ).astype(int)
@@ -1064,7 +1048,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         final["candidate_class"].map(CLASS_PRIORITY_FACTORS).fillna(0.80)
     )
     if closed_loop_evidence is not None and "variable" in closed_loop_evidence.columns:
-        context_columns = [column for column in ["variable", "closed_loop_context", "closed_loop_status", "closed_loop_reason"] if column in closed_loop_evidence.columns]
+        context_columns = [column for column in ["variable", "engineering_context", "closed_loop_context", "closed_loop_status", "closed_loop_reason"] if column in closed_loop_evidence.columns]
         final = final.merge(closed_loop_evidence[context_columns].drop_duplicates("variable"), on="variable", how="left")
     final = _finalize_driver_ranking(
         final,
@@ -1081,22 +1065,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         if c not in final.columns:
             final[c] = np.nan
     return final.reset_index(drop=True)[cols]
-
-
-def _driver_evidence_summary(row: pd.Series) -> str:
-    """Summarize four statistical evidence layers without making a causal conclusion."""
-    def score(name: str) -> str:
-        value = pd.to_numeric(pd.Series([row.get(name)]), errors="coerce").iloc[0]
-        return "未计算" if pd.isna(value) else f"{float(value):.3f}"
-
-    return (
-        f"Layer1关联={score('association_score')}；"
-        f"Layer2时间={score('temporal_score')}；"
-        f"Layer3独立性={score('independent_score')}；"
-        f"Layer4预测={score('predictive_score')}；"
-        f"数据质量={score('data_quality_score')}；"
-        "候选驱动因素，建议工程复核"
-    )
 
 
 def _finalize_driver_ranking(

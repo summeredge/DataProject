@@ -21,6 +21,10 @@ DISPLAY_SCORE_COLUMNS = {
     "evidence_score",
     "evidence_score_low",
     "evidence_score_high",
+    "candidate_driver_score",
+    "temporal_score",
+    "independent_score",
+    "predictive_score",
     "证据覆盖度",
     "证据修正系数",
     "数据质量得分",
@@ -126,11 +130,11 @@ def build_markdown_summary(
 
     lines.extend(["", "## 强初筛候选", ""])
     lines.extend(_table_lines(_core_columns(strong).head(15)))
-    lines.extend(["", "## 相关性线索", ""])
+    lines.extend(["", "## 候选驱动因素排序", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_class","driver_priority_factor","evidence_coverage_status","evidence_missing_items","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","association_score","innovation_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","data_quality_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable","driver_rank","candidate_driver_score","driver_priority_score","final_score","association_score","temporal_score","independent_score","predictive_score","data_quality_score","driver_evidence_summary","risk_flags","human_reason","candidate_class","driver_priority_factor","evidence_coverage_status","evidence_missing_items","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
@@ -191,12 +195,12 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 使用工业稳健 V3：可用相关证据按等权几何均值合并，缺失证据与零分证据分离，profile 对实际可用证据权重重新归一，数据质量采用平滑衰减。统计证据风险按 risk_penalty_rate 相对扣减，高风险可触发 risk_score_cap；方向和变量角色通过 driver_priority_score 单独约束工程优先级。",
+            "- candidate_driver_score 与 final_score 表示工业稳健 V3 四层统计证据支持下的候选驱动因素可信度，不表示控制源、因果结论或自动控制判断。可用相关证据按等权几何均值合并，数据质量与既有统计风险调整保持原有规则，risk_score_cap 仍仅反映既有统计风险。",
             "- 证据修正系数由证据覆盖度和数据质量共同计算，仅用于修正综合证据评分，不表示概率、统计置信度或因果置信度。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",
-            "- recommended_action 给出下一步处理建议，包括可作为预测候选、疑似共同负荷驱动、疑似闭环反馈、仅作相关性参考、建议人工工艺复核。",
+            "- driver_evidence_summary 按关联、时间、独立性、预测和数据质量说明候选依据；工程师结合现场知识决定是否进入后续分析。",
             "- 本报告输出的是筛查线索和预测候选，不直接给出工艺因果结论。",
         ]
     )
@@ -218,7 +222,13 @@ def _risk_subset(frame: pd.DataFrame, column: str) -> pd.DataFrame:
 def _core_columns(frame: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "variable",
+        "candidate_driver_score",
         "final_score",
+        "association_score",
+        "temporal_score",
+        "independent_score",
+        "predictive_score",
+        "driver_evidence_summary",
         "lag",
         "direction",
         "raw_corr",

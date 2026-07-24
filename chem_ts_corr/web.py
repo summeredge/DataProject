@@ -4678,7 +4678,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
+  return ["variable", "driver_rank", "candidate_driver_score", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4842,6 +4842,14 @@ function innovationDirectionText(value) {
 
 function preprocessModeLabel(mode) {
   const labels = {
+    candidate_driver_score: "候选驱动因素可信度",
+    driver_evidence_summary: "四层证据摘要",
+    correlation_strength: "关联强度",
+    statistical_significance: "统计显著性",
+    temporal_score: "时间证据得分",
+    temporal_consistency: "时间一致性",
+    independent_score: "独立驱动证据得分",
+    predictive_score: "预测验证得分",
     raw: "原始数据",
     detrend: "去趋势",
     diff: "一阶差分",

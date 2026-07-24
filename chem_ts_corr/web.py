@@ -81,6 +81,7 @@ DOWNLOAD_FILES = {
     "closed_loop_calibration_model.json",
     "closed_loop_calibration_results.csv",
     "closed_loop_calibration_metrics.json",
+    "closed_loop_ranking_fusion.csv",
     "candidate_decision_records.json",
     "reordered_recommendations.csv",
     "recommended_candidates_reordered.csv",
@@ -215,6 +216,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/run_closed_loop_calibration":
                 self._send_json(_run_closed_loop_calibration_response(self))
+                return
+            if self.path == "/api/apply_closed_loop_ranking":
+                self._send_json(_apply_closed_loop_ranking_response(self))
                 return
             if self.path == "/api/run_granger":
                 self._send_json(_run_granger_response(self))
@@ -710,6 +714,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     closed_loop_evidence = _safe_read_result_csv(output_dir / "closed_loop_evidence.csv")
     auto_closed_loop_diagnosis = _safe_read_result_csv(output_dir / "auto_closed_loop_diagnosis.csv")
     calibration_results = _safe_read_result_csv(output_dir / "closed_loop_calibration_results.csv")
+    closed_loop_ranking_fusion = _safe_read_result_csv(output_dir / "closed_loop_ranking_fusion.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
@@ -727,6 +732,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "closedLoopEvidence": _records(closed_loop_evidence.head(200)),
         "autoClosedLoopDiagnosis": _records(auto_closed_loop_diagnosis.head(200)),
         "closedLoopCalibrationResults": _records(calibration_results.head(200)),
+        "closedLoopRankingFusion": _records(closed_loop_ranking_fusion.head(200)),
         "candidateDecisionRecords": _read_candidate_decision_records(output_dir),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
@@ -1984,6 +1990,39 @@ def _run_closed_loop_calibration_response(handler: BaseHTTPRequestHandler) -> di
     return _build_result_payload(output_dir.name, output_dir, config)
 
 
+def _apply_closed_loop_ranking_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    from chem_ts_corr.closed_loop_ranking import build_closed_loop_risk_context
+    from chem_ts_corr.report import build_recommended_candidates
+    from chem_ts_corr.screening import reorder_ranked_features
+
+    form = _multipart_form(handler)
+    output_dir = _resolve_run_dir(_field(form, "run_id"))
+    config = _read_run_config(output_dir)
+    context = build_closed_loop_risk_context(
+        _safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
+        _safe_read_result_csv(output_dir / "closed_loop_calibration_results.csv"),
+        medium_threshold=config.closed_loop_auto_medium_threshold,
+        high_threshold=config.closed_loop_auto_high_threshold,
+        medium_factor=config.closed_loop_auto_medium_factor,
+        high_factor=config.closed_loop_auto_high_factor,
+    )
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    reordered = reorder_ranked_features(
+        ranked,
+        closed_loop_evidence=_safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
+        candidate_decision_records=pd.DataFrame(_read_candidate_decision_records(output_dir)),
+        force_include_variables=config.force_include_variables,
+        top_k=config.top_k,
+        control_columns=list(set(config.residual_control_columns or []) | set(config.capacity_columns or [])) if config.exclude_control_columns_from_candidates else [],
+        closed_loop_risk_context=context,
+    )
+    context.to_csv(output_dir / "closed_loop_ranking_fusion.csv", index=False, encoding="utf-8-sig")
+    reordered.to_csv(output_dir / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    reordered.to_csv(output_dir / "reordered_recommendations.csv", index=False, encoding="utf-8-sig")
+    build_recommended_candidates(reordered).to_csv(output_dir / "recommended_candidates_reordered.csv", index=False, encoding="utf-8-sig")
+    return _build_result_payload(output_dir.name, output_dir, config)
+
+
 def _lag_profile_response(params: dict[str, list[str]]) -> dict[str, Any]:
     run_id = _single(params, "run_id")
     variable = _single(params, "variable")
@@ -2710,6 +2749,10 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">仅使用人工闭环标签校准自动诊断概率；概率不参与评分、排序或推荐。</div>
         <div class="actions"><button id="runClosedLoopCalibration" type="button" disabled>运行闭环校准</button></div>
         <div id="closedLoopCalibrationTable" class="empty">暂无闭环校准结果</div>
+        <h2>闭环风险排序融合</h2>
+        <div class="help">人工闭环确认优先于自动概率；自动高、中风险仅降低未人工确认变量的推荐优先级。</div>
+        <div class="actions"><button id="applyClosedLoopRanking" type="button" disabled>应用闭环风险排序</button></div>
+        <div id="closedLoopRankingFusionTable" class="empty">暂无闭环风险排序信息</div>
         <section id="candidatesTab">
           <h2>候选变量</h2>
           <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
@@ -3058,6 +3101,7 @@ el("analyze").addEventListener("click", analyze);
 el("applyCandidateDecision").addEventListener("click", updateCandidateDecision);
 el("runAutoClosedLoopDiagnosis").addEventListener("click", runAutoClosedLoopDiagnosis);
 el("runClosedLoopCalibration").addEventListener("click", runClosedLoopCalibration);
+el("applyClosedLoopRanking").addEventListener("click", applyClosedLoopRanking);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
@@ -3531,6 +3575,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("closedLoopEvidenceTable", data.closedLoopEvidence || []);
   renderAutoClosedLoopDiagnosis(data.autoClosedLoopDiagnosis || [], data.candidateDecisionRecords || []);
   renderClosedLoopCalibration(data.closedLoopCalibrationResults || []);
+  renderGenericTable("closedLoopRankingFusionTable", data.closedLoopRankingFusion || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
@@ -3551,6 +3596,7 @@ function renderAnalysisResult(data) {
   el("runEnhancedScreening").disabled = !currentRunId;
   el("runAutoClosedLoopDiagnosis").disabled = !currentRunId;
   el("runClosedLoopCalibration").disabled = !currentRunId;
+  el("applyClosedLoopRanking").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
@@ -3651,6 +3697,22 @@ async function runClosedLoopCalibration() {
     setStatus(error.message || String(error), "error");
   } finally {
     el("runClosedLoopCalibration").disabled = false;
+  }
+}
+
+async function applyClosedLoopRanking() {
+  if (!currentRunId) return setStatus("请先完成主筛查。", "error");
+  const form = new FormData();
+  form.append("run_id", currentRunId);
+  el("applyClosedLoopRanking").disabled = true;
+  try {
+    const data = await postForm("/api/apply_closed_loop_ranking", form);
+    renderAnalysisResult(data);
+    setStatus("闭环风险排序已应用。", "success");
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  } finally {
+    el("applyClosedLoopRanking").disabled = false;
   }
 }
 
@@ -5370,6 +5432,7 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   closedLoopEvidenceTable: ["variable", "manual_closed_loop_status", "auto_closed_loop_status", "closed_loop_evidence_level", "closed_loop_evidence_source", "closed_loop_conflict", "closed_loop_reason"],
   autoClosedLoopDiagnosisTable: ["mv_variable", "cv_variable", "diagnosis_status", "confidence_level", "manual_status", "comparison", "evidence_items"],
   closedLoopCalibrationTable: ["variable", "auto_closed_loop_probability", "training_label", "label_source", "calibration_status", "comparison"],
+  closedLoopRankingFusionTable: ["variable", "manual_status", "auto_probability", "automatic_closed_loop_risk", "final_closed_loop_status", "factor_adjustment", "closed_loop_ranking_reason"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],

@@ -896,8 +896,8 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     return pd.DataFrame(rows, columns=cols)
 
 
-def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None, candidate_decision_records: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included"]
+def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None, candidate_decision_records: pd.DataFrame | None = None, closed_loop_risk_context: pd.DataFrame | None = None) -> pd.DataFrame:
+    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "closed_loop_ranking_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -1065,6 +1065,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         top_k=top_k,
         control_columns=control_columns,
         candidate_decision_records=candidate_decision_records,
+        closed_loop_risk_context=closed_loop_risk_context,
         primary_rank_column=PRIMARY_RANK_COLUMN,
     )
     final = final.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable")
@@ -1084,11 +1085,12 @@ def reorder_ranked_features(
     force_include_variables: list[str] | None = None,
     top_k: int | None = None,
     control_columns: list[str] | None = None,
+    closed_loop_risk_context: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Reapply the driver-ranking tail to persisted analysis results only."""
     if ranked_features.empty:
         return ranked_features.copy()
-    output_columns = list(ranked_features.columns)
+    output_columns = [*ranked_features.columns, *( ["closed_loop_ranking_reason"] if "closed_loop_ranking_reason" not in ranked_features.columns else [])]
     final = ranked_features.copy()
     if closed_loop_evidence is not None and {"variable", "closed_loop_evidence_level"}.issubset(closed_loop_evidence.columns):
         evidence = closed_loop_evidence[["variable", "closed_loop_evidence_level"]].drop_duplicates("variable")
@@ -1105,6 +1107,7 @@ def reorder_ranked_features(
         top_k=top_k,
         control_columns=control_columns,
         candidate_decision_records=candidate_decision_records,
+        closed_loop_risk_context=closed_loop_risk_context,
     )
     return final.reset_index(drop=True).reindex(columns=output_columns)
 
@@ -1115,6 +1118,7 @@ def _finalize_driver_ranking(
     top_k: int | None = None,
     control_columns: list[str] | None = None,
     candidate_decision_records: pd.DataFrame | None = None,
+    closed_loop_risk_context: pd.DataFrame | None = None,
     primary_rank_column: str = PRIMARY_RANK_COLUMN,
 ) -> pd.DataFrame:
     final = final.copy()
@@ -1124,6 +1128,9 @@ def _finalize_driver_ranking(
         confirmed_recommendation = final["new_status"].eq("confirmed_recommendation")
         closed_loop_confirmed = final.get("closed_loop_evidence_level", pd.Series("", index=final.index)).eq("confirmed")
         final.loc[confirmed_recommendation & ~closed_loop_confirmed, "driver_priority_factor"] = 1.0
+    from chem_ts_corr.closed_loop_ranking import apply_closed_loop_risk_context
+
+    final = apply_closed_loop_risk_context(final, closed_loop_risk_context)
     final["driver_priority_score"] = (final["final_score"] * final["driver_priority_factor"]).clip(0, 1)
     final["driver_rank"] = final["driver_priority_score"].rank(method="first", ascending=False).astype(int)
     forced = set(force_include_variables or [])

@@ -563,6 +563,7 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
         "recommended_use",
         "recommended_action",
         "force_included",
+        "closed_loop_ranking_reason",
     ]
     future_fields = {
         "manual_closed_loop_status",

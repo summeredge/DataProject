@@ -26,6 +26,10 @@ class AnalysisConfig:
     force_include_variables: list[str] | None = None
     manual_closed_loop_variables: list[str] = field(default_factory=list)
     manual_non_closed_loop_variables: list[str] = field(default_factory=list)
+    closed_loop_auto_medium_threshold: float = 0.3
+    closed_loop_auto_high_threshold: float = 0.7
+    closed_loop_auto_medium_factor: float = 0.8
+    closed_loop_auto_high_factor: float = 0.55
     excluded_columns: list[str] = field(default_factory=list)
     exclude_control_columns_from_candidates: bool = True
     roles_path: Path | None = None

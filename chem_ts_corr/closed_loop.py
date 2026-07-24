@@ -8,10 +8,9 @@ import pandas as pd
 CLOSED_LOOP_EVIDENCE_COLUMNS = [
     "variable",
     "manual_closed_loop_status",
-    "auto_closed_loop_status",
-    "closed_loop_evidence_level",
-    "closed_loop_evidence_source",
-    "closed_loop_conflict",
+    "automatic_closed_loop_indicator",
+    "closed_loop_context",
+    "closed_loop_status",
     "closed_loop_reason",
 ]
 
@@ -34,35 +33,32 @@ def build_closed_loop_evidence(
     rows: list[dict[str, object]] = []
     for variable in variables:
         risk = risk_by_variable.get(variable)
-        manual = "confirmed_closed_loop" if variable in closed else "confirmed_not_closed_loop" if variable in non_closed else "unknown"
-        automatic = "suspected_closed_loop" if risk is not None and bool(risk.get("closed_loop_suspect_flag", False)) else "unknown"
-        conflict = manual == "confirmed_not_closed_loop" and automatic == "suspected_closed_loop"
-        if manual == "confirmed_closed_loop":
-            level, source = "confirmed", "manual_and_automatic" if automatic != "unknown" else "manual"
-        elif conflict:
-            level, source = "conflict", "manual_and_automatic"
-        elif manual == "confirmed_not_closed_loop":
-            level, source = "rejected", "manual"
-        elif automatic == "suspected_closed_loop":
-            level, source = "suspected", "automatic"
+        manual = "engineering_input_closed_loop" if variable in closed else "engineering_input_not_closed_loop" if variable in non_closed else "not_provided"
+        automatic = "possible" if risk is not None and bool(risk.get("closed_loop_suspect_flag", False)) else "not_indicated"
+        if manual != "not_provided" and automatic == "possible":
+            context = "manual_engineering_input_and_automatic_indicator"
+        elif manual != "not_provided":
+            context = "manual_engineering_input"
+        elif automatic == "possible":
+            context = "automatic_indicator"
         else:
-            level, source = "unknown", "none"
+            context = "no_closed_loop_context"
+        status = "possible_closed_loop_influence" if automatic == "possible" else "manual_context_requires_review" if manual != "not_provided" else "no_closed_loop_indicator"
         reasons = []
-        if manual == "confirmed_closed_loop":
-            reasons.append("人工确认闭环控制变量")
-        elif manual == "confirmed_not_closed_loop":
-            reasons.append("人工确认非闭环")
-        if automatic == "suspected_closed_loop":
-            reasons.append("自动检测存在闭环嫌疑")
+        if manual == "engineering_input_closed_loop":
+            reasons.append("人工工程经验输入：可能与闭环控制相关，需人工复核")
+        elif manual == "engineering_input_not_closed_loop":
+            reasons.append("人工工程经验输入：未标记为闭环控制相关")
+        if automatic == "possible":
+            reasons.append("自动诊断指标提示可能存在闭环影响")
         elif risk is None:
             reasons.append("未获得自动闭环判断结果")
         rows.append({
             "variable": variable,
             "manual_closed_loop_status": manual,
-            "auto_closed_loop_status": automatic,
-            "closed_loop_evidence_level": level,
-            "closed_loop_evidence_source": source,
-            "closed_loop_conflict": conflict,
+            "automatic_closed_loop_indicator": automatic,
+            "closed_loop_context": context,
+            "closed_loop_status": status,
             "closed_loop_reason": json.dumps(reasons, ensure_ascii=False),
         })
     return pd.DataFrame(rows, columns=CLOSED_LOOP_EVIDENCE_COLUMNS)

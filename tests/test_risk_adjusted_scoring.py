@@ -282,7 +282,6 @@ def test_v2_risk_constants_separate_evidence_and_engineering_priority():
         "formula_like": 0.00,
         "strong_formula_leakage": 0.50,
         "common_capacity_driver": 0.00,
-        "closed_loop_suspect": 0.00,
         "target_leads_variable": 0.00,
         "unstable_across_regimes": 0.00,
         "unstable_over_time": 0.00,

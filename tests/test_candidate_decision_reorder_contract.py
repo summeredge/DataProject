@@ -52,9 +52,9 @@ def test_confirmed_recommendation_promotes_normal_candidate_without_changing_evi
     assert reordered.loc["C", "association_rank"] == before.loc["C", "association_rank"]
 
 
-def test_confirmed_recommendation_keeps_confirmed_closed_loop_cap():
+def test_confirmed_recommendation_ignores_closed_loop_context():
     original = _ranked_result()
-    evidence = pd.DataFrame([{"variable": "A", "closed_loop_evidence_level": "confirmed"}])
+    evidence = pd.DataFrame([{"variable": "A", "closed_loop_context": "manual_engineering_input", "closed_loop_status": "manual_context_requires_review", "closed_loop_reason": "[]"}])
 
     reordered = reorder_ranked_features(
         original,
@@ -62,8 +62,8 @@ def test_confirmed_recommendation_keeps_confirmed_closed_loop_cap():
         candidate_decision_records=_records(("A", "confirmed_recommendation")),
     ).set_index("variable")
 
-    assert reordered.loc["A", "driver_priority_factor"] <= 0.55
-    assert reordered.loc["A", "recommended_use"] == "closed_loop_confirmed"
+    assert reordered.loc["A", "driver_priority_factor"] == 1.0
+    assert reordered.loc["A", "recommended_use"] == "manual_confirmed_recommendation"
 
 
 def test_excluded_candidate_stays_out_of_topk_and_recommended_candidates_with_controls():

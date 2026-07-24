@@ -284,7 +284,7 @@ def test_manual_annotations_only_change_allowed_ranking_outputs(tmp_path: Path):
         "recommended_use",
         "recommended_action",
     }
-    unaffected = [column for column in baseline_ranked.columns if column not in allowed and column != "variable"]
+    unaffected = [column for column in baseline_ranked.columns if column not in allowed and column not in {"variable", "closed_loop_context", "closed_loop_status", "closed_loop_reason"}]
     pd.testing.assert_frame_equal(
         baseline_ranked.set_index("variable").sort_index()[unaffected],
         ranked.set_index("variable").sort_index()[unaffected],
@@ -294,11 +294,11 @@ def test_manual_annotations_only_change_allowed_ranking_outputs(tmp_path: Path):
 def test_web_ui_contains_manual_annotation_controls_and_lifecycle_contract():
     source = web.INDEX_HTML
     for marker in [
-        "人工闭环风险确认（可选）",
+        "人工闭环工程经验输入（可选）",
         "已确认闭环/控制相关变量",
         "已确认非闭环变量",
         "该确认针对当前目标变量",
-        "已确认闭环会降低工程推荐优先级",
+        "不改变评分、排序或自动诊断",
         "fillManualAnnotationOptions",
         "getManualClosedLoopSelection",
         "setManualClosedLoopSelection",

@@ -81,7 +81,6 @@ DOWNLOAD_FILES = {
     "closed_loop_calibration_model.json",
     "closed_loop_calibration_results.csv",
     "closed_loop_calibration_metrics.json",
-    "closed_loop_ranking_fusion.csv",
     "candidate_decision_records.json",
     "reordered_recommendations.csv",
     "recommended_candidates_reordered.csv",
@@ -216,9 +215,6 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/run_closed_loop_calibration":
                 self._send_json(_run_closed_loop_calibration_response(self))
-                return
-            if self.path == "/api/apply_closed_loop_ranking":
-                self._send_json(_apply_closed_loop_ranking_response(self))
                 return
             if self.path == "/api/run_granger":
                 self._send_json(_run_granger_response(self))
@@ -714,7 +710,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     closed_loop_evidence = _safe_read_result_csv(output_dir / "closed_loop_evidence.csv")
     auto_closed_loop_diagnosis = _safe_read_result_csv(output_dir / "auto_closed_loop_diagnosis.csv")
     calibration_results = _safe_read_result_csv(output_dir / "closed_loop_calibration_results.csv")
-    closed_loop_ranking_fusion = _safe_read_result_csv(output_dir / "closed_loop_ranking_fusion.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
@@ -732,7 +727,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "closedLoopEvidence": _records(closed_loop_evidence.head(200)),
         "autoClosedLoopDiagnosis": _records(auto_closed_loop_diagnosis.head(200)),
         "closedLoopCalibrationResults": _records(calibration_results.head(200)),
-        "closedLoopRankingFusion": _records(closed_loop_ranking_fusion.head(200)),
         "candidateDecisionRecords": _read_candidate_decision_records(output_dir),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
@@ -1990,39 +1984,6 @@ def _run_closed_loop_calibration_response(handler: BaseHTTPRequestHandler) -> di
     return _build_result_payload(output_dir.name, output_dir, config)
 
 
-def _apply_closed_loop_ranking_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    from chem_ts_corr.closed_loop_ranking import build_closed_loop_risk_context
-    from chem_ts_corr.report import build_recommended_candidates
-    from chem_ts_corr.screening import reorder_ranked_features
-
-    form = _multipart_form(handler)
-    output_dir = _resolve_run_dir(_field(form, "run_id"))
-    config = _read_run_config(output_dir)
-    context = build_closed_loop_risk_context(
-        _safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
-        _safe_read_result_csv(output_dir / "closed_loop_calibration_results.csv"),
-        medium_threshold=config.closed_loop_auto_medium_threshold,
-        high_threshold=config.closed_loop_auto_high_threshold,
-        medium_factor=config.closed_loop_auto_medium_factor,
-        high_factor=config.closed_loop_auto_high_factor,
-    )
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    reordered = reorder_ranked_features(
-        ranked,
-        closed_loop_evidence=_safe_read_result_csv(output_dir / "closed_loop_evidence.csv"),
-        candidate_decision_records=pd.DataFrame(_read_candidate_decision_records(output_dir)),
-        force_include_variables=config.force_include_variables,
-        top_k=config.top_k,
-        control_columns=list(set(config.residual_control_columns or []) | set(config.capacity_columns or [])) if config.exclude_control_columns_from_candidates else [],
-        closed_loop_risk_context=context,
-    )
-    context.to_csv(output_dir / "closed_loop_ranking_fusion.csv", index=False, encoding="utf-8-sig")
-    reordered.to_csv(output_dir / "ranked_features.csv", index=False, encoding="utf-8-sig")
-    reordered.to_csv(output_dir / "reordered_recommendations.csv", index=False, encoding="utf-8-sig")
-    build_recommended_candidates(reordered).to_csv(output_dir / "recommended_candidates_reordered.csv", index=False, encoding="utf-8-sig")
-    return _build_result_payload(output_dir.name, output_dir, config)
-
-
 def _lag_profile_response(params: dict[str, list[str]]) -> dict[str, Any]:
     run_id = _single(params, "run_id")
     variable = _single(params, "variable")
@@ -2698,7 +2659,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       </div>
       <div class="control-group">
-        <div class="control-group-title">人工闭环风险确认（可选）</div>
+        <div class="control-group-title">人工闭环工程经验输入（可选）</div>
         <label>已确认闭环/控制相关变量
           <details id="manualClosedLoopDropdown" class="multi-dropdown">
             <summary id="manualClosedLoopSummary">请选择已确认闭环变量</summary>
@@ -2711,8 +2672,8 @@ INDEX_HTML = r"""<!doctype html>
             <div id="manualNonClosedLoopOptions" class="multi-options"></div>
           </details>
         </label>
-        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系。已确认闭环会降低工程推荐优先级，但不改变统计评分或自动风险判断。</div>
-        <div class="help">已确认非闭环变量仅表示不应因闭环风险降级，不代表该变量一定是上游根因。</div>
+        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系，作为推荐结果解释与人工复核上下文，不改变评分、排序或自动诊断。</div>
+        <div class="help">未标记为闭环的工程经验输入不代表该变量一定是上游根因。</div>
       </div>
       <div id="status" class="status info" role="status" aria-live="polite"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
@@ -2738,21 +2699,6 @@ INDEX_HTML = r"""<!doctype html>
         <h2>前 10 个推荐变量</h2>
         <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低证据覆盖度与修正系数，不会放大其他分项。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
-        <h2>闭环风险证据</h2>
-        <div class="help">汇总人工确认与现有自动风险标记，仅供证据复核，不改变评分、分类或排序。</div>
-        <div id="closedLoopEvidenceTable" class="empty">暂无闭环证据</div>
-        <h2>自动闭环影子诊断</h2>
-        <div class="help">基于已保存的滞后、稳定性、预测和风险结果生成，仅用于与人工决策对比，不改变推荐排序。</div>
-        <div class="actions"><button id="runAutoClosedLoopDiagnosis" type="button" disabled>刷新自动闭环诊断</button></div>
-        <div id="autoClosedLoopDiagnosisTable" class="empty">暂无自动闭环诊断</div>
-        <h2>自动闭环校准</h2>
-        <div class="help">仅使用人工闭环标签校准自动诊断概率；概率不参与评分、排序或推荐。</div>
-        <div class="actions"><button id="runClosedLoopCalibration" type="button" disabled>运行闭环校准</button></div>
-        <div id="closedLoopCalibrationTable" class="empty">暂无闭环校准结果</div>
-        <h2>闭环风险排序融合</h2>
-        <div class="help">人工闭环确认优先于自动概率；自动高、中风险仅降低未人工确认变量的推荐优先级。</div>
-        <div class="actions"><button id="applyClosedLoopRanking" type="button" disabled>应用闭环风险排序</button></div>
-        <div id="closedLoopRankingFusionTable" class="empty">暂无闭环风险排序信息</div>
         <section id="candidatesTab">
           <h2>候选变量</h2>
           <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
@@ -3099,9 +3045,6 @@ el("copyLlmReport").addEventListener("click", copyLlmReport);
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
 el("applyCandidateDecision").addEventListener("click", updateCandidateDecision);
-el("runAutoClosedLoopDiagnosis").addEventListener("click", runAutoClosedLoopDiagnosis);
-el("runClosedLoopCalibration").addEventListener("click", runClosedLoopCalibration);
-el("applyClosedLoopRanking").addEventListener("click", applyClosedLoopRanking);
 el("reset").addEventListener("click", reset);
 el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
@@ -3572,10 +3515,6 @@ function renderAnalysisResult(data) {
   renderTable(lastRows);
   tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
-  renderGenericTable("closedLoopEvidenceTable", data.closedLoopEvidence || []);
-  renderAutoClosedLoopDiagnosis(data.autoClosedLoopDiagnosis || [], data.candidateDecisionRecords || []);
-  renderClosedLoopCalibration(data.closedLoopCalibrationResults || []);
-  renderGenericTable("closedLoopRankingFusionTable", data.closedLoopRankingFusion || []);
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
@@ -3594,9 +3533,6 @@ function renderAnalysisResult(data) {
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
   el("runEnhancedScreening").disabled = !currentRunId;
-  el("runAutoClosedLoopDiagnosis").disabled = !currentRunId;
-  el("runClosedLoopCalibration").disabled = !currentRunId;
-  el("applyClosedLoopRanking").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
@@ -3678,7 +3614,7 @@ function renderClosedLoopCalibration(rows) {
       ? "校准样本不足"
       : row.training_label === "unknown"
         ? "无人工标签"
-        : ((Number(row.auto_closed_loop_probability) >= 0.5) === (row.training_label === "confirmed_closed_loop") ? "一致" : "需要人工复核");
+        : ((Number(row.auto_closed_loop_probability) >= 0.5) === (row.training_label === "engineering_input_closed_loop") ? "一致" : "需要人工复核");
     return { ...row, comparison };
   });
   renderGenericTable("closedLoopCalibrationTable", displayRows);
@@ -3697,22 +3633,6 @@ async function runClosedLoopCalibration() {
     setStatus(error.message || String(error), "error");
   } finally {
     el("runClosedLoopCalibration").disabled = false;
-  }
-}
-
-async function applyClosedLoopRanking() {
-  if (!currentRunId) return setStatus("请先完成主筛查。", "error");
-  const form = new FormData();
-  form.append("run_id", currentRunId);
-  el("applyClosedLoopRanking").disabled = true;
-  try {
-    const data = await postForm("/api/apply_closed_loop_ranking", form);
-    renderAnalysisResult(data);
-    setStatus("闭环风险排序已应用。", "success");
-  } catch (error) {
-    setStatus(error.message || String(error), "error");
-  } finally {
-    el("applyClosedLoopRanking").disabled = false;
   }
 }
 
@@ -4874,7 +4794,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"];
+  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -5429,10 +5349,6 @@ function renderAnalysisTimingBreakdown(timings) {
 
 const GENERIC_TABLE_CORE_COLUMNS = {
   overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
-  closedLoopEvidenceTable: ["variable", "manual_closed_loop_status", "auto_closed_loop_status", "closed_loop_evidence_level", "closed_loop_evidence_source", "closed_loop_conflict", "closed_loop_reason"],
-  autoClosedLoopDiagnosisTable: ["mv_variable", "cv_variable", "diagnosis_status", "confidence_level", "manual_status", "comparison", "evidence_items"],
-  closedLoopCalibrationTable: ["variable", "auto_closed_loop_probability", "training_label", "label_source", "calibration_status", "comparison"],
-  closedLoopRankingFusionTable: ["variable", "manual_status", "auto_probability", "automatic_closed_loop_risk", "final_closed_loop_status", "factor_adjustment", "closed_loop_ranking_reason"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -5815,7 +5731,6 @@ function missingText(targetId) {
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
-  if (targetId === "closedLoopEvidenceTable") return "暂无闭环证据";
   return "无可展示结果。";
 }
 
@@ -6093,13 +6008,18 @@ function formatCellValue(column, value) {
       strong: "强",
     },
     manual_closed_loop_status: {
-      confirmed_closed_loop: "已确认闭环",
-      confirmed_not_closed_loop: "已确认非闭环",
+      engineering_input_closed_loop: "人工工程经验：闭环相关",
+      engineering_input_not_closed_loop: "人工工程经验：未标记闭环",
       unknown: "未确认",
     },
     auto_closed_loop_status: {
       suspected_closed_loop: "存在闭环嫌疑",
       unknown: "未确认",
+    },
+    closed_loop_status: {
+      possible_closed_loop_influence: "可能存在闭环影响",
+      manual_context_requires_review: "人工工程经验待复核",
+      no_closed_loop_indicator: "未发现闭环指标",
     },
     closed_loop_evidence_level: {
       confirmed: "已确认闭环",
@@ -6427,6 +6347,9 @@ function columnLabel(column) {
     common_capacity_driver_flag: "疑似共同负荷驱动",
     closed_loop_suspect_flag: "疑似闭环反馈",
     manual_closed_loop_status: "人工确认",
+    automatic_closed_loop_indicator: "自动闭环指标",
+    closed_loop_context: "闭环上下文",
+    closed_loop_status: "闭环状态",
     auto_closed_loop_status: "自动判断",
     closed_loop_evidence_level: "综合闭环状态",
     closed_loop_evidence_source: "证据来源",
@@ -6682,8 +6605,6 @@ function reset() {
   el("analysisTimingBreakdown").hidden = true;
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
-  el("closedLoopEvidenceTable").className = "empty";
-  el("closedLoopEvidenceTable").textContent = "暂无闭环证据";
   el("screeningQualityHints").className = "empty";
   el("screeningQualityHints").textContent = "完成主筛查后显示结果质量提示。";
   el("table").className = "empty";

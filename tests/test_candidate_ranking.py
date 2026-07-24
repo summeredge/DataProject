@@ -77,7 +77,6 @@ def test_driver_rank_can_reverse_association_order():
         ("strong_formula_leakage", "formula_or_derived"),
         ("poor_data_quality", "poor_quality"),
         ("target_leads_variable", "downstream_response"),
-        ("closed_loop_suspect", "closed_loop_related"),
         ("common_capacity_driver", "capacity_driven"),
     ],
 )
@@ -140,11 +139,10 @@ def test_upstream_class_is_reachable_through_production_risk_pipeline():
     assert result.loc[0, "candidate_class"] == "upstream_driver_candidate"
 
 
-@pytest.mark.parametrize("candidate_class", CLASS_PRIORITY_FACTORS)
+@pytest.mark.parametrize("candidate_class", [name for name in CLASS_PRIORITY_FACTORS if name != "closed_loop_related"])
 def test_driver_priority_score_uses_class_factor(candidate_class: str):
     risk_by_class = {
         "downstream_response": "target_leads_variable",
-        "closed_loop_related": "closed_loop_suspect",
         "capacity_driven": "common_capacity_driver",
         "formula_or_derived": "strong_formula_leakage",
         "poor_quality": "poor_data_quality",

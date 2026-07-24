@@ -60,7 +60,7 @@ def build_auto_closed_loop_diagnosis(
             status, confidence = "not_supported", "low"
         evidence = []
         if closed_loop_flag:
-            evidence.append("existing_closed_loop_risk_flag")
+            evidence.append("existing_closed_loop_indicator")
         if lag_supported:
             evidence.append("lag_quality_supported")
         if stable:

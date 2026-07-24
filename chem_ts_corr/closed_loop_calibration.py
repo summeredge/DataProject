@@ -33,8 +33,8 @@ FEATURE_COLUMNS = [
     "diagnosis_status_score",
     "confidence_level_score",
 ]
-POSITIVE_LABEL = "confirmed_closed_loop"
-NEGATIVE_LABEL = "confirmed_not_closed_loop"
+POSITIVE_LABEL = "engineering_input_closed_loop"
+NEGATIVE_LABEL = "engineering_input_not_closed_loop"
 
 
 def build_training_labels(

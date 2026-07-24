@@ -182,7 +182,8 @@ def test_current_closed_loop_auto_detection_contract():
         [],
     ).set_index("variable")
 
-    assert risks.loc["mv_negative_lag", "risk_flags"] == "closed_loop_suspect;target_leads_variable"
+    assert bool(risks.loc["mv_negative_lag", "closed_loop_suspect_flag"])
+    assert risks.loc["mv_negative_lag", "risk_flags"] == "target_leads_variable"
     assert risks.loc["pv_negative_lag", "risk_flags"] == "target_leads_variable"
     assert not bool(risks.loc["mv_zero_lag", "closed_loop_suspect_flag"])
     assert not bool(risks.loc["mv_zero_lag", "target_leads_variable_flag"])
@@ -195,7 +196,6 @@ def test_current_risk_constants_are_frozen():
         "formula_like": 0.00,
         "strong_formula_leakage": 0.50,
         "common_capacity_driver": 0.00,
-        "closed_loop_suspect": 0.00,
         "target_leads_variable": 0.00,
         "unstable_across_regimes": 0.00,
         "unstable_over_time": 0.00,
@@ -297,11 +297,11 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             "疑似共同负荷驱动",
         ),
         "mv_negative_lag": (
-            "closed_loop_suspect;target_leads_variable",
-            2,
+            "target_leads_variable",
             1,
+            0,
             1,
-            "medium",
+            "weak",
             0.850000000000000,
             0.0,
             0.0,
@@ -312,8 +312,8 @@ def test_golden_case_freezes_risk_scoring_and_recommendation_baseline():
             0.382500000000000,
             5,
             "A",
-            "closed_loop_suspect",
-            "疑似闭环反馈",
+            "state_indicator",
+            "更可能是状态指示量",
         ),
         "pv_negative_lag": (
             "target_leads_variable",
@@ -563,7 +563,9 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
         "recommended_use",
         "recommended_action",
         "force_included",
-        "closed_loop_ranking_reason",
+        "closed_loop_context",
+        "closed_loop_status",
+        "closed_loop_reason",
     ]
     future_fields = {
         "manual_closed_loop_status",
@@ -574,6 +576,7 @@ def test_output_schema_and_future_closed_loop_fields_are_frozen():
         "original_driver_rank",
     }
     assert not future_fields.intersection(result.columns)
+    assert {"closed_loop_context", "closed_loop_status", "closed_loop_reason"}.issubset(result.columns)
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
     for token in [
         "manual_closed_loop_variables",

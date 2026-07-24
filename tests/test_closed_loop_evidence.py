@@ -25,23 +25,20 @@ def _risk_flags() -> pd.DataFrame:
     )
 
 
-def test_closed_loop_evidence_fuses_manual_and_existing_risk_flags():
+def test_closed_loop_context_fuses_engineering_input_and_automatic_indicator():
     evidence = build_closed_loop_evidence(
         _risk_flags(),
         manual_closed_loop_variables=["manual_closed", "manual_closed_and_auto"],
         manual_non_closed_loop_variables=["manual_non_closed", "conflict"],
     ).set_index("variable")
 
-    assert evidence.loc["manual_closed", "closed_loop_evidence_level"] == "confirmed"
-    assert evidence.loc["manual_closed", "closed_loop_evidence_source"] == "manual"
-    assert evidence.loc["manual_closed_and_auto", "closed_loop_evidence_source"] == "manual_and_automatic"
-    assert evidence.loc["manual_non_closed", "closed_loop_evidence_level"] == "rejected"
-    assert evidence.loc["conflict", "closed_loop_evidence_level"] == "conflict"
-    assert evidence.loc["conflict", "closed_loop_evidence_source"] == "manual_and_automatic"
-    assert bool(evidence.loc["conflict", "closed_loop_conflict"])
-    assert evidence.loc["automatic", "closed_loop_evidence_level"] == "suspected"
-    assert evidence.loc["unknown", "closed_loop_evidence_level"] == "unknown"
-    assert json.loads(evidence.loc["conflict", "closed_loop_reason"]) == ["人工确认非闭环", "自动检测存在闭环嫌疑"]
+    assert evidence.loc["manual_closed", "closed_loop_context"] == "manual_engineering_input"
+    assert evidence.loc["manual_closed_and_auto", "closed_loop_context"] == "manual_engineering_input_and_automatic_indicator"
+    assert evidence.loc["manual_non_closed", "manual_closed_loop_status"] == "engineering_input_not_closed_loop"
+    assert evidence.loc["conflict", "closed_loop_status"] == "possible_closed_loop_influence"
+    assert evidence.loc["automatic", "automatic_closed_loop_indicator"] == "possible"
+    assert evidence.loc["unknown", "closed_loop_status"] == "no_closed_loop_indicator"
+    assert json.loads(evidence.loc["conflict", "closed_loop_reason"]) == ["人工工程经验输入：未标记为闭环控制相关", "自动诊断指标提示可能存在闭环影响"]
 
 
 def test_auto_status_only_uses_existing_closed_loop_suspect_flag():
@@ -52,8 +49,8 @@ def test_auto_status_only_uses_existing_closed_loop_suspect_flag():
         ])
     ).set_index("variable")
 
-    assert evidence.loc["leads_only", "auto_closed_loop_status"] == "unknown"
-    assert evidence.loc["suspect", "auto_closed_loop_status"] == "suspected_closed_loop"
+    assert evidence.loc["leads_only", "automatic_closed_loop_indicator"] == "not_indicated"
+    assert evidence.loc["suspect", "automatic_closed_loop_indicator"] == "possible"
 
 
 def test_closed_loop_evidence_csv_schema_is_frozen():
@@ -71,9 +68,9 @@ def test_manual_only_variable_is_preserved_without_automatic_risk_result():
 
     assert evidence["variable"].tolist()[-2:] == ["manual_only", "manual_only_non_closed"]
     manual_only = evidence.set_index("variable").loc["manual_only"]
-    assert manual_only["manual_closed_loop_status"] == "confirmed_closed_loop"
-    assert manual_only["auto_closed_loop_status"] == "unknown"
-    assert manual_only["closed_loop_evidence_level"] == "confirmed"
+    assert manual_only["manual_closed_loop_status"] == "engineering_input_closed_loop"
+    assert manual_only["automatic_closed_loop_indicator"] == "not_indicated"
+    assert manual_only["closed_loop_status"] == "manual_context_requires_review"
     assert json.loads(manual_only["closed_loop_reason"])[-1] == "未获得自动闭环判断结果"
 
 
@@ -120,17 +117,9 @@ def test_evidence_output_does_not_change_ranked_or_risk_flags(tmp_path: Path):
         )
     baseline_ranked = pd.read_csv(baseline.output_dir / "ranked_features.csv").set_index("variable").sort_index()
     annotated_ranked = pd.read_csv(annotated.output_dir / "ranked_features.csv").set_index("variable").sort_index()
-    allowed = {
-        "candidate_class",
-        "driver_priority_factor",
-        "driver_priority_score",
-        "driver_rank",
-        "recommended_use",
-        "recommended_action",
-    }
     pd.testing.assert_frame_equal(
-        baseline_ranked[[column for column in baseline_ranked.columns if column not in allowed]],
-        annotated_ranked[[column for column in annotated_ranked.columns if column not in allowed]],
+        baseline_ranked[[column for column in baseline_ranked.columns if not column.startswith("closed_loop_")]],
+        annotated_ranked[[column for column in annotated_ranked.columns if not column.startswith("closed_loop_")]],
     )
     evidence = pd.read_csv(annotated.output_dir / "closed_loop_evidence.csv")
     assert evidence.columns.tolist() == CLOSED_LOOP_EVIDENCE_COLUMNS
@@ -146,16 +135,9 @@ def test_old_run_without_evidence_file_returns_empty_evidence_payload(tmp_path: 
 
     assert payload["closedLoopEvidence"] == []
     for marker in [
-        "闭环风险证据",
-        "暂无闭环证据",
-        "人工确认",
-        "自动判断",
-        "综合闭环状态",
-        "证据来源",
-        "证据冲突",
-        "判断依据",
-        "人工与自动判断冲突",
-        "reasons.join(\"；\")",
+        "closed_loop_context",
+        "closed_loop_status",
+        "closed_loop_reason",
     ]:
         assert marker in web.INDEX_HTML
 

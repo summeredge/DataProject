@@ -15,6 +15,7 @@ CALIBRATION_RESULT_COLUMNS = [
     "auto_closed_loop_probability",
     "calibration_status",
     "training_label",
+    "label_source",
     "prediction_time",
 ]
 FEATURE_COLUMNS = [
@@ -42,24 +43,16 @@ def build_training_labels(
     candidate_decision_records: list[dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     """Create labels only from explicit human closed-loop decisions."""
-    labels: dict[str, str] = {}
+    del candidate_decision_records
+    labels: dict[str, tuple[str, str]] = {}
     for variable in manual_closed_loop_variables or []:
-        labels[str(variable)] = POSITIVE_LABEL
+        labels[str(variable)] = (POSITIVE_LABEL, "manual_closed_loop")
     for variable in manual_non_closed_loop_variables or []:
         variable = str(variable)
-        labels[variable] = NEGATIVE_LABEL if variable not in labels else "unknown"
-    for record in candidate_decision_records or []:
-        status = str(record.get("new_status", ""))
-        if status not in {POSITIVE_LABEL, NEGATIVE_LABEL}:
-            continue
-        variable = str(record.get("variable", ""))
-        if not variable:
-            continue
-        previous = labels.get(variable)
-        labels[variable] = status if previous in {None, status} else "unknown"
+        labels[variable] = (NEGATIVE_LABEL, "manual_non_closed_loop") if variable not in labels else ("unknown", "unknown")
     return pd.DataFrame(
-        [{"variable": variable, "training_label": label} for variable, label in labels.items()],
-        columns=["variable", "training_label"],
+        [{"variable": variable, "training_label": label, "label_source": source} for variable, (label, source) in labels.items()],
+        columns=["variable", "training_label", "label_source"],
     )
 
 
@@ -113,6 +106,7 @@ def run_closed_loop_calibration(
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     labelled = merged[merged["training_label"].isin([POSITIVE_LABEL, NEGATIVE_LABEL])].copy()
     metrics: dict[str, object] = {
+        "evaluation_mode": "training_only",
         "sample_count": int(len(labelled)),
         "positive_count": int((labelled["training_label"] == POSITIVE_LABEL).sum()),
         "negative_count": int((labelled["training_label"] == NEGATIVE_LABEL).sum()),
@@ -152,6 +146,7 @@ def run_closed_loop_calibration(
         "auto_closed_loop_probability": probabilities,
         "calibration_status": status,
         "training_label": merged["training_label"].fillna("unknown"),
+        "label_source": merged["label_source"].fillna("unknown"),
         "prediction_time": timestamp,
     }, columns=CALIBRATION_RESULT_COLUMNS)
     results.to_csv(output_dir / "closed_loop_calibration_results.csv", index=False, encoding="utf-8-sig")

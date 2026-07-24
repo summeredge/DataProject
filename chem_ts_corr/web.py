@@ -5369,7 +5369,7 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
   closedLoopEvidenceTable: ["variable", "manual_closed_loop_status", "auto_closed_loop_status", "closed_loop_evidence_level", "closed_loop_evidence_source", "closed_loop_conflict", "closed_loop_reason"],
   autoClosedLoopDiagnosisTable: ["mv_variable", "cv_variable", "diagnosis_status", "confidence_level", "manual_status", "comparison", "evidence_items"],
-  closedLoopCalibrationTable: ["variable", "auto_closed_loop_probability", "training_label", "calibration_status", "comparison"],
+  closedLoopCalibrationTable: ["variable", "auto_closed_loop_probability", "training_label", "label_source", "calibration_status", "comparison"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],

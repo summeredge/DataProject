@@ -58,13 +58,28 @@ def test_human_labels_are_explicit_and_auto_diagnosis_is_not_a_label():
     labels = build_training_labels(
         ["positive"],
         ["negative"],
-        [{"variable": "record_positive", "new_status": POSITIVE_LABEL}, {"variable": "ignored", "new_status": "confirmed_recommendation"}],
+        [],
     ).set_index("variable")
 
     assert labels.loc["positive", "training_label"] == POSITIVE_LABEL
+    assert labels.loc["positive", "label_source"] == "manual_closed_loop"
     assert labels.loc["negative", "training_label"] == NEGATIVE_LABEL
-    assert labels.loc["record_positive", "training_label"] == POSITIVE_LABEL
-    assert "ignored" not in labels.index
+    assert labels.loc["negative", "label_source"] == "manual_non_closed_loop"
+
+
+def test_recommendation_decisions_cannot_create_closed_loop_labels():
+    labels = build_training_labels(
+        [],
+        [],
+        [
+            {"variable": "C", "new_status": "confirmed_recommendation"},
+            {"variable": "D", "new_status": "excluded_recommendation"},
+            {"variable": "E", "new_status": "needs_review"},
+            {"variable": "F", "new_status": POSITIVE_LABEL},
+        ],
+    )
+
+    assert labels.empty
 
 
 def test_calibration_outputs_probability_files_and_preserves_original_results(tmp_path):
@@ -79,9 +94,12 @@ def test_calibration_outputs_probability_files_and_preserves_original_results(tm
     assert results["auto_closed_loop_probability"].dropna().between(0, 1).all()
     assert model["status"] == "trained"
     assert metrics["sample_count"] == 2
+    assert metrics["evaluation_mode"] == "training_only"
     for name in ["closed_loop_calibration_model.json", "closed_loop_calibration_results.csv", "closed_loop_calibration_metrics.json"]:
         assert (tmp_path / name).exists()
-    assert json.loads((tmp_path / "closed_loop_calibration_metrics.json").read_text(encoding="utf-8"))["status"] == "trained"
+    saved_metrics = json.loads((tmp_path / "closed_loop_calibration_metrics.json").read_text(encoding="utf-8"))
+    assert saved_metrics["status"] == "trained"
+    assert saved_metrics["evaluation_mode"] == "training_only"
     for name, before in original_files.items():
         assert (tmp_path / name).read_bytes() == before
     pd.testing.assert_frame_equal(

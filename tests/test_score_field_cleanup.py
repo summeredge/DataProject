@@ -148,32 +148,40 @@ def test_ranked_features_csv_preserves_schema_and_exports_v3(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "status", "missing_items"),
+    ("kwargs", "status", "missing_items", "four_layer_status", "four_layer_missing"),
     [
         (
             {"innovation": 0.8, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
             "完整",
+            "",
+            "证据不足",
             "Layer 1 关联未获得；Layer 3 独立性未获得",
         ),
         (
             {"innovation": np.nan, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
             "部分完整",
-            "Layer 1 关联未获得；Layer 3 独立性未获得；变化量验证",
+            "变化量验证",
+            "证据不足",
+            "Layer 1 关联未获得；Layer 3 独立性未获得",
         ),
         (
             {"innovation": 0.8, "lag_quality": 0.8},
             "证据不足",
-            "Layer 1 关联未获得；Layer 3 独立性未获得；Layer 4 模型未获得；稳定性未获得；模型提升；稳定性验证",
+            "模型提升；稳定性验证",
+            "证据不足",
+            "Layer 1 关联未获得；Layer 3 独立性未获得；Layer 4 模型未获得；稳定性未获得",
         ),
     ],
 )
 def test_evidence_coverage_status_uses_valid_evidence_fields(
-    kwargs: dict[str, object], status: str, missing_items: str
+    kwargs: dict[str, object], status: str, missing_items: str, four_layer_status: str, four_layer_missing: str
 ):
     row = _result(**kwargs)
 
     assert row["evidence_coverage_status"] == status
     assert row["evidence_missing_items"] == missing_items
+    assert row["four_layer_coverage_status"] == four_layer_status
+    assert row["four_layer_missing_items"] == four_layer_missing
 
 
 def test_not_computed_model_lift_is_missing_even_with_numeric_source_value():

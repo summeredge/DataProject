@@ -4,7 +4,7 @@
 
 ## 计算契约
 
-`association_score`、`innovation_score`、`independent_signal_score` 先以几何方式合成 `correlation_evidence_score`；它与 `prediction_score`、`stability_score`、`lag_quality` 进入多组等权重 profile，取中位数为 `evidence_strength`。`evidence_score = evidence_strength * sqrt(data_quality_score * evidence_completeness)`；随后按风险相对扣减和上限得到 `final_score`。最后 `driver_priority_score = final_score * driver_priority_factor`，并由其降序产生 `driver_rank`。
+`correlation_evidence_score` 由 association、innovation、independence 中实际可用项几何组合。`evidence_strength` 是多个允许权重 profile 在实际可用评分组件上重新归一化后所得分数的中位数；`evidence_confidence = data_quality_score`；`evidence_score = evidence_strength × evidence_confidence`；`final_score` 为 evidence_score 经明确风险扣减和风险上限处理后的结果；`driver_priority_score = final_score × driver_priority_factor`，并由其降序产生 `driver_rank`。未计算、不可用或数据不足的可选评分组件从 profile 中省略并重新归一化，不按零分处理；实际计算得到 `0.0` 才属于弱证据。`evidence_completeness` 与 `evidence_coverage_status` 仅作评分组件覆盖输出，不进入 evidence_score 或排序。
 
 当前 profile 的四个组成项权重均为 0.10--0.40，合计为 1；并非单一固定权重。类别 factor：upstream 1.00、synchronous 0.90、downstream 0.45、capacity 0.75、formula 0.25、poor_quality 0.35、uncertain 0.80。风险相对扣减仅为 `strong_formula_leakage=0.50`、`residual_collinearity=0.10`；风险上限仅为 `strong_formula_leakage=0.25`、`poor_data_quality=0.44`。等级阈值：A/B/C/D 为 `final_score >= 0.75/0.60/0.45/0.30`，其余 E。`top_k` 按 `driver_rank` 截取，强制包含变量追加但不重排其全局 rank；控制变量从候选截取中排除并覆盖 `recommended_use` 为参考用途。
 
@@ -29,8 +29,12 @@
 |model_lift_score|screening.py / model_lift_scores|screening.py / final_ranked_features,risk_flags,_recommend_use|L4|派生|否|是|与 causal-review model_lift、importance、conditional contribution 不同链路|not_computed，省略|低 lift 可 flag|profile 经 prediction_score|检查复核层多模型证据是否重复奖励|否|
 |prediction_score|screening.py / final_ranked_features|screening.py / profile score|L4|派生|是|否|model_lift_score 的 gated 别名|非 ok 状态为 missing|0 为已计算无增益|profile 0.10--0.40|无公式改动；后续统一模型语义|否|
 |data_quality_score|screening.py / _data_quality_score|screening.py / final_ranked_features|data_quality|派生|是|否|与 poor_data_quality cap 相关|风险表缺失默认 1|低质量也触发 cap|confidence 因子|检查平滑扣减与 cap 的双重约束|否|
-|evidence_completeness|screening.py / final_ranked_features|screening.py / evidence_confidence|data_quality|派生|是|否|由 optional evidence presence 汇总|missing 降 coverage，不当作零分|不适用|sqrt 内因子|保持缺失和失败分离|否|
-|evidence_confidence|screening.py / final_ranked_features|screening.py / evidence_score|data_quality|派生|是|否|quality × coverage|派生|不适用|乘 evidence_strength|后续只做审计|否|
+|evidence_completeness|screening.py / final_ranked_features|CSV/API/report|评分组件覆盖|派生|否|否|四个评分组件及关联族变化量证据的覆盖信息|缺失组件不按零分|不适用|不参与评分|保持缺失和失败分离|否|
+|evidence_confidence|screening.py / final_ranked_features|screening.py / evidence_score|data_quality|派生|是|否|data_quality_score 的兼容别名|派生|不适用|乘 evidence_strength|后续只做审计|否|
+|evidence_coverage_status|screening.py / final_ranked_features|CSV/API/report|评分组件覆盖|派生|否|否|评分组件是否完整|缺失组件不按零分|不适用|不参与评分|展示覆盖，不参与排序|否|
+|evidence_missing_items|screening.py / final_ranked_features|CSV/API/report|评分组件覆盖|派生|否|否|缺失的变化量、模型、稳定性或滞后质量评分组件|缺失组件清单|不适用|不参与评分|展示覆盖，不参与排序|否|
+|four_layer_missing_items|evidence_explanations.py / add_evidence_explanations|CSV/API/report/web|四层解释覆盖|派生|否|否|Layer 1～4、稳定性和数据质量解释中未获得或数据不足的项|只列 not_available/insufficient_data|不适用|不参与评分|与评分组件覆盖分开解释|是|
+|four_layer_coverage_status|evidence_explanations.py / add_evidence_explanations|CSV/API/report/web|四层解释覆盖|派生|否|否|六个解释状态是否均已获得|完整/部分完整/证据不足|不适用|不参与评分|完整不代表全部支持|是|
 |evidence_strength/evidence_score|screening.py / final_ranked_features|screening.py / 风险调整|聚合|派生|是|否|四个 profile 组件|无可用项为 NaN|0 为已计算弱证据|profile 中位数、confidence|审查组件重叠，不变更|否|
 |risk_flags/risk_level|screening.py / risk_flags|screening.py / _risk_adjustment,classify_candidate,_recommend_use|risk|派生|否|是|风险同时影响 penalty/cap/class/use|空集合|flag 可能只提示|见上文 penalty/cap|风险不可直接解释为变量无效|否|
 |risk_penalty_rate/risk_score_cap|screening.py / _risk_adjustment|screening.py / final_ranked_features|risk|派生|是|否|risk_flags 的数值投影|无 flag 为 0/1|扣减或封顶|0.50/0.10；0.25/0.44|审查 data quality 的 factor+cap 重叠|否|
@@ -78,7 +82,7 @@
 4. 筛选层仅使用 `model_lift_score`；XGBoost、SHAP/importance、conditional contribution 不回写筛选。它们可在复核层与 model lift 并列加分，属于复核优先级的潜在模型证据重叠。
 5. stability 直接通过 `stability_score` 入 profile，并通过不稳定 flag 改变用途；当前不稳定 flag 的相对 penalty 为 0，且不直接限制 candidate grade，所以不是“直接加分又等级封顶”。
 6. data quality 既进入 `evidence_confidence`，又可触发 `poor_data_quality` 的 0.44 cap 和类别/用途限制，确有双重约束；本 PR 只记录并冻结。
-7. optional 证据缺失会降低 `evidence_completeness`，但不会被替换为零分；已计算的 0 则保留为负面证据。风险 flag 是约束/提示，除列明的 penalty/cap 外不等价于变量无效。
+7. optional 证据缺失会从当前 profile 省略并重新归一化，不会被替换为零分；已计算的 0 则保留为负面证据。`evidence_completeness`、`evidence_coverage_status` 与 `evidence_missing_items` 仅描述评分组件覆盖；四层解释覆盖由 `four_layer_*` 字段单独输出。风险 flag 是约束/提示，除列明的 penalty/cap 外不等价于变量无效。
 8. 工程上下文仅通过 `engineering_context` 输出；它不读取进分数、factor、等级、推荐用途或排序。
 
 ## 入口覆盖与冻结

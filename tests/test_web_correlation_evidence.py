@@ -243,7 +243,7 @@ def test_web_candidate_tables_show_four_layer_explanation_columns():
     candidate_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
 
-    for field in ["candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "candidate_summary"]:
+    for field in ["candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "candidate_summary"]:
         assert f'"{field}"' in candidate_columns
     for field in [
         "corr_q_value",
@@ -277,9 +277,10 @@ def test_candidate_table_orders_four_layer_explanations_after_ranking():
         "layer4_model_status",
         "stability_status",
         "data_quality_status",
+        "four_layer_coverage_status",
+        "four_layer_missing_items",
         "evidence_support_items",
         "evidence_against_items",
-        "evidence_missing_items",
         "risk_flags",
         "candidate_summary",
     ]

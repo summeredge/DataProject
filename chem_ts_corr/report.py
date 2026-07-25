@@ -130,12 +130,14 @@ def build_markdown_summary(
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","evidence_conflict_items","candidate_summary","risk_flags"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_grade","evidence_completeness","evidence_coverage_status","evidence_missing_items","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","four_layer_coverage_status","four_layer_missing_items","evidence_support_items","evidence_against_items","evidence_conflict_items","candidate_summary","risk_flags"] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
             "evidence_coverage_status": "证据覆盖状态",
             "evidence_missing_items": "缺失证据",
+            "four_layer_coverage_status": "四层解释覆盖状态",
+            "four_layer_missing_items": "四层解释缺失项",
             "evidence_completeness": "证据覆盖度",
             "data_quality_score": "数据质量得分",
             "evidence_confidence": "证据修正系数",
@@ -194,6 +196,7 @@ def build_markdown_summary(
             "- 稳健综合证据得分基于当前实际可用的关联、模型、稳定性和滞后质量证据计算；缺失证据从对应权重组合中省略并重新归一化，不按零分处理。",
             "- evidence_strength 为多个允许权重组合所得分数的中位数，不是等权几何平均。",
             "- 证据修正系数当前仅由数据质量得分决定；证据覆盖度仅用于展示缺失证据，不参与综合得分和候选排名。",
+            "- 评分组件覆盖和四层解释覆盖是两个不同口径：前者描述参与稳健综合得分的组件，后者描述 Layer 1～4、稳定性和数据质量状态是否均已获得。",
             "- 风险标签只有在明确配置了扣减或分数上限时才改变 final_score；其他风险主要用于候选分类、等级限制和工程解释。",
             "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
             "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
@@ -235,6 +238,8 @@ def _core_columns(frame: pd.DataFrame) -> pd.DataFrame:
         "evidence_support_items",
         "evidence_against_items",
         "evidence_missing_items",
+        "four_layer_missing_items",
+        "four_layer_coverage_status",
         "evidence_conflict_items",
         "risk_flags",
         "candidate_summary",
@@ -276,7 +281,7 @@ def _format_cell(value: object, column: str = "") -> str:
 
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
-        return pd.DataFrame(columns=["variable","driver_rank","driver_priority_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","evidence_conflict_items","risk_flags","candidate_summary","fallback_reason"])
+        return pd.DataFrame(columns=["variable","driver_rank","driver_priority_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","four_layer_missing_items","four_layer_coverage_status","evidence_conflict_items","risk_flags","candidate_summary","fallback_reason"])
     ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(index=ranked_features.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:

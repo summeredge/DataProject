@@ -65,8 +65,9 @@ def test_explanation_fields_are_deterministic_and_do_not_change_ranking_values()
     response = explained.set_index("variable").loc["x_response"]
     assert "Layer 1 关联支持" in driver["evidence_support_items"]
     assert "潜在驱动因素候选" in driver["candidate_summary"]
-    assert "未获得" in response["evidence_missing_items"]
-    assert "数据不足" in response["evidence_missing_items"]
+    assert response["evidence_missing_items"] == "模型提升"
+    assert "未获得" in response["four_layer_missing_items"]
+    assert "数据不足" in response["four_layer_missing_items"]
     assert "下游响应可能" in response["candidate_summary"]
     assert "无效" not in response["candidate_summary"]
 
@@ -86,6 +87,8 @@ def test_csv_and_markdown_share_the_same_explanation_fields():
         "evidence_support_items",
         "evidence_against_items",
         "evidence_missing_items",
+        "four_layer_missing_items",
+        "four_layer_coverage_status",
         "evidence_conflict_items",
         "candidate_summary",
     ]:
@@ -142,6 +145,7 @@ def test_common_capacity_conflict_takes_priority_over_synchronous_summary():
         risk_flags="common_capacity_driver",
     )
     assert "需要工程复核" in row["candidate_summary"]
+    assert "存在部分统计证据支持" in row["candidate_summary"]
     assert "同步关联候选" not in row["candidate_summary"]
 
 
@@ -166,6 +170,41 @@ def test_plain_zero_lag_without_conflicts_uses_synchronous_summary():
     assert "同步关联候选" in row["candidate_summary"]
 
 
+def test_four_layer_coverage_is_independent_of_scoring_component_coverage():
+    row = _explained_single(
+        evidence_coverage_status="完整",
+        evidence_missing_items="",
+        layer1_association_status="not_available",
+    )
+    assert row["evidence_coverage_status"] == "完整"
+    assert row["evidence_missing_items"] == ""
+    assert row["four_layer_coverage_status"] == "部分完整"
+    assert "Layer 1" in row["four_layer_missing_items"]
+
+
+def test_four_layer_coverage_treats_negative_and_conflicting_statuses_as_obtained():
+    row = _explained_single(
+        layer1_association_status="not_supported",
+        layer3_independence_status="conflicting",
+    )
+    assert row["four_layer_coverage_status"] == "完整"
+    assert row["four_layer_missing_items"] == ""
+
+
+def test_conflict_summary_without_support_does_not_claim_statistical_support():
+    row = _explained_single(
+        layer1_association_status="not_supported",
+        layer2_temporal_status="not_supported",
+        layer3_independence_status="not_supported",
+        layer4_model_status="not_supported",
+        stability_status="conflicting",
+        data_quality_status="not_supported",
+    )
+    assert "当前缺少明确支持证据" in row["candidate_summary"]
+    assert "存在统计证据支持" not in row["candidate_summary"]
+    assert "存在部分统计证据支持" not in row["candidate_summary"]
+
+
 def test_api_payload_preserves_the_csv_explanation_contract(tmp_path):
     explained = add_evidence_explanations(_rows())
     explained.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
@@ -184,7 +223,7 @@ def test_api_payload_preserves_the_csv_explanation_contract(tmp_path):
     config = AnalysisConfig(input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path)
 
     row = _build_result_payload("run", tmp_path, config)["rankedFeatures"][0]
-    for field in ["layer1_association_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "evidence_conflict_items", "candidate_summary"]:
+    for field in ["layer1_association_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "four_layer_missing_items", "four_layer_coverage_status", "evidence_conflict_items", "candidate_summary"]:
         assert (row[field] or "") == explained.iloc[0][field]
 
 
@@ -196,7 +235,7 @@ def test_explanation_fields_flow_to_csv_markdown_and_final_review(tmp_path):
     for filename in ["ranked_features.csv", "recommended_candidates.csv"]:
         saved = pd.read_csv(tmp_path / filename, encoding="utf-8-sig")
         assert set([
-            "evidence_support_items", "evidence_against_items", "evidence_missing_items",
+            "evidence_support_items", "evidence_against_items", "evidence_missing_items", "four_layer_missing_items", "four_layer_coverage_status",
             "evidence_conflict_items", "candidate_summary",
         ]) <= set(saved)
     assert "candidate_summary" in (tmp_path / "summary.md").read_text(encoding="utf-8")
@@ -205,7 +244,7 @@ def test_explanation_fields_flow_to_csv_markdown_and_final_review(tmp_path):
         ranked_features=explained,
     )
     assert set([
-        "evidence_support_items", "evidence_against_items", "evidence_missing_items",
+        "evidence_support_items", "evidence_against_items", "evidence_missing_items", "four_layer_missing_items", "four_layer_coverage_status",
         "evidence_conflict_items", "candidate_summary",
     ]) <= set(review)
 
@@ -221,6 +260,8 @@ def test_web_uses_the_result_explanation_contract_without_historical_state_contr
         "evidence_support_items",
         "evidence_against_items",
         "evidence_missing_items",
+        "four_layer_missing_items",
+        "four_layer_coverage_status",
         "evidence_conflict_items",
         "candidate_summary",
     ]:

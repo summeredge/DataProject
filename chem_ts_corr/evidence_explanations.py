@@ -31,7 +31,8 @@ def add_evidence_explanations(frame: pd.DataFrame) -> pd.DataFrame:
         for column in [
             "evidence_support_items",
             "evidence_against_items",
-            "evidence_missing_items",
+            "four_layer_missing_items",
+            "four_layer_coverage_status",
             "evidence_conflict_items",
             "candidate_summary",
         ]:
@@ -63,8 +64,6 @@ def _explain_row(row: pd.Series) -> dict[str, str]:
         elif status == "conflicting":
             generated_conflict.append(f"{label}存在冲突")
 
-    existing_missing = _tokens(row.get("evidence_missing_items"))
-    missing.extend(item for item in existing_missing if item not in missing)
     conflict = _unique([*conflict, *generated_conflict])
     conflict_items = existing_conflict
     for item in _unique(generated_conflict):
@@ -74,7 +73,8 @@ def _explain_row(row: pd.Series) -> dict[str, str]:
     return {
         "evidence_support_items": "；".join(_unique(support)),
         "evidence_against_items": "；".join(_unique(against)),
-        "evidence_missing_items": "；".join(_unique(missing)),
+        "four_layer_missing_items": "；".join(_unique(missing)),
+        "four_layer_coverage_status": _coverage_status(missing),
         "evidence_conflict_items": conflict_items,
         "candidate_summary": summary,
     }
@@ -107,7 +107,9 @@ def _summary(
             "poor_data_quality",
         }
     ):
-        return "需要工程复核：存在统计证据支持，但同时存在独立性、稳定性、数据质量或时间冲突提示。"
+        if support:
+            return "需要工程复核：存在部分统计证据支持，但同时存在独立性、稳定性、数据质量或时间冲突提示。"
+        return "当前缺少明确支持证据，并存在独立性、稳定性、数据质量或时间冲突提示。"
     if temporal == "partially_supported" and lag == 0:
         return "同步关联候选：相关性明显，但未观察到稳定领先关系。"
     core_statuses = [
@@ -132,6 +134,12 @@ def _tokens(value: Any) -> list[str]:
 
 def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
+
+
+def _coverage_status(missing: list[str]) -> str:
+    if not missing:
+        return "完整"
+    return "部分完整" if len(missing) == 1 else "证据不足"
 
 
 def _text(value: Any) -> str:

@@ -198,6 +198,53 @@ def test_engineering_context_is_not_accessed_by_any_scoring_or_review_sort_funct
             assert str(entry["field"]) not in accessed
 
 
+def test_four_layer_explanation_fields_are_not_scoring_inputs():
+    scoring_functions = {
+        "_available_weight_profile_scores",
+        "_combine_correlation_evidence",
+        "_risk_adjustment",
+        "classify_candidate",
+        "_finalize_driver_ranking",
+        "_grade_candidate",
+        "_recommend_use",
+        "_recommended_action",
+    }
+    accessed = _field_accesses(screening, scoring_functions)
+    assert not accessed.intersection({
+        "evidence_support_items",
+        "evidence_against_items",
+        "four_layer_missing_items",
+        "evidence_conflict_items",
+        "four_layer_coverage_status",
+        "candidate_summary",
+    })
+
+
+def test_audit_document_and_registry_use_current_coverage_semantics():
+    audit = Path("docs/four_layer_evidence_audit.md").read_text(encoding="utf-8")
+    registry = _registry()
+    assert "evidence_confidence = data_quality_score" in audit
+    assert "evidence_score = evidence_strength × evidence_confidence" in audit
+    for obsolete in [
+        "sqrt(data_quality_score * evidence_" + "completeness)",
+        "quality × " + "coverage",
+        "evidence_completeness 是直接评分" + "输入",
+    ]:
+        assert obsolete not in audit
+    entries = {entry["field"]: entry for entry in registry}
+    for field in [
+        "evidence_completeness",
+        "evidence_confidence",
+        "evidence_coverage_status",
+        "evidence_missing_items",
+        "four_layer_missing_items",
+        "four_layer_coverage_status",
+    ]:
+        assert field in entries
+    assert entries["evidence_missing_items"]["layer"] == "scoring_component_coverage"
+    assert entries["four_layer_missing_items"]["layer"] == "four_layer_explanation_coverage"
+
+
 def _single_evidence_result(*, model_status: str = "not_computed", model_score: float = np.nan, complete: bool = False):
     ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "lag": 1}])
     empty = pd.DataFrame(columns=["variable"])

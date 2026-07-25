@@ -4437,7 +4437,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "risk_flags", "candidate_summary"];
+  return ["variable", "driver_rank", "driver_priority_score", "candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "risk_flags", "candidate_summary"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4642,7 +4642,8 @@ function updateDirectionalityTimeDetails(lag, intervalMinutes) {
 function renderScreeningScoreDetails(row) {
   if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
   const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
-  const evidenceColumns = ["layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "evidence_conflict_items", "risk_flags", "candidate_summary"];
+  const componentCoverageColumns = ["evidence_completeness", "evidence_coverage_status", "evidence_missing_items"];
+  const evidenceColumns = ["layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "evidence_conflict_items", "risk_flags", "candidate_summary"];
   const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
@@ -4669,7 +4670,10 @@ function renderScreeningScoreDetails(row) {
     <p>稳健综合得分 = 证据得分经过明确风险扣减或分数上限后的结果。</p>
     <p>驱动优先得分 = 稳健综合得分 × 候选类别优先系数。</p>
     ${equalScoreNote}
-    <h4>证据覆盖</h4>
+    <h4>评分组件覆盖</h4>
+    <div class="detail-grid">${renderFields(componentCoverageColumns)}</div>
+    <p>该部分只表示综合评分所使用组件的覆盖情况，不参与得分和排名。</p>
+    <h4>四层证据解释</h4>
     <div class="detail-grid">${renderFields(evidenceColumns)}</div>
     <h4>相关性证据</h4>
     <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
@@ -5942,6 +5946,8 @@ function columnLabel(column) {
     evidence_completeness: "证据覆盖度",
     evidence_confidence: "证据修正系数",
     evidence_coverage_status: "证据覆盖状态",
+    four_layer_coverage_status: "四层解释覆盖状态",
+    four_layer_missing_items: "四层解释缺失项",
     layer1_association_status: "Layer 1 关联状态",
     layer2_temporal_status: "Layer 2 时间状态",
     layer3_independence_status: "Layer 3 独立性状态",

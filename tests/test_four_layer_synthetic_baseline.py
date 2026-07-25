@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,29 +27,7 @@ from tests.synthetic_cases.generate_baseline import (
 )
 
 
-PR_8C_BASE = "5aff6c0d4c2bc430aa0c9002cd63c7f87b8d0476"
-PR_8D_SUPPLEMENT_BASE = "dde19ed71ed945012c8d27670aa5c9a26228c40b"
-EXPECTED_PRODUCTION_PATHS = {
-    "chem_ts_corr/evidence_explanations.py",
-    "chem_ts_corr/llm_report.py",
-    "chem_ts_corr/report.py",
-    "chem_ts_corr/web.py",
-}
-FORBIDDEN_SCORING_PATHS = {
-    "chem_ts_corr/screening.py",
-    "chem_ts_corr/service.py",
-    "chem_ts_corr/pipeline.py",
-    "chem_ts_corr/config.py",
-    "chem_ts_corr/ranking_baseline.py",
-}
-ALLOWED_PATCH_PATHS = {
-    *EXPECTED_PRODUCTION_PATHS,
-    "tests/test_four_layer_evidence_explanations.py",
-    "tests/test_four_layer_synthetic_baseline.py",
-    "tests/test_llm_report_prompt.py",
-    "tests/test_score_field_cleanup.py",
-}
-REQUIRED_PATCH_PATHS = EXPECTED_PRODUCTION_PATHS
+PR8C_CONTRACT_PATH = Path("tests/baselines/pr8c_ranking_contract.json")
 RANKING_FREEZE_FIELDS = [
     "variable",
     "final_score",
@@ -61,39 +38,12 @@ RANKING_FREEZE_FIELDS = [
     "recommended_use",
     "risk_flags",
 ]
-PR_8C_BASELINE_FIELDS = [
-    *RANKING_FREEZE_FIELDS,
-    "candidate_class",
-    "lag",
-    "direction",
-    "layer1_association_status",
-    "layer2_temporal_status",
-    "layer3_independence_status",
-    "layer4_model_status",
-    "stability_status",
-    "data_quality_status",
-]
 
 
 def _indexed(case_name: str, tmp_path: Path):
     case = CASES[case_name]()
     ranked = run_case(case, tmp_path)
     return case, ranked, ranked.set_index("variable")
-
-
-def _changed_paths_between(base: str, head: str = "HEAD") -> list[str]:
-    try:
-        output = subprocess.check_output(
-            ["git", "diff", "--name-only", f"{base}..{head}"],
-            text=True,
-            encoding="utf-8",
-        )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(
-            f"Unable to inspect committed patch {base}..{head}. "
-            f"Fetch the required Git history before running this contract. ({error})"
-        )
-    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -609,28 +559,6 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             )
 
 
-def test_pr_8d_supplemental_patch_only_changes_explanation_production_paths():
-    changed_paths = _changed_paths_between(PR_8D_SUPPLEMENT_BASE)
-    production_paths = {
-        path
-        for path in changed_paths
-        if path.startswith("chem_ts_corr/") and path.endswith(".py")
-    }
-    assert production_paths == EXPECTED_PRODUCTION_PATHS
-    assert production_paths.isdisjoint(FORBIDDEN_SCORING_PATHS)
-    unexpected = set(changed_paths) - ALLOWED_PATCH_PATHS
-    assert not unexpected, f"Unexpected PR-8D supplemental files: {sorted(unexpected)}"
-    assert REQUIRED_PATCH_PATHS <= set(changed_paths)
-
-
-def test_pr_8d_scope_contract_uses_committed_revision_range():
-    source = Path(__file__).read_text(encoding="utf-8")
-    assert 'PR_8D_SUPPLEMENT_BASE = "dde19ed71ed945012c8d27670aa5c9a26228c40b"' in source
-    assert 'f"{base}..{head}"' in source
-    old_workspace_command = '["git", "diff", "--name' + '-only"]'
-    assert old_workspace_command not in source
-
-
 def test_explanations_do_not_change_real_production_ranking_fields(tmp_path: Path, monkeypatch):
     case = CASES["mixed_evidence"]()
     monkeypatch.setattr(screening, "add_evidence_explanations", lambda frame: frame)
@@ -644,42 +572,35 @@ def test_explanations_do_not_change_real_production_ranking_fields(tmp_path: Pat
     )
 
 
-def _pr_8c_baseline_report() -> dict[str, object]:
-    try:
-        content = subprocess.check_output(
-            [
-                "git",
-                "show",
-                f"{PR_8C_BASE}:tests/baselines/four_layer_ranking_baseline.json",
-            ],
-            text=True,
-            encoding="utf-8",
-        )
-    except subprocess.CalledProcessError as error:
-        pytest.fail(
-            "PR-8C ranking baseline is unavailable; fetch commit "
-            f"{PR_8C_BASE} before running this contract. ({error})"
-        )
-    return json.loads(content)
-
-
 def test_pr_8d_preserves_pr_8c_ranking_contract_for_all_synthetic_cases(tmp_path: Path):
-    expected = _pr_8c_baseline_report()
+    expected = json.loads(PR8C_CONTRACT_PATH.read_text(encoding="utf-8"))
     actual = build_full_baseline_report(tmp_path)
-    assert set(actual) == set(expected) == set(CASES)
+    assert expected["contract_version"] == "pr8c-ranking-v1"
+    assert set(actual) == set(expected["cases"]) == set(CASES)
     for name in CASES:
         expected_rows = {
-            row["variable"]: row for row in expected[name]["key_evidence"]
+            variable: row for variable, row in expected["cases"][name]["rows"].items()
         }
         actual_rows = {
             row["variable"]: row for row in actual[name]["key_evidence"]
         }
         assert set(actual_rows) == set(expected_rows), name
-        assert actual[name]["top_k_results"] == expected[name]["top_k_results"], name
+        assert actual[name]["top_k_results"] == expected["cases"][name]["top_k_results"], name
         for variable, expected_row in expected_rows.items():
             actual_row = actual_rows[variable]
-            for field in PR_8C_BASELINE_FIELDS:
-                assert actual_row[field] == expected_row[field], f"{name}:{variable}:{field}"
+            for field in expected["fields"]:
+                value = actual_row[field]
+                expected_value = expected_row[field]
+                if isinstance(expected_value, float):
+                    assert value == pytest.approx(expected_value, rel=1e-12, abs=1e-12), f"{name}:{variable}:{field}"
+                else:
+                    assert value == expected_value, f"{name}:{variable}:{field}"
+
+
+def test_pr8_contract_tests_do_not_depend_on_git_history():
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in Path("tests").glob("test_*.py"))
+    forbidden = ["git" + " show", "git" + " diff --name-only", "subprocess." + "check_output", "PR_8D_" + "SUPPLEMENT_BASE", "PR_8C_" + "BASE ="]
+    assert not any(marker in sources for marker in forbidden)
 
 
 def test_pr_8c_source_contracts_cover_each_repaired_ranking_path():

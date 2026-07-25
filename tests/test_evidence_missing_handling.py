@@ -40,8 +40,9 @@ def test_all_four_evidence_components_use_full_profile():
     row = _evaluate(prediction=0.6)
 
     assert row["evidence_available_count"] == 4
-    assert "Layer 1 关联未获得" in row["evidence_missing_items"]
-    assert "Layer 3 独立性未获得" in row["evidence_missing_items"]
+    assert row["evidence_missing_items"] == ""
+    assert "Layer 1 关联未获得" in row["four_layer_missing_items"]
+    assert "Layer 3 独立性未获得" in row["four_layer_missing_items"]
     assert row["evidence_completeness"] == 1.0
     assert row["evidence_confidence"] == 1.0
     assert row["evidence_strength"] == pytest.approx((0.8 + 0.6 + 0.7 + 0.5) / 4)

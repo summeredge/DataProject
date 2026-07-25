@@ -107,7 +107,18 @@ def _summary(
             "poor_data_quality",
         }
     ):
-        if support:
+        statistical_statuses = [
+            _text(row.get("layer1_association_status")),
+            _text(row.get("layer2_temporal_status")),
+            _text(row.get("layer3_independence_status")),
+            _text(row.get("layer4_model_status")),
+            _text(row.get("stability_status")),
+        ]
+        has_statistical_support = any(
+            status in {"supported", "partially_supported"}
+            for status in statistical_statuses
+        )
+        if has_statistical_support:
             return "需要工程复核：存在部分统计证据支持，但同时存在独立性、稳定性、数据质量或时间冲突提示。"
         return "当前缺少明确支持证据，并存在独立性、稳定性、数据质量或时间冲突提示。"
     if temporal == "partially_supported" and lag == 0:

@@ -205,6 +205,68 @@ def test_conflict_summary_without_support_does_not_claim_statistical_support():
     assert "存在部分统计证据支持" not in row["candidate_summary"]
 
 
+def test_good_data_quality_alone_is_not_statistical_support():
+    row = _explained_single(
+        layer1_association_status="not_supported",
+        layer2_temporal_status="not_available",
+        layer3_independence_status="not_supported",
+        layer4_model_status="not_supported",
+        stability_status="conflicting",
+        data_quality_status="supported",
+    )
+    assert "数据质量支持" in row["evidence_support_items"]
+    assert "当前缺少明确支持证据" in row["candidate_summary"]
+    assert "存在统计证据支持" not in row["candidate_summary"]
+    assert "存在部分统计证据支持" not in row["candidate_summary"]
+
+
+def test_partial_statistical_support_is_enough_for_mixed_conflict_summary():
+    row = _explained_single(
+        layer1_association_status="partially_supported",
+        layer2_temporal_status="not_supported",
+        layer3_independence_status="not_supported",
+        layer4_model_status="not_available",
+        stability_status="conflicting",
+        data_quality_status="supported",
+    )
+    assert "存在部分统计证据支持" in row["candidate_summary"]
+    assert "当前缺少明确支持证据" not in row["candidate_summary"]
+
+
+def test_stability_support_counts_as_statistical_support():
+    row = _explained_single(
+        layer1_association_status="not_supported",
+        layer2_temporal_status="not_supported",
+        layer3_independence_status="not_supported",
+        layer4_model_status="not_available",
+        stability_status="supported",
+        data_quality_status="supported",
+        risk_flags="poor_data_quality",
+    )
+    assert "存在部分统计证据支持" in row["candidate_summary"]
+
+
+def test_statistical_support_is_not_removed_by_data_quality_failure():
+    row = _explained_single(
+        layer1_association_status="supported",
+        layer2_temporal_status="not_supported",
+        layer3_independence_status="not_supported",
+        layer4_model_status="not_available",
+        stability_status="conflicting",
+        data_quality_status="not_supported",
+        risk_flags="poor_data_quality",
+    )
+    assert "存在部分统计证据支持" in row["candidate_summary"]
+
+
+def test_summary_uses_explicit_statistical_statuses_not_generic_support_list():
+    source = Path("chem_ts_corr/evidence_explanations.py").read_text(encoding="utf-8")
+    summary_source = source.split("def _summary(", 1)[1].split("def _tokens(", 1)[0]
+    assert "has_statistical_support" in summary_source
+    assert "data_quality_status" not in summary_source.split("statistical_statuses =", 1)[1].split("]", 1)[0]
+    assert "if support:" not in summary_source
+
+
 def test_api_payload_preserves_the_csv_explanation_contract(tmp_path):
     explained = add_evidence_explanations(_rows())
     explained.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")

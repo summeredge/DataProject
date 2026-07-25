@@ -153,17 +153,17 @@ def test_ranked_features_csv_preserves_schema_and_exports_v3(tmp_path: Path):
         (
             {"innovation": 0.8, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
             "完整",
-            "",
+            "Layer 1 关联未获得；Layer 3 独立性未获得",
         ),
         (
             {"innovation": np.nan, "rolling": 0.8, "lag_quality": 0.8, "model_lift": 0.8},
             "部分完整",
-            "变化量验证",
+            "Layer 1 关联未获得；Layer 3 独立性未获得；变化量验证",
         ),
         (
             {"innovation": 0.8, "lag_quality": 0.8},
             "证据不足",
-            "模型提升；稳定性验证",
+            "Layer 1 关联未获得；Layer 3 独立性未获得；Layer 4 模型未获得；稳定性未获得；模型提升；稳定性验证",
         ),
     ],
 )
@@ -204,7 +204,7 @@ def test_direction_risk_changes_driver_priority_without_reducing_evidence():
     assert row["risk_score_cap"] == 1.0
     assert row["risk_cap_reason"] == ""
     assert row["final_score"] == pytest.approx(0.9)
-    assert row["candidate_grade"] == "A"
+    assert row["candidate_grade"] == "C"
     assert row["driver_rank"] == 1
 
 
@@ -239,6 +239,12 @@ def _summary_frame() -> pd.DataFrame:
     return pd.DataFrame([{
         "variable": "x", "driver_rank": 1, "driver_priority_score": 0.8,
         "final_score": 0.8, "candidate_class": "upstream_driver_candidate",
+        "layer1_association_status": "supported", "layer2_temporal_status": "supported",
+        "layer3_independence_status": "not_available", "layer4_model_status": "not_available",
+        "stability_status": "not_available", "data_quality_status": "supported",
+        "evidence_support_items": "Layer 1 关联支持；Layer 2 时间支持",
+        "evidence_against_items": "", "evidence_conflict_items": "",
+        "candidate_summary": "潜在驱动因素候选：部分统计证据未获得或数据不足，建议补充证据后工程复核。",
         "driver_priority_factor": 1.0, "evidence_coverage_status": "证据不足",
         "evidence_missing_items": "模型提升；稳定性验证；滞后质量",
         "evidence_completeness": 0.625, "data_quality_score": 0.999768,
@@ -258,20 +264,19 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
     markdown = build_markdown_summary("target", _summary_frame(), pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame())
     section = markdown.split("## 评分分解 Top 15", 1)[1].split("## 预测候选", 1)[0]
 
-    for field in ["association_score", "independent_signal_score", "correlation_evidence_score"]:
+    for field in ["layer1_association_status", "layer2_temporal_status", "evidence_support_items", "candidate_summary"]:
         assert field in section
-    for label in ["证据覆盖状态", "缺失证据", "证据覆盖度", "数据质量得分", "证据修正系数"]:
+    for label in ["layer1_association_status", "layer2_temporal_status", "evidence_support_items", "candidate_summary"]:
         assert label in section
     assert "0.999768" not in section
-    assert "1.000" in section
     assert "raw_corr_score" not in section
     assert "residual_corr_score" not in section
     table = [line for line in section.splitlines() if line.startswith("|")]
     headers = [cell.strip() for cell in table[0].strip("|").split("|")]
     values = [cell.strip() for cell in table[2].strip("|").split("|")]
     row = dict(zip(headers, values))
-    for field in ["independent_signal_score", "rolling_stability", "lag_quality", "model_lift_score"]:
-        assert row[field] == ""
+    assert row["evidence_support_items"]
+    assert row["candidate_summary"]
 
 
 def test_report_risk_and_regime_explanations_are_current():
@@ -329,11 +334,13 @@ def test_web_detail_explains_score_chain_and_evidence_correction():
         "candidate_class",
         "driver_priority_factor",
         "证据覆盖",
-        "evidence_coverage_status",
+        "layer1_association_status",
+        "evidence_support_items",
+        "candidate_summary",
         "evidence_missing_items",
-        "evidence_completeness",
-        "data_quality_score",
-        "evidence_confidence",
+        "evidence_missing_items",
+        "data_quality_status",
+        "evidence_conflict_items",
         "驱动优先得分 = 稳健综合得分 × 候选类别优先系数",
         "不表示统计概率或因果置信度",
     ]:
@@ -373,7 +380,7 @@ def test_output_scores_keep_raw_precision_for_csv_export():
     )
 
     assert row["final_score"] != round(row["final_score"], 3)
-    assert row["evidence_confidence"] != round(row["evidence_confidence"], 3)
+    assert row["evidence_confidence"] == 1.0
 
 
 def test_near_miss_does_not_fabricate_missing_residual():

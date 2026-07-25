@@ -123,7 +123,7 @@ def test_engineering_direction_changes_priority_not_evidence_score():
     assert row["risk_score_cap"] == 1.0
     assert row["final_score"] == pytest.approx(0.90)
     assert row["driver_priority_score"] == pytest.approx(0.90 * 0.45)
-    assert row["candidate_grade"] == "A"
+    assert row["candidate_grade"] == "C"
 
 
 def test_equal_driver_scores_keep_input_order():

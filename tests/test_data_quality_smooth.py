@@ -19,7 +19,7 @@ def test_missing_rate_quality_score_decays_smoothly(missing_rate: float):
         }
     )
 
-    expected = np.exp(-np.log(2) * missing_rate / 0.20 / 3)
+    expected = np.exp(-np.log(2) * missing_rate / 0.20 / 4)
     assert score == pytest.approx(expected)
 
 
@@ -38,15 +38,16 @@ def test_missing_rate_scores_are_monotonic_and_do_not_drop_to_zero_at_threshold(
     assert all(left > right for left, right in zip(scores, scores[1:]))
     assert scores[2] > 0
     assert scores[3] > 0
-    assert scores[2] ** 3 == pytest.approx(0.5)
+    assert scores[2] ** 4 == pytest.approx(0.5)
 
 
-def test_three_reference_thresholds_have_geometric_mean_half_score():
+def test_four_reference_thresholds_have_geometric_mean_half_score():
     score = _data_quality_score(
         {
             "missing_rate": 0.20,
             "saturation_ratio": 0.20,
             "abnormal_jump_ratio": 0.01,
+            "robust_outlier_ratio": 0.01,
         }
     )
 

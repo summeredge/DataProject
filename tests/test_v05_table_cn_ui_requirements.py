@@ -9,7 +9,7 @@ def test_table_ui_has_compact_summary_and_detail_panel_hooks():
         "selectTableRow",
         "核心列",
         "详情",
-        "完整字段",
+            "候选解释",
     ]
     for marker in required:
         assert marker in INDEX_HTML

@@ -85,7 +85,7 @@ def test_regime_sign_consistency_uses_signed_strength_and_reports_reversal(
     assert row["regime_stability_final"] == pytest.approx(expected_consistency)
 
 
-def test_regime_reversal_flag_is_diagnostic_only_and_not_in_final_ranking_schema():
+def test_regime_reversal_flag_is_exported_for_final_stability_explanation():
     stability = _summarize_regime_robustness(
         pd.DataFrame(
             {
@@ -114,10 +114,12 @@ def test_regime_reversal_flag_is_diagnostic_only_and_not_in_final_ranking_schema
     )
 
     assert "regime_sign_reversal_flag" in stability.columns
-    assert "regime_sign_reversal_flag" not in final.columns
+    assert "regime_sign_reversal_flag" in final.columns
+    assert bool(final.loc[0, "regime_sign_reversal_flag"])
+    assert final.loc[0, "stability_status"] == "conflicting"
 
 
-def test_regime_reversal_flag_is_only_written_to_regime_detail_csv(tmp_path: Path):
+def test_regime_reversal_flag_is_written_to_ranked_explanation_and_regime_detail_csv(tmp_path: Path):
     stability = _summarize_regime_robustness(
         pd.DataFrame(
             {
@@ -159,4 +161,7 @@ def test_regime_reversal_flag_is_only_written_to_regime_detail_csv(tmp_path: Pat
         if csv_path.name == "regime_scores.csv":
             assert header and "regime_sign_reversal_flag" in header[0]
         else:
-            assert not header or "regime_sign_reversal_flag" not in header[0]
+            if csv_path.name in {"ranked_features.csv", "recommended_candidates.csv"}:
+                assert header and "regime_sign_reversal_flag" in header[0]
+            else:
+                assert not header or "regime_sign_reversal_flag" not in header[0]

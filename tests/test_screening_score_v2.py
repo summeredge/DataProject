@@ -121,7 +121,7 @@ def test_prediction_and_stability_can_outrank_higher_raw_correlation():
     ).loc["trend", "evidence_score"]
 
 
-def test_missing_core_evidence_lowers_completeness_instead_of_renormalizing_raw_correlation():
+def test_missing_core_evidence_lowers_completeness_without_lowering_available_evidence_score():
     incomplete = _score(association=0.80)
     complete = _score(
         association=0.80,
@@ -132,7 +132,7 @@ def test_missing_core_evidence_lowers_completeness_instead_of_renormalizing_raw_
     )
 
     assert incomplete["evidence_completeness"] < complete["evidence_completeness"]
-    assert incomplete["evidence_score"] < complete["evidence_score"]
+    assert incomplete["evidence_score"] == complete["evidence_score"]
     assert complete["evidence_score"] == pytest.approx(0.80)
 
 

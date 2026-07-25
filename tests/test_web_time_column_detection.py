@@ -76,15 +76,14 @@ def test_explicit_time_column_keeps_existing_name_based_detection(tmp_path):
 
 
 def test_auto_detected_time_column_drives_trend_x_axis(tmp_path, monkeypatch):
-    values = ["2026-01-01 00:00", "2026-01-01 00:01"]
+    values = [f"2026-01-01 00:{minute:02d}" for minute in range(10)]
     file_id = _write_upload(tmp_path, monkeypatch, values)
     detected_column = web._columns_response(file_id, "utf-8-sig")["timeColumn"]
 
     response = web._trend_response(_trend_params(file_id, detected_column))
 
     assert [point["x"] for point in response["series"][0]["points"]] == [
-        "2026-01-01 00:00:00",
-        "2026-01-01 00:01:00",
+        f"2026-01-01 00:{minute:02d}:00" for minute in range(10)
     ]
 
 

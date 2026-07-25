@@ -161,7 +161,7 @@ def test_driver_priority_score_uses_class_factor(candidate_class: str):
     assert result["driver_priority_score"] == pytest.approx(expected)
 
 
-def test_complete_balanced_v2_evidence_keeps_candidate_behavior():
+def test_temporal_conflict_caps_grade_without_erasing_association_score():
     result = _evaluate(
         [_row("a", 0.9, -1), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
@@ -169,7 +169,7 @@ def test_complete_balanced_v2_evidence_keeps_candidate_behavior():
 
     assert result.loc["a", "final_score"] == pytest.approx(0.9)
     assert result.loc["b", "final_score"] == pytest.approx(0.8)
-    assert result.loc["a", "candidate_grade"] == "A"
+    assert result.loc["a", "candidate_grade"] == "C"
     assert result.loc["a", "recommended_use"] == "state_indicator"
 
 

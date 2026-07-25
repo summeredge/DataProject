@@ -42,14 +42,22 @@ KEY_FIELDS = [
     "lag",
     "direction",
     "risk_flags",
+    "layer1_association_status",
+    "layer2_temporal_status",
+    "layer3_independence_status",
+    "layer4_model_status",
     "regime_sign_reversal_flag",
     "regime_sign_consistency",
     "regime_stability_final",
     "stability_score",
+    "stability_status",
     "lag_quality",
     "lag_boundary_flag",
     "data_quality_score",
+    "data_quality_status",
     "evidence_coverage_status",
+    "evidence_missing_items",
+    "evidence_conflict_items",
     "model_lift_status",
     "prediction_score",
     "independent_signal_score",
@@ -78,7 +86,11 @@ def run_case(case: SyntheticCase, output_dir: Path) -> pd.DataFrame:
     ranked = tables.ranked_features.copy()
     regime = tables.regime_scores
     extra = ["variable", "regime_sign_reversal_flag"]
-    if not regime.empty and set(extra) <= set(regime):
+    if (
+        "regime_sign_reversal_flag" not in ranked.columns
+        and not regime.empty
+        and set(extra) <= set(regime)
+    ):
         flags = regime[extra].drop_duplicates("variable")
         ranked = ranked.merge(flags, on="variable", how="left")
     return ranked.sort_values("driver_rank", kind="stable").reset_index(drop=True)

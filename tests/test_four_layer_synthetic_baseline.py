@@ -25,7 +25,7 @@ from tests.synthetic_cases.generate_baseline import (
 )
 
 
-PR_8A_BASE = "2b35c3d98c9c031e45e628a56bfae767a3bd6a87"
+PR_8B_BASE = "a16335d0305c26cb752b9e02a11264989355a221"
 
 
 def _indexed(case_name: str, tmp_path: Path):
@@ -102,10 +102,6 @@ def test_true_lagged_driver_contract(tmp_path: Path):
     assert "target_leads_variable" not in str(row["risk_flags"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_2 target_leads_variable is emitted but candidate_grade remains A; bind temporal direction risk to confidence",
-)
 def test_downstream_response_contract(tmp_path: Path):
     case, _, ranked = _indexed("downstream_response", tmp_path)
     row = ranked.loc["x_downstream"]
@@ -113,12 +109,9 @@ def test_downstream_response_contract(tmp_path: Path):
     assert "target_leads_variable" in str(row["risk_flags"])
     assert row["candidate_class"] == "downstream_response"
     assert row["candidate_grade"] not in {"A", "B"}
+    assert row["layer2_temporal_status"] == "conflicting"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_3 x_common lacks common_capacity_driver and is not suppressed below z_driver; preserve independent residual evidence",
-)
 def test_common_driver_contract(tmp_path: Path):
     case, raw, ranked = _indexed("common_driver", tmp_path)
     assert {"z_driver", "x_common"} <= set(ranked.index)
@@ -128,12 +121,9 @@ def test_common_driver_contract(tmp_path: Path):
         ranked.loc["x_common", "driver_rank"]
     )
     assert metrics(case, raw)["common_driver_suppression_rate"] == 1.0
+    assert ranked.loc["x_common", "layer3_independence_status"] == "not_supported"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_3 true driver and highly collinear proxy receive near-identical A-grade scores without redundancy or independent-information signal",
-)
 def test_collinear_proxy_contract(tmp_path: Path):
     case, raw, ranked = _indexed("collinear_proxy", tmp_path)
     true = ranked.loc["x1_driver"]
@@ -149,6 +139,7 @@ def test_collinear_proxy_contract(tmp_path: Path):
         >= 0.05
     )
     assert metrics(case, raw)["proxy_separation_rate"] == 1.0
+    assert proxy["layer3_independence_status"] == "not_supported"
 
 
 def test_noise_and_spurious_false_positive_rates_are_distinct(tmp_path: Path):
@@ -226,10 +217,6 @@ def test_nonlinear_scenario_data_contract():
     assert valid["x"].pow(2).corr(valid["y"]) > 0.90
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_1 linear lag screening and current layer_4 model lift do not recover the U-shaped nonlinear driver; prediction_score remains zero or the candidate remains E-grade",
-)
 def test_nonlinear_true_lag_contract(tmp_path: Path):
     case, _, ranked = _indexed("nonlinear_stable_driver", tmp_path)
     row = ranked.loc["x_nonlinear"]
@@ -244,6 +231,7 @@ def test_nonlinear_true_lag_contract(tmp_path: Path):
     assert float(row["prediction_score"]) > 0.05
     assert float(row["prediction_score"]) >= float(noise_scores.max()) + 0.05
     assert "low_model_lift" not in str(row["risk_flags"])
+    assert row["layer4_model_status"] == "supported"
 
 
 def test_regime_sign_reversal_contract(tmp_path: Path):
@@ -263,6 +251,8 @@ def test_regime_sign_reversal_contract(tmp_path: Path):
     assert float(row["stability_score"]) < 0.35
     assert "unstable_across_regimes" in str(row["risk_flags"])
     assert row["candidate_grade"] not in {"A", "B"}
+    assert row["stability_status"] == "conflicting"
+    assert row["data_quality_status"] == "supported"
     assert int(row["driver_rank"]) >= 1
 
 
@@ -277,10 +267,6 @@ def test_outlier_scenario_data_contract():
     assert full - clean_corr > 0.60
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="data_quality/stability fields do not identify an association proven to be outlier-driven; add robust segment or outlier evidence",
-)
 def test_outlier_production_contract(tmp_path: Path):
     _, _, ranked = _indexed("outlier_driven_correlation", tmp_path)
     row = ranked.loc["x_outlier"]
@@ -293,10 +279,6 @@ def test_outlier_production_contract(tmp_path: Path):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_2 lag_boundary_flag is true but candidate_grade remains A; boundary optimum is treated as confirmed propagation evidence",
-)
 def test_lag_boundary_contract(tmp_path: Path):
     case, _, ranked = _indexed("lag_boundary_artifact", tmp_path)
     row = ranked.loc["x_boundary"]
@@ -304,6 +286,7 @@ def test_lag_boundary_contract(tmp_path: Path):
     assert bool(row["lag_boundary_flag"])
     assert "lag_boundary" in str(row["risk_flags"])
     assert row["candidate_grade"] not in {"A", "B"}
+    assert row["layer2_temporal_status"] == "partially_supported"
 
 
 def test_noise_only_fdr_and_multi_seed_false_positives(tmp_path: Path):
@@ -333,10 +316,6 @@ def test_model_incremental_validation_runs_layer_4(tmp_path: Path):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="layer_3/layer_4 x_proxy receives the same model evidence and grade as x_incremental without redundancy separation",
-)
 def test_model_incremental_proxy_separation(tmp_path: Path):
     _, _, ranked = _indexed("model_incremental_validation", tmp_path)
     true = ranked.loc["x_incremental"]
@@ -347,6 +326,7 @@ def test_model_incremental_proxy_separation(tmp_path: Path):
         or any(token in risk for token in ["redundancy", "proxy", "collinearity"])
         or float(true["prediction_score"]) - float(proxy["prediction_score"]) >= 0.05
     )
+    assert proxy["layer3_independence_status"] == "not_supported"
 
 
 def test_mixed_evidence_true_drivers_and_noise(tmp_path: Path):
@@ -366,20 +346,13 @@ def test_mixed_evidence_true_drivers_and_noise(tmp_path: Path):
     assert pd.notna(ranked.loc["x_driver", "prediction_score"])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="mixed layer_2 x_downstream is flagged target_leads_variable but candidate_grade is not capped below A/B",
-)
 def test_mixed_evidence_downstream_contract(tmp_path: Path):
     _, _, ranked = _indexed("mixed_evidence", tmp_path)
     assert "target_leads_variable" in str(ranked.loc["x_downstream", "risk_flags"])
     assert ranked.loc["x_downstream", "candidate_grade"] not in {"A", "B"}
+    assert ranked.loc["x_downstream", "layer2_temporal_status"] == "conflicting"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="mixed layer_3 x_common lacks common_capacity_driver or equivalent independent-information limitation",
-)
 def test_mixed_evidence_common_driver_contract(tmp_path: Path):
     case, raw, ranked = _indexed("mixed_evidence", tmp_path)
     assert "common_capacity_driver" in str(ranked.loc["x_common", "risk_flags"])
@@ -389,10 +362,6 @@ def test_mixed_evidence_common_driver_contract(tmp_path: Path):
     assert metrics(case, raw)["common_driver_suppression_rate"] == 1.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="mixed layer_3 x_proxy receives near-identical evidence to x_driver without redundancy or independent-information separation",
-)
 def test_mixed_evidence_proxy_contract(tmp_path: Path):
     case, raw, ranked = _indexed("mixed_evidence", tmp_path)
     assert (
@@ -488,9 +457,9 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             )
 
 
-def test_pr_8b_does_not_modify_any_production_python():
+def test_pr_8c_only_changes_audited_ranking_production_paths():
     tracked = subprocess.check_output(
-        ["git", "diff", "--name-only", PR_8A_BASE],
+        ["git", "diff", "--name-only", PR_8B_BASE],
         text=True,
     ).splitlines()
     untracked = subprocess.check_output(
@@ -498,6 +467,35 @@ def test_pr_8b_does_not_modify_any_production_python():
         text=True,
     ).splitlines()
     changed = tracked + untracked
-    assert not any(
-        path.startswith("chem_ts_corr/") and path.endswith(".py") for path in changed
+    production = {
+        path
+        for path in changed
+        if path.startswith("chem_ts_corr/") and path.endswith(".py")
+    }
+    assert production <= {"chem_ts_corr/screening.py", "chem_ts_corr/service.py"}
+
+
+def test_pr_8c_source_contracts_cover_each_repaired_ranking_path():
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in Path("chem_ts_corr").rglob("*.py")
     )
+    assert "abs(best_lag)" not in production_source
+    assert "target_leads_variable" in source
+    assert "lag_boundary" in source
+    assert "_redundant_proxy_variables" in source
+    assert "robust_outlier_ratio" in source
+    assert "__squared" in source
+    assert 'INDUSTRIAL_SCORE_COMPONENTS = ("association", "prediction", "stability", "lag_quality")' in source
+    for field in [
+        "layer1_association_status",
+        "layer2_temporal_status",
+        "layer3_independence_status",
+        "layer4_model_status",
+        "stability_status",
+        "data_quality_status",
+        "evidence_missing_items",
+        "evidence_conflict_items",
+    ]:
+        assert field in source

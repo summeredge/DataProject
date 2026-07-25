@@ -123,7 +123,7 @@ def test_final_ranking_baseline_is_frozen():
          "driver_priority_score": 0.43099158694510153, "driver_rank": 2, "candidate_grade": "C",
          "recommended_use": "capacity_driven"},
         {"variable": "downstream", "final_score": 0.7500341454106302, "driver_priority_factor": 0.45,
-         "driver_priority_score": 0.3375153654347836, "driver_rank": 3, "candidate_grade": "A",
+         "driver_priority_score": 0.3375153654347836, "driver_rank": 3, "candidate_grade": "C",
          "recommended_use": "state_indicator"},
     ])
     pd.testing.assert_frame_equal(pd.DataFrame(actual), expected, check_exact=False, rtol=1e-12)

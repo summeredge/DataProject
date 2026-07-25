@@ -230,7 +230,19 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
             target_mask=analysis_target_mask,
         )
     _progress(progress_callback, "正在生成候选排序")
-    risks = risk_flags(raw_ranked, residual, stability, diag, roles, residual_controls, lag_peak, rolling, lift)
+    risks = risk_flags(
+        raw_ranked,
+        residual,
+        stability,
+        diag,
+        roles,
+        residual_controls,
+        lag_peak,
+        rolling,
+        lift,
+        frame=scaled,
+        target=config.target,
+    )
     closed_loop_evidence = build_closed_loop_evidence(
         risks,
         config.manual_closed_loop_variables,

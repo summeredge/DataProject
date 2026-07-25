@@ -26,6 +26,7 @@ RISK_RELATIVE_PENALTY_WEIGHTS = {
     "low_model_lift": 0.00,
     "poor_data_quality": 0.00,
     "residual_collinearity": 0.10,
+    "redundant_proxy": 0.00,
 }
 EVIDENCE_SCORE_CAPS = {
     "strong_formula_leakage": 0.25,
@@ -145,7 +146,7 @@ def apply_ignore_roles(frame: pd.DataFrame, roles: dict[str, str], target: str) 
 def diagnostics(frame: pd.DataFrame, roles: dict[str, str]) -> pd.DataFrame:
     columns = [
         "variable", "role", "missing_rate", "longest_missing_run", "duplicate_timestamps",
-        "sampling_period_seconds", "constant_run_max", "abnormal_jump_count", "abnormal_jump_ratio", "saturation_ratio",
+        "sampling_period_seconds", "constant_run_max", "abnormal_jump_count", "abnormal_jump_ratio", "robust_outlier_ratio", "saturation_ratio",
     ]
     rows: list[dict[str, object]] = []
     duplicate_timestamps = int(frame.attrs.get("duplicate_timestamps", 0))
@@ -170,6 +171,7 @@ def diagnostics(frame: pd.DataFrame, roles: dict[str, str]) -> pd.DataFrame:
             "constant_run_max": int(_longest_constant_run(series)),
             "abnormal_jump_count": abnormal_jump_count,
             "abnormal_jump_ratio": abnormal_jump_count / valid_diff_count if valid_diff_count else 0.0,
+            "robust_outlier_ratio": float(_robust_outlier_ratio(non_na)),
             "saturation_ratio": float(_saturation_ratio(series)),
         })
     return pd.DataFrame(rows, columns=columns)
@@ -187,15 +189,28 @@ def residual_corr_scores(
     capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
     if not capacity_columns:
         return pd.DataFrame(columns=out_cols)
+    period_ns = sample_period_ns(frame)
+    aligned_controls = pd.DataFrame(
+        {
+            column: lagged_series(
+                frame[column],
+                frame.index,
+                int((best_lags or {}).get(column, 0) or 0),
+                period_ns=period_ns,
+            )
+            for column in capacity_columns
+        },
+        index=frame.index,
+    )
     target_residual, t_method, t_cond, used_cols = _residualize(
-        frame[target], frame[capacity_columns], fit_mask=target_mask
+        frame[target], aligned_controls, fit_mask=target_mask
     )
     all_scores: list[pd.DataFrame] = []
     for column in frame.columns:
         if column == target or column in capacity_columns:
             continue
         candidate_residual, c_method, c_cond, c_used_cols = _residualize(
-            frame[column], frame[capacity_columns], fit_mask=target_mask
+            frame[column], aligned_controls, fit_mask=target_mask
         )
         pair = pd.DataFrame({target: target_residual, column: candidate_residual}).dropna()
         if len(pair) < max(10, max_lag + 5):
@@ -445,9 +460,12 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
                 frame[target], frame.index, lag, period_ns=period_ns
             )
         for lag in candidate_lags:
-            dataset[f"{variable}__lag_{lag}"] = lagged_series(
+            lagged_candidate = lagged_series(
                 frame[variable], frame.index, lag, period_ns=period_ns
             )
+            dataset[f"{variable}__lag_{lag}"] = lagged_candidate
+            # PR-8C nonlinear_stable_driver: expose a quadratic incremental basis.
+            dataset[f"{variable}__lag_{lag}__squared"] = lagged_candidate.pow(2)
         if target_mask is not None:
             dataset = dataset.loc[target_mask.reindex(dataset.index).fillna(False).astype(bool)]
         dataset = dataset.replace([np.inf, -np.inf], np.nan).dropna()
@@ -455,7 +473,11 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
             rows.append({"variable": variable, "status": "skipped: insufficient rows", "ar_baseline_rmse": np.nan, "candidate_rmse": np.nan, "model_lift": np.nan, "median_fold_lift": np.nan, "positive_fold_ratio": np.nan, "model_lift_score": np.nan})
             continue
         base_cols = [f"{target}__lag_{lag}" for lag in ar_lags]
-        full_cols = base_cols + [f"{variable}__lag_{lag}" for lag in candidate_lags]
+        full_cols = base_cols + [
+            feature
+            for lag in candidate_lags
+            for feature in [f"{variable}__lag_{lag}", f"{variable}__lag_{lag}__squared"]
+        ]
         base_errors: list[float] = []
         full_errors: list[float] = []
         splits = _time_series_splits(len(dataset), n_splits)
@@ -746,6 +768,7 @@ def classify_candidate(row: pd.Series) -> str:
         ("poor_data_quality", "poor_quality"),
         ("target_leads_variable", "downstream_response"),
         ("common_capacity_driver", "capacity_driven"),
+        ("redundant_proxy", "uncertain_candidate"),
     ]:
         if token in flags:
             return candidate_class
@@ -801,15 +824,53 @@ def _data_quality_score(diag: Mapping[str, object]) -> float:
             max(0.0, _safe_float(diag.get("missing_rate", 0.0))),
             max(0.0, _safe_float(diag.get("saturation_ratio", 0.0))),
             max(0.0, _safe_float(diag.get("abnormal_jump_ratio", 0.0))),
+            max(0.0, _safe_float(diag.get("robust_outlier_ratio", 0.0))),
         ]
     )
-    reference_rates = np.array([0.20, 0.20, 0.01])
+    reference_rates = np.array([0.20, 0.20, 0.01, 0.01])
     quality_components = np.exp(-np.log(2) * rates / reference_rates)
     return float(np.clip(np.prod(quality_components) ** (1 / 3), 0.0, 1.0))
 
 
-def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "data_quality_score", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
+def _redundant_proxy_variables(
+    frame: pd.DataFrame | None,
+    ranked: pd.DataFrame,
+    target: str | None,
+) -> set[str]:
+    """PR-8C collinear_proxy/model_proxy: flag only near-identical lagged candidates."""
+    if frame is None or not target or target not in frame.columns:
+        return set()
+    period_ns = sample_period_ns(frame)
+    order = {column: index for index, column in enumerate(frame.columns)}
+    candidates = [
+        str(row["variable"])
+        for _, row in ranked.iterrows()
+        if str(row.get("variable", "")) in frame.columns
+        and str(row.get("variable", "")) != target
+        and _safe_float(row.get("lag", 0), default=0.0) > 0
+    ]
+    lag_map = {
+        str(row["variable"]): int(_safe_float(row.get("lag", 0), default=0.0))
+        for _, row in ranked.iterrows()
+    }
+    redundant: set[str] = set()
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 :]:
+            pair = pd.DataFrame(
+                {
+                    left: lagged_series(frame[left], frame.index, lag_map[left], period_ns=period_ns),
+                    right: lagged_series(frame[right], frame.index, lag_map[right], period_ns=period_ns),
+                }
+            ).dropna()
+            if len(pair) < 30 or abs(float(pair[left].corr(pair[right]))) < 0.995:
+                continue
+            anchor, proxy = sorted([left, right], key=lambda value: order[value])
+            redundant.add(proxy)
+    return redundant
+
+
+def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None, *, frame: pd.DataFrame | None = None, target: str | None = None) -> pd.DataFrame:
+    cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "redundant_proxy_flag", "closed_loop_suspect_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "data_quality_score", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
 
@@ -820,6 +881,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     lag_map = lag_peak_quality.set_index("variable").to_dict("index") if lag_peak_quality is not None and not lag_peak_quality.empty else {}
     roll_map = rolling_corr_scores.set_index("variable").to_dict("index") if rolling_corr_scores is not None and not rolling_corr_scores.empty else {}
     lift_map = model_lift_scores.set_index("variable").to_dict("index") if model_lift_scores is not None and not model_lift_scores.empty else {}
+    redundant_variables = _redundant_proxy_variables(frame, ranked, target)
 
     rows = []
     for _, row in ranked.iterrows():
@@ -835,6 +897,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             _safe_float(d.get("missing_rate", 0), default=0.0) > 0.2
             or _safe_float(d.get("saturation_ratio", 0), default=0.0) > 0.2
             or _safe_float(d.get("abnormal_jump_ratio", 0), default=0.0) > 0.01
+            or _safe_float(d.get("robust_outlier_ratio", 0), default=0.0) > 0.01
         )
         lag_value = int(_safe_float(row.get("lag", 0), default=0.0))
         formula_like = _looks_like_formula_variable(variable)
@@ -848,11 +911,14 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             and pd.notna(regime_stability)
             and float(regime_stability) < REGIME_UNSTABLE_THRESHOLD
         )
+        lift_info = lift_map.get(variable, {})
+        model_supported = str(lift_info.get("status", "")).startswith("ok") and _safe_float(
+            lift_info.get("model_lift", 0.0), default=0.0
+        ) >= 0.05
         unstable_time = _safe_float(
             roll_map.get(variable, {}).get("rolling_stability", 1.0), default=1.0
-        ) < 0.35
+        ) < 0.35 and not (model_supported and raw_corr < 0.2)
         lag_boundary = bool(lag_map.get(variable, {}).get("lag_boundary_flag", False))
-        lift_info = lift_map.get(variable, {})
         low_lift = str(lift_info.get("status", "")).startswith("ok") and _safe_float(
             lift_info.get("model_lift", 0.0), default=0.0
         ) < 0.01
@@ -862,6 +928,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             ("formula_like", formula_like),
             ("strong_formula_leakage", strong_formula),
             ("common_capacity_driver", common_capacity),
+            ("redundant_proxy", variable in redundant_variables),
             ("target_leads_variable", target_leads),
             ("unstable_across_regimes", unstable_reg),
             ("unstable_over_time", unstable_time),
@@ -887,12 +954,12 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             "residual_collinearity": "残差控制共线性高",
         }
         reason = "；".join(reason_map.get(flag, flag) for flag in flags)
-        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
+        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "redundant_proxy_flag": variable in redundant_variables, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
     return pd.DataFrame(rows, columns=cols)
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, closed_loop_evidence: pd.DataFrame | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_status", "rolling_stability", "rolling_status", "stability_score", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "engineering_context", "closed_loop_context", "closed_loop_status", "closed_loop_reason"]
+    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_sign_reversal_flag", "regime_status", "rolling_stability", "rolling_status", "stability_score", "stability_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "data_quality_status", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_missing_items", "evidence_conflict_items", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "engineering_context", "closed_loop_context", "closed_loop_status", "closed_loop_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -900,13 +967,13 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     if "variable" not in residual_source.columns:
         residual_source = pd.DataFrame(columns=["variable"])
     final = final.merge(residual_source, on="variable", how="left")
-    stability_columns = [
-        column for column in REGIME_STABILITY_COLUMNS
-        if column != "regime_sign_reversal_flag"
-    ]
+    stability_columns = list(REGIME_STABILITY_COLUMNS)
     stability_source = stability[[c for c in stability_columns if c in stability.columns]].copy()
     if "variable" not in stability_source.columns:
         stability_source = pd.DataFrame(columns=["variable"])
+    # Upstream callers may already carry selected regime fields.  Keep the
+    # freshly computed stability evidence as the single source for this stage.
+    final = final.drop(columns=[c for c in stability_source.columns if c != "variable" and c in final.columns])
     final = final.merge(stability_source, on="variable", how="left")
     model_columns = [c for c in ["variable", "model_lift", "model_lift_score", "status"] if c in model_lift.columns]
     model_source = model_lift[model_columns].copy()
@@ -927,6 +994,14 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         how="left",
     )
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
+    # Some legacy callers pre-merge regime evidence.  Pandas then suffixes the
+    # duplicate flag; normalize it before the layer-status contract is built.
+    if "regime_sign_reversal_flag" not in final.columns:
+        for suffix in ("_y", "_x"):
+            legacy_flag = f"regime_sign_reversal_flag{suffix}"
+            if legacy_flag in final.columns:
+                final["regime_sign_reversal_flag"] = final[legacy_flag]
+                break
 
     residual_raw = pd.to_numeric(final["residual_corr"], errors="coerce") if "residual_corr" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
     regime_raw = pd.to_numeric(final["regime_stability_final"], errors="coerce") if "regime_stability_final" in final.columns else pd.Series(np.nan, index=final.index, dtype=float)
@@ -1005,6 +1080,52 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         [missing_count.eq(0), missing_count.eq(1)],
         ["完整", "部分完整"],
         default="证据不足",
+    )
+
+    flags = final.get("risk_flags", pd.Series("", index=final.index)).fillna("")
+    has_flag = lambda name: flags.str.contains(rf"(?:^|;){name}(?:;|$)", regex=True)
+    corr_q = pd.to_numeric(
+        final.get("corr_q_value", pd.Series(np.nan, index=final.index)), errors="coerce"
+    )
+    final["layer1_association_status"] = np.select(
+        [corr_q.le(0.05), corr_q.notna()],
+        ["supported", "not_supported"],
+        default="not_available",
+    )
+    lag_values = pd.to_numeric(final.get("lag"), errors="coerce")
+    final["layer2_temporal_status"] = np.select(
+        [has_flag("target_leads_variable"), has_flag("lag_boundary"), lag_values.gt(0), lag_values.eq(0)],
+        ["conflicting", "partially_supported", "supported", "partially_supported"],
+        default="not_available",
+    )
+    final["layer3_independence_status"] = np.select(
+        [
+            has_flag("common_capacity_driver") | has_flag("residual_collinearity") | has_flag("redundant_proxy"),
+            final["independent_signal_score"].notna(),
+        ],
+        ["not_supported", "supported"],
+        default="not_available",
+    )
+    model_ok = final["model_lift_status"].astype(str).str.startswith("ok")
+    model_insufficient = final["model_lift_status"].astype(str).str.contains("insufficient", case=False)
+    final["layer4_model_status"] = np.select(
+        [model_ok & final["prediction_score"].gt(0.05), model_ok, model_insufficient],
+        ["supported", "not_supported", "insufficient_data"],
+        default="not_available",
+    )
+    final["stability_status"] = np.select(
+        [
+            final.get("regime_sign_reversal_flag", pd.Series(False, index=final.index)).eq(True),
+            final["stability_score"].notna() & final["stability_score"].lt(0.35),
+            final["stability_score"].notna(),
+        ],
+        ["conflicting", "not_supported", "supported"],
+        default="not_available",
+    )
+    final["data_quality_status"] = np.where(has_flag("poor_data_quality"), "not_supported", "supported")
+    conflict_tokens = ["target_leads_variable", "lag_boundary", "common_capacity_driver", "redundant_proxy", "unstable_across_regimes", "poor_data_quality", "strong_formula_leakage"]
+    final["evidence_conflict_items"] = flags.apply(
+        lambda value: ";".join(token for token in conflict_tokens if token in _risk_token_set(value))
     )
 
     components = pd.DataFrame(
@@ -1097,15 +1218,28 @@ def _finalize_driver_ranking(
 
 def _grade_candidate(row: pd.Series) -> str:
     score = _safe_float(row.get("final_score", 0), default=0.0)
-    if score >= 0.75:
-        return "A"
-    if score >= 0.6:
-        return "B"
-    if score >= 0.45:
-        return "C"
-    if score >= 0.3:
-        return "D"
-    return "E"
+    grade = "A" if score >= 0.75 else "B" if score >= 0.6 else "C" if score >= 0.45 else "D" if score >= 0.3 else "E"
+    flags = _risk_token_set(row.get("risk_flags", ""))
+    # PR-8C downstream_response/lag_boundary: explicit temporal conflict is
+    # retained for explanation but cannot receive an upstream high-confidence grade.
+    if flags.intersection({"target_leads_variable", "lag_boundary"}):
+        return max(grade, "C", key=lambda value: "ABCDE".index(value))
+    # PR-8C nonlinear_stable_driver: validated incremental prediction can earn
+    # a reviewable grade only when no explicit temporal, quality, or regime conflict exists.
+    if (
+        _safe_float(row.get("prediction_score", 0), default=0.0) > 0.05
+        and _safe_float(row.get("lag", 0), default=0.0) > 0
+        and not flags.intersection(
+            {
+                "strong_formula_leakage",
+                "poor_data_quality",
+                "unstable_across_regimes",
+                "unstable_over_time",
+            }
+        )
+    ):
+        return min(grade, "C", key=lambda value: "ABCDE".index(value))
+    return grade
 
 
 def _recommend_use(row: pd.Series) -> str:
@@ -1183,6 +1317,18 @@ def _saturation_ratio(series: pd.Series) -> float:
         return 0.0
     counts = values.value_counts(normalize=True)
     return float(counts.iloc[0]) if len(counts) else 0.0
+
+
+def _robust_outlier_ratio(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if len(values) < 10:
+        return 0.0
+    median = float(values.median())
+    mad = float((values - median).abs().median())
+    if mad <= 1e-12:
+        return 0.0
+    robust_z = 0.6745 * (values - median).abs() / mad
+    return float((robust_z > 6.0).mean())
 
 
 def _residualize(

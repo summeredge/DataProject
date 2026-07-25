@@ -15,6 +15,7 @@ class SyntheticCase:
     lags: dict[str, int]
     directions: dict[str, str]
     variable_types: dict[str, frozenset[str]]
+    reference_map: dict[str, str]
     metadata: dict[str, object]
 
 
@@ -33,6 +34,7 @@ def _case(
     lags=None,
     directions=None,
     variable_types=None,
+    reference_map=None,
     **metadata,
 ) -> SyntheticCase:
     types = {
@@ -47,6 +49,7 @@ def _case(
         lags=lags or {},
         directions=directions or {},
         variable_types=types,
+        reference_map=reference_map or {},
         metadata={"scenario": name, **metadata},
     )
 
@@ -108,6 +111,7 @@ def common_driver(n=420, noise=0.12, seed=103, lag=3) -> SyntheticCase:
         {"z_driver": lag},
         {"z_driver": "variable_leads_target"},
         {"true_driver": {"z_driver"}, "common_driver_proxy": {"x_common"}},
+        {"x_common": "z_driver"},
         seed=seed,
         n=n,
         noise=noise,
@@ -131,6 +135,7 @@ def collinear_proxy(n=360, noise=0.1, seed=104, lag=2) -> SyntheticCase:
         {"x1_driver": lag},
         {"x1_driver": "variable_leads_target"},
         {"true_driver": {"x1_driver"}, "proxy": {"x2_proxy"}},
+        {"x2_proxy": "x1_driver"},
         seed=seed,
         n=n,
         noise=noise,
@@ -143,15 +148,24 @@ def nonlinear_stable_driver(n=400, noise=0.08, seed=105, lag=2) -> SyntheticCase
     x = rng.uniform(-1, 1, size=n)
     y = np.roll(x**2, lag) + eps
     y[:lag] = eps[:lag]
+    noise_names = [f"noise_{index:02d}" for index in range(8)]
+    frame = pd.DataFrame(
+        {
+            "target": y,
+            "x_nonlinear": x,
+            **{name: rng.normal(size=n) for name in noise_names},
+        },
+        index=index,
+    )
     return _case(
         "nonlinear_stable_driver",
-        pd.DataFrame({"target": y, "x_nonlinear": x, "noise": rng.normal(size=n)}, index=index),
+        frame,
         "target",
         ["x_nonlinear"],
-        ["noise"],
+        noise_names,
         {"x_nonlinear": lag},
         {"x_nonlinear": "variable_leads_target"},
-        {"true_driver": {"x_nonlinear"}, "noise": {"noise"}},
+        {"true_driver": {"x_nonlinear"}, "noise": set(noise_names)},
         seed=seed,
         n=n,
         noise=noise,
@@ -291,6 +305,7 @@ def mixed_evidence(n=480, noise=0.12, seed=110) -> SyntheticCase:
             "downstream": {"x_downstream"},
             "noise": {"noise"},
         },
+        {"x_common": "z_driver", "x_proxy": "x_driver"},
         seed=seed,
         n=n,
         noise=noise,
@@ -318,6 +333,7 @@ def model_incremental_validation(n=420, noise=0.12, seed=111, lag=3) -> Syntheti
         {"x_incremental": lag},
         {"x_incremental": "variable_leads_target"},
         {"true_driver": {"x_incremental"}, "proxy": {"x_proxy"}, "noise": {"noise"}},
+        {"x_proxy": "x_incremental"},
         seed=seed,
         n=n,
         noise=noise,

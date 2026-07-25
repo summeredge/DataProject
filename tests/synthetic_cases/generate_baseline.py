@@ -8,6 +8,7 @@ import pandas as pd
 
 from .evaluate import (
     KEY_FIELDS,
+    REPORT_TOP_K,
     evaluate_case_expectations,
     evaluate_noise_false_positives,
     evaluate_rank_stability,
@@ -60,7 +61,9 @@ def build_case_report(
         "variable_types": {
             key: sorted(values) for key, values in case.variable_types.items()
         },
-        "top_k_results": ranked["variable"].tolist(),
+        "reference_map": case.reference_map,
+        "top_k": REPORT_TOP_K,
+        "top_k_results": ranked.head(REPORT_TOP_K)["variable"].tolist(),
         "key_evidence": evidence,
         "metrics": _json_value(metrics(case, ranked)),
         "stability_metrics": _json_value(stability or {}),

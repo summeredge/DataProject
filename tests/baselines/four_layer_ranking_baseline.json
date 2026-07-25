@@ -18,6 +18,8 @@
         "x_driver"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "x_driver",
       "noise"
@@ -86,6 +88,10 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "x_driver": 0
       },
@@ -105,6 +111,8 @@
       "top_3_recall_mean": 1.0,
       "spearman_rank_stability": 0.9999999999999999,
       "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
       "missing_candidate_rank": 3,
       "candidate_missing_counts": [
         {
@@ -209,8 +217,13 @@
       "x_driver_top_3",
       "x_driver_lag",
       "x_driver_direction",
-      "stability_reproducible",
-      "stable_true_driver_top_3"
+      "stable_true_driver_rank",
+      "stable_top_1_hit",
+      "stable_top_3_recall",
+      "stable_true_presence",
+      "stable_candidate_presence",
+      "stable_top_k_overlap",
+      "stable_spearman"
     ]
   },
   "downstream_response": {
@@ -232,6 +245,8 @@
         "noise"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "x_downstream",
       "noise"
@@ -300,6 +315,10 @@
       "downstream_average_rank": 1.0,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "x_downstream": 0
       },
@@ -341,6 +360,10 @@
         "x_common"
       ]
     },
+    "reference_map": {
+      "x_common": "z_driver"
+    },
+    "top_k": 5,
     "top_k_results": [
       "z_driver",
       "x_common"
@@ -409,6 +432,23 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": 2.0,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": 1.0,
+      "proxy_separation_rate": null,
+      "common_driver_details": [
+        {
+          "variable": "x_common",
+          "reference": "z_driver",
+          "variable_rank": 2,
+          "reference_rank": 1,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 0.09092707068895833,
+          "risk_flags": "",
+          "suppressed": true
+        }
+      ],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "z_driver": 0
       },
@@ -425,7 +465,8 @@
     ],
     "passed_expectations": [
       "both_candidates_visible",
-      "true_driver_precedes_proxy"
+      "true_driver_precedes_proxy",
+      "common_driver_suppressed"
     ]
   },
   "collinear_proxy": {
@@ -447,6 +488,10 @@
         "x2_proxy"
       ]
     },
+    "reference_map": {
+      "x2_proxy": "x1_driver"
+    },
+    "top_k": 5,
     "top_k_results": [
       "x1_driver",
       "x2_proxy"
@@ -515,6 +560,23 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": 2.0,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": 0.0,
+      "common_driver_details": [],
+      "proxy_separation_details": [
+        {
+          "variable": "x2_proxy",
+          "reference": "x1_driver",
+          "variable_rank": 2,
+          "reference_rank": 1,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 0.0002867330561209247,
+          "risk_flags": "",
+          "separated": false
+        }
+      ],
       "lag_identification_error": {
         "x1_driver": 0
       },
@@ -534,6 +596,8 @@
       "top_3_recall_mean": 1.0,
       "spearman_rank_stability": 0.9999999999999999,
       "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
       "missing_candidate_rank": 3,
       "candidate_missing_counts": [
         {
@@ -632,13 +696,16 @@
       ]
     },
     "passed": false,
-    "failure_reason": "layer_3 true driver and collinear proxy receive near-identical A-grade evidence without redundancy signal",
+    "failure_reason": "layer_3 true driver and collinear proxy receive near-identical A-grade evidence without redundancy signal; layer_3 proxy_separation_rate is below 1.0",
     "failed_expectations": [
-      "layer_3 true driver and collinear proxy receive near-identical A-grade evidence without redundancy signal"
+      "layer_3 true driver and collinear proxy receive near-identical A-grade evidence without redundancy signal",
+      "layer_3 proxy_separation_rate is below 1.0"
     ],
     "passed_expectations": [
       "true_precedes_proxy",
-      "stability_reproducible"
+      "stable_proxy_candidate_presence",
+      "stable_proxy_top_k_overlap",
+      "stable_proxy_spearman"
     ]
   },
   "nonlinear_stable_driver": {
@@ -658,17 +725,56 @@
         "x_nonlinear"
       ],
       "noise": [
-        "noise"
+        "noise_00",
+        "noise_01",
+        "noise_02",
+        "noise_03",
+        "noise_04",
+        "noise_05",
+        "noise_06",
+        "noise_07"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
+      "noise_01",
       "x_nonlinear",
-      "noise"
+      "noise_06",
+      "noise_02",
+      "noise_00"
     ],
     "key_evidence": [
       {
-        "variable": "x_nonlinear",
+        "variable": "noise_01",
         "driver_rank": 1,
+        "final_score": 0.1364486859341509,
+        "driver_priority_factor": 1.0,
+        "driver_priority_score": 0.1364486859341509,
+        "candidate_grade": "E",
+        "candidate_class": "upstream_driver_candidate",
+        "recommended_use": "unstable_candidate",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "unstable_over_time;low_model_lift",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.06937795107241788,
+        "lag_quality": 0.4226272209751325,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "ok",
+        "prediction_score": 0.0,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "x_nonlinear",
+        "driver_rank": 2,
         "final_score": 0.10362644536927511,
         "driver_priority_factor": 1.0,
         "driver_priority_score": 0.10362644536927511,
@@ -689,13 +795,67 @@
         "model_lift_status": "ok",
         "prediction_score": 0.0,
         "independent_signal_score": null,
-        "pearson_q": 0.37814746092177165,
-        "spearman_q": 0.37814746092177165,
-        "corr_q_value": 0.37814746092177165
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
       },
       {
-        "variable": "noise",
-        "driver_rank": 2,
+        "variable": "noise_06",
+        "driver_rank": 3,
+        "final_score": 0.08216739261913934,
+        "driver_priority_factor": 1.0,
+        "driver_priority_score": 0.08216739261913934,
+        "candidate_grade": "E",
+        "candidate_class": "upstream_driver_candidate",
+        "recommended_use": "unstable_candidate",
+        "lag": 5,
+        "direction": "变量领先目标",
+        "risk_flags": "unstable_over_time;low_model_lift",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.08095363013711532,
+        "lag_quality": 0.18420044547268682,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "完整",
+        "model_lift_status": "ok",
+        "prediction_score": 0.0,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_02",
+        "driver_rank": 4,
+        "final_score": 0.0622841454604171,
+        "driver_priority_factor": 1.0,
+        "driver_priority_score": 0.0622841454604171,
+        "candidate_grade": "E",
+        "candidate_class": "upstream_driver_candidate",
+        "recommended_use": "unstable_candidate",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "unstable_over_time;low_model_lift",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.06461266590537232,
+        "lag_quality": 0.09871538273703014,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "ok",
+        "prediction_score": 0.0,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_00",
+        "driver_rank": 5,
         "final_score": 0.05183024777526664,
         "driver_priority_factor": 1.0,
         "driver_priority_score": 0.05183024777526664,
@@ -716,34 +876,150 @@
         "model_lift_status": "ok",
         "prediction_score": 0.0,
         "independent_signal_score": null,
-        "pearson_q": 0.8560525638449829,
-        "spearman_q": 0.8560525638449829,
-        "corr_q_value": 0.8560525638449829
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_04",
+        "driver_rank": 6,
+        "final_score": 0.10881850135387454,
+        "driver_priority_factor": 0.45,
+        "driver_priority_score": 0.048968325609243545,
+        "candidate_grade": "E",
+        "candidate_class": "downstream_response",
+        "recommended_use": "unstable_candidate",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;unstable_over_time",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.07764517946123459,
+        "lag_quality": 0.19665793650616234,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "non_predictive_lag",
+        "prediction_score": null,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_07",
+        "driver_rank": 7,
+        "final_score": 0.06276539398536912,
+        "driver_priority_factor": 0.45,
+        "driver_priority_score": 0.028244427293416106,
+        "candidate_grade": "E",
+        "candidate_class": "downstream_response",
+        "recommended_use": "unstable_candidate",
+        "lag": -5,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;unstable_over_time",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.10285979863204127,
+        "lag_quality": 0.006957452194892393,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "non_predictive_lag",
+        "prediction_score": null,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_03",
+        "driver_rank": 8,
+        "final_score": 0.06156817300804357,
+        "driver_priority_factor": 0.45,
+        "driver_priority_score": 0.027705677853619607,
+        "candidate_grade": "E",
+        "candidate_class": "downstream_response",
+        "recommended_use": "unstable_candidate",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;unstable_over_time",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.09335441626121971,
+        "lag_quality": 0.03182998961520637,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "non_predictive_lag",
+        "prediction_score": null,
+        "independent_signal_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_05",
+        "driver_rank": 9,
+        "final_score": 0.04150964045914813,
+        "driver_priority_factor": 0.45,
+        "driver_priority_score": 0.018679338206616658,
+        "candidate_grade": "E",
+        "candidate_class": "downstream_response",
+        "recommended_use": "unstable_candidate",
+        "lag": -3,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;unstable_over_time",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.05625670570590945,
+        "lag_quality": 0.024736387168433287,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9971160533345892,
+        "evidence_coverage_status": "部分完整",
+        "model_lift_status": "non_predictive_lag",
+        "prediction_score": null,
+        "independent_signal_score": null,
+        "pearson_q": 0.895594371393314,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
       }
     ],
     "metrics": {
-      "top_1_hit": true,
+      "top_1_hit": false,
       "top_3_recall": 1.0,
       "top_5_recall": 1.0,
-      "true_driver_average_rank": 1.0,
+      "true_driver_average_rank": 2.0,
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "x_nonlinear": 1
       },
       "noise_high_grade_false_positive_rate": 0.0,
       "spurious_high_grade_false_positive_rate": 0.0,
-      "noise_top_5_rate": 1.0,
+      "noise_top_5_rate": 0.5,
       "significant_q_count": 0
     },
     "stability_metrics": {},
-    "passed": true,
-    "failure_reason": "",
-    "failed_expectations": [],
+    "passed": false,
+    "failure_reason": "layer_4 nonlinear candidate does not reach A/B/C grade; layer_4 nonlinear prediction_score does not exceed 0.05; layer_4 nonlinear prediction_score does not exceed noise by 0.05; layer_4 nonlinear candidate still has low_model_lift risk",
+    "failed_expectations": [
+      "layer_4 nonlinear candidate does not reach A/B/C grade",
+      "layer_4 nonlinear prediction_score does not exceed 0.05",
+      "layer_4 nonlinear prediction_score does not exceed noise by 0.05",
+      "layer_4 nonlinear candidate still has low_model_lift risk"
+    ],
     "passed_expectations": [
-      "nonlinear_candidate_visible",
-      "nonlinear_model_evidence"
+      "nonlinear_top_3"
     ]
   },
   "regime_sign_reversal": {
@@ -767,6 +1043,8 @@
         "load"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "x_reversal",
       "load"
@@ -835,6 +1113,10 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "x_reversal": 0
       },
@@ -891,6 +1173,8 @@
         "noise"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "x_outlier",
       "noise"
@@ -959,6 +1243,10 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {},
       "noise_high_grade_false_positive_rate": 0.0,
       "spurious_high_grade_false_positive_rate": 0.5,
@@ -991,6 +1279,8 @@
         "x_boundary"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "x_boundary"
     ],
@@ -1031,6 +1321,10 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {
         "x_boundary": 0
       },
@@ -1094,37 +1388,14 @@
         "noise_29"
       ]
     },
+    "reference_map": {},
+    "top_k": 5,
     "top_k_results": [
       "noise_05",
       "noise_28",
       "noise_14",
       "noise_02",
-      "noise_09",
-      "noise_21",
-      "noise_00",
-      "noise_22",
-      "noise_27",
-      "noise_13",
-      "noise_06",
-      "noise_11",
-      "noise_23",
-      "noise_10",
-      "noise_15",
-      "noise_12",
-      "noise_25",
-      "noise_19",
-      "noise_17",
-      "noise_29",
-      "noise_04",
-      "noise_24",
-      "noise_26",
-      "noise_20",
-      "noise_03",
-      "noise_08",
-      "noise_16",
-      "noise_01",
-      "noise_07",
-      "noise_18"
+      "noise_09"
     ],
     "key_evidence": [
       {
@@ -1946,6 +2217,10 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
       "lag_identification_error": {},
       "noise_high_grade_false_positive_rate": 0.0,
       "spurious_high_grade_false_positive_rate": 0.0,
@@ -1963,6 +2238,8 @@
       "top_3_recall_mean": 0.0,
       "spearman_rank_stability": 0.34089729328883944,
       "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": null,
       "missing_candidate_rank": 31,
       "candidate_missing_counts": [
         {
@@ -2281,7 +2558,10 @@
     "passed_expectations": [
       "noise_grade_control",
       "noise_fdr_control",
-      "stability_reproducible"
+      "noise_top_1_hit",
+      "noise_false_positive_rate",
+      "noise_false_positive_runs",
+      "noise_maximum_grade"
     ]
   },
   "mixed_evidence": {
@@ -2316,13 +2596,17 @@
         "noise"
       ]
     },
+    "reference_map": {
+      "x_common": "z_driver",
+      "x_proxy": "x_driver"
+    },
+    "top_k": 5,
     "top_k_results": [
       "z_driver",
       "x_proxy",
       "x_driver",
       "x_common",
-      "x_downstream",
-      "noise"
+      "x_downstream"
     ],
     "key_evidence": [
       {
@@ -2496,6 +2780,36 @@
       "downstream_average_rank": 5.0,
       "common_driver_average_rank": 4.0,
       "proxy_average_rank": 2.0,
+      "common_driver_suppression_rate": 1.0,
+      "proxy_separation_rate": 0.0,
+      "common_driver_details": [
+        {
+          "variable": "x_common",
+          "reference": "z_driver",
+          "variable_rank": 4,
+          "reference_rank": 1,
+          "rank_gap": 3,
+          "variable_grade": "B",
+          "reference_grade": "A",
+          "score_gap": 0.2298911740607169,
+          "risk_flags": "",
+          "suppressed": true
+        }
+      ],
+      "proxy_separation_details": [
+        {
+          "variable": "x_proxy",
+          "reference": "x_driver",
+          "variable_rank": 2,
+          "reference_rank": 3,
+          "rank_gap": -1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": -0.00097998469704208,
+          "risk_flags": "",
+          "separated": false
+        }
+      ],
       "lag_identification_error": {
         "x_driver": 0,
         "z_driver": 0,
@@ -2517,6 +2831,8 @@
       "top_3_recall_mean": 1.0,
       "spearman_rank_stability": 0.961904761904762,
       "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
       "missing_candidate_rank": 7,
       "candidate_missing_counts": [
         {
@@ -2647,11 +2963,12 @@
       ]
     },
     "passed": false,
-    "failure_reason": "mixed layer_2 downstream candidate_grade not capped; mixed layer_3 common_capacity_driver missing; mixed layer_3 proxy is not separated from true driver",
+    "failure_reason": "mixed layer_2 downstream candidate_grade not capped; mixed layer_3 common_capacity_driver missing; mixed layer_3 proxy is not separated from true driver; mixed layer_3 proxy_separation_rate is below 1.0",
     "failed_expectations": [
       "mixed layer_2 downstream candidate_grade not capped",
       "mixed layer_3 common_capacity_driver missing",
-      "mixed layer_3 proxy is not separated from true driver"
+      "mixed layer_3 proxy is not separated from true driver",
+      "mixed layer_3 proxy_separation_rate is below 1.0"
     ],
     "passed_expectations": [
       "x_driver_present",
@@ -2662,10 +2979,14 @@
       "noise_present",
       "true_drivers_top_3",
       "downstream_direction",
+      "common_driver_suppression",
       "noise_low",
       "model_evidence_present",
-      "stability_reproducible",
-      "stable_mixed_recall"
+      "stable_mixed_recall",
+      "stable_mixed_true_presence",
+      "stable_mixed_candidate_presence",
+      "stable_mixed_top_k_overlap",
+      "stable_mixed_spearman"
     ]
   },
   "model_incremental_validation": {
@@ -2691,6 +3012,10 @@
         "noise"
       ]
     },
+    "reference_map": {
+      "x_proxy": "x_incremental"
+    },
+    "top_k": 5,
     "top_k_results": [
       "x_proxy",
       "x_incremental",
@@ -2787,6 +3112,23 @@
       "downstream_average_rank": null,
       "common_driver_average_rank": null,
       "proxy_average_rank": 1.0,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": 0.0,
+      "common_driver_details": [],
+      "proxy_separation_details": [
+        {
+          "variable": "x_proxy",
+          "reference": "x_incremental",
+          "variable_rank": 1,
+          "reference_rank": 2,
+          "rank_gap": -1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": -0.0006842907276867205,
+          "risk_flags": "",
+          "separated": false
+        }
+      ],
       "lag_identification_error": {
         "x_incremental": 0
       },

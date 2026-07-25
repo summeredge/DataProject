@@ -9,10 +9,12 @@ import pytest
 
 from tests.synthetic_cases.evaluate import (
     KEY_FIELDS,
+    REPORT_TOP_K,
     evaluate_noise_false_positives,
     evaluate_rank_stability,
     metrics,
     run_case,
+    stability_contract_checks,
 )
 from tests.synthetic_cases.four_layer_cases import CASES
 from tests.synthetic_cases.generate_baseline import (
@@ -51,6 +53,8 @@ def test_generators_are_deterministic_and_metadata_complete(name: str):
     assert set(first.lags) | set(first.directions) <= candidates
     assert first.true_drivers <= set(first.lags)
     assert first.true_drivers <= set(first.directions)
+    assert set(first.reference_map) <= first.spurious_variables
+    assert set(first.reference_map.values()) <= first.true_drivers
     assert {"scenario", "seed", "n", "noise"} <= set(first.metadata)
     changed = CASES[name](
         n=int(first.metadata["n"]) + 8,
@@ -59,6 +63,18 @@ def test_generators_are_deterministic_and_metadata_complete(name: str):
     assert changed.frame.shape == (first.frame.shape[0] + 8, first.frame.shape[1])
     noise_changed = CASES[name](noise=float(first.metadata["noise"]) * 1.1)
     assert not noise_changed.frame.equals(first.frame)
+
+
+def test_reference_maps_identify_each_spurious_relationship():
+    assert CASES["common_driver"]().reference_map == {"x_common": "z_driver"}
+    assert CASES["collinear_proxy"]().reference_map == {"x2_proxy": "x1_driver"}
+    assert CASES["mixed_evidence"]().reference_map == {
+        "x_common": "z_driver",
+        "x_proxy": "x_driver",
+    }
+    assert CASES["model_incremental_validation"]().reference_map == {
+        "x_proxy": "x_incremental"
+    }
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -104,13 +120,14 @@ def test_downstream_response_contract(tmp_path: Path):
     reason="layer_3 x_common lacks common_capacity_driver and is not suppressed below z_driver; preserve independent residual evidence",
 )
 def test_common_driver_contract(tmp_path: Path):
-    _, _, ranked = _indexed("common_driver", tmp_path)
+    case, raw, ranked = _indexed("common_driver", tmp_path)
     assert {"z_driver", "x_common"} <= set(ranked.index)
     assert pd.notna(ranked.loc["x_common", "independent_signal_score"])
     assert "common_capacity_driver" in str(ranked.loc["x_common", "risk_flags"])
     assert int(ranked.loc["z_driver", "driver_rank"]) < int(
         ranked.loc["x_common", "driver_rank"]
     )
+    assert metrics(case, raw)["common_driver_suppression_rate"] == 1.0
 
 
 @pytest.mark.xfail(
@@ -118,7 +135,7 @@ def test_common_driver_contract(tmp_path: Path):
     reason="layer_3 true driver and highly collinear proxy receive near-identical A-grade scores without redundancy or independent-information signal",
 )
 def test_collinear_proxy_contract(tmp_path: Path):
-    case, _, ranked = _indexed("collinear_proxy", tmp_path)
+    case, raw, ranked = _indexed("collinear_proxy", tmp_path)
     true = ranked.loc["x1_driver"]
     proxy = ranked.loc["x2_proxy"]
     assert case.frame["x1_driver"].corr(case.frame["x2_proxy"]) > 0.99
@@ -131,9 +148,15 @@ def test_collinear_proxy_contract(tmp_path: Path):
         - float(proxy["driver_priority_score"])
         >= 0.05
     )
+    assert metrics(case, raw)["proxy_separation_rate"] == 1.0
 
 
 def test_noise_and_spurious_false_positive_rates_are_distinct(tmp_path: Path):
+    common_case = CASES["common_driver"]()
+    common_ranked = run_case(common_case, tmp_path / "common")
+    common_metrics = metrics(common_case, common_ranked)
+    assert common_metrics["common_driver_suppression_rate"] is not None
+
     collinear_case = CASES["collinear_proxy"]()
     collinear_ranked = run_case(collinear_case, tmp_path / "collinear")
     collinear_metrics = metrics(collinear_case, collinear_ranked)
@@ -158,20 +181,69 @@ def test_noise_and_spurious_false_positive_rates_are_distinct(tmp_path: Path):
     assert mixed_metrics["spurious_high_grade_false_positive_rate"] == sum(
         spurious_high
     ) / len(spurious_high)
+    assert collinear_metrics["proxy_separation_rate"] is not None
+    assert mixed_metrics["common_driver_suppression_rate"] is not None
+    assert mixed_metrics["proxy_separation_rate"] is not None
+    assert set(collinear_metrics["proxy_separation_details"][0]) == {
+        "variable",
+        "reference",
+        "variable_rank",
+        "reference_rank",
+        "rank_gap",
+        "variable_grade",
+        "reference_grade",
+        "score_gap",
+        "risk_flags",
+        "separated",
+    }
+    assert set(mixed_metrics["common_driver_details"][0]) == {
+        "variable",
+        "reference",
+        "variable_rank",
+        "reference_rank",
+        "rank_gap",
+        "variable_grade",
+        "reference_grade",
+        "score_gap",
+        "risk_flags",
+        "suppressed",
+    }
 
 
-def test_nonlinear_true_lag_contract(tmp_path: Path):
-    case, _, ranked = _indexed("nonlinear_stable_driver", tmp_path)
+def test_nonlinear_scenario_data_contract():
+    case = CASES["nonlinear_stable_driver"]()
+    expected_noise = {f"noise_{index:02d}" for index in range(8)}
+    assert case.variable_types == {
+        "true_driver": frozenset({"x_nonlinear"}),
+        "noise": frozenset(expected_noise),
+    }
+    assert len(set(case.frame) - {case.target}) == 9
     lag = case.lags["x_nonlinear"]
     aligned = case.frame["x_nonlinear"].shift(lag)
     valid = pd.DataFrame({"x": aligned, "y": case.frame["target"]}).dropna()
     assert abs(valid["x"].corr(valid["y"], method="pearson")) < 0.15
     assert abs(valid["x"].corr(valid["y"], method="spearman")) < 0.15
     assert valid["x"].pow(2).corr(valid["y"]) > 0.90
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="layer_1 linear lag screening and current layer_4 model lift do not recover the U-shaped nonlinear driver; prediction_score remains zero or the candidate remains E-grade",
+)
+def test_nonlinear_true_lag_contract(tmp_path: Path):
+    case, _, ranked = _indexed("nonlinear_stable_driver", tmp_path)
     row = ranked.loc["x_nonlinear"]
-    assert str(row["model_lift_status"]).startswith("ok")
-    assert pd.notna(row["prediction_score"])
+    noise_scores = pd.to_numeric(
+        ranked.loc[
+            ranked.index.isin(case.variable_types["noise"]), "prediction_score"
+        ],
+        errors="coerce",
+    ).fillna(0.0)
     assert int(row["driver_rank"]) <= 3
+    assert row["candidate_grade"] in {"A", "B", "C"}
+    assert float(row["prediction_score"]) > 0.05
+    assert float(row["prediction_score"]) >= float(noise_scores.max()) + 0.05
+    assert "low_model_lift" not in str(row["risk_flags"])
 
 
 def test_regime_sign_reversal_contract(tmp_path: Path):
@@ -309,11 +381,12 @@ def test_mixed_evidence_downstream_contract(tmp_path: Path):
     reason="mixed layer_3 x_common lacks common_capacity_driver or equivalent independent-information limitation",
 )
 def test_mixed_evidence_common_driver_contract(tmp_path: Path):
-    _, _, ranked = _indexed("mixed_evidence", tmp_path)
+    case, raw, ranked = _indexed("mixed_evidence", tmp_path)
     assert "common_capacity_driver" in str(ranked.loc["x_common", "risk_flags"])
     assert int(ranked.loc["x_common", "driver_rank"]) > min(
         int(ranked.loc[name, "driver_rank"]) for name in ["x_driver", "z_driver"]
     )
+    assert metrics(case, raw)["common_driver_suppression_rate"] == 1.0
 
 
 @pytest.mark.xfail(
@@ -321,7 +394,7 @@ def test_mixed_evidence_common_driver_contract(tmp_path: Path):
     reason="mixed layer_3 x_proxy receives near-identical evidence to x_driver without redundancy or independent-information separation",
 )
 def test_mixed_evidence_proxy_contract(tmp_path: Path):
-    _, _, ranked = _indexed("mixed_evidence", tmp_path)
+    case, raw, ranked = _indexed("mixed_evidence", tmp_path)
     assert (
         ranked.loc["x_proxy", "candidate_grade"]
         != ranked.loc["x_driver", "candidate_grade"]
@@ -329,27 +402,29 @@ def test_mixed_evidence_proxy_contract(tmp_path: Path):
         - float(ranked.loc["x_proxy", "driver_priority_score"])
         >= 0.05
     )
+    assert metrics(case, raw)["proxy_separation_rate"] == 1.0
 
 
 @pytest.mark.parametrize("name", sorted(STABILITY_SCENARIOS))
 def test_rank_stability_is_reproducible(name: str, tmp_path: Path):
     first = evaluate_rank_stability(CASES[name], tmp_path / "first")
     second = evaluate_rank_stability(CASES[name], tmp_path / "second")
+    if name == "noise_only":
+        first["multi_seed_false_positives"] = evaluate_noise_false_positives(
+            CASES[name], tmp_path / "first-noise"
+        )
+        second["multi_seed_false_positives"] = evaluate_noise_false_positives(
+            CASES[name], tmp_path / "second-noise"
+        )
     assert first == second
-    assert first["top_k_overlap_min"] >= 0.0
-    assert first["spearman_rank_stability"] >= -1.0
     assert len(first["candidate_missing_counts"]) == 3
     assert all(
         set(item) == {"label", "missing_from_variant", "new_in_variant"}
         for item in first["candidate_missing_counts"]
     )
-    if name == "true_lagged_driver":
-        assert first["true_driver_rank_max"] <= 3
-        assert first["top_1_hit_rate"] >= 0.75
-    if name == "mixed_evidence":
-        assert first["top_3_recall_mean"] >= 0.5
-    if name == "noise_only":
-        assert first["top_1_hit_rate"] == 0.0
+    assert all(
+        passed for _, passed, _ in stability_contract_checks(name, first)
+    )
 
 
 def _assert_recursive(actual, expected):
@@ -379,6 +454,8 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             "samples",
             "parameters",
             "variable_types",
+            "reference_map",
+            "top_k",
             "top_k_results",
             "key_evidence",
             "metrics",
@@ -389,13 +466,25 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             "passed_expectations",
         }
         assert set(report) == required
+        assert report["top_k"] == REPORT_TOP_K
+        assert len(report["top_k_results"]) <= REPORT_TOP_K
+        assert report["top_k_results"] == [
+            evidence["variable"] for evidence in report["key_evidence"][:REPORT_TOP_K]
+        ]
         assert all(set(evidence) == set(KEY_FIELDS) for evidence in report["key_evidence"])
         assert report["passed"] == (not report["failed_expectations"])
         assert bool(report["failure_reason"]) == (not report["passed"])
         if not report["passed"]:
             assert any(
                 layer in report["failure_reason"]
-                for layer in ["layer_1", "layer_2", "layer_3", "layer_4", "mixed"]
+                for layer in [
+                    "layer_1",
+                    "layer_2",
+                    "layer_3",
+                    "layer_4",
+                    "stability",
+                    "mixed",
+                ]
             )
 
 

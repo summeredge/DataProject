@@ -29,6 +29,28 @@ from tests.synthetic_cases.generate_baseline import (
 
 
 PR_8C_BASE = "5aff6c0d4c2bc430aa0c9002cd63c7f87b8d0476"
+PR_8D_SUPPLEMENT_BASE = "dde19ed71ed945012c8d27670aa5c9a26228c40b"
+EXPECTED_PRODUCTION_PATHS = {
+    "chem_ts_corr/evidence_explanations.py",
+    "chem_ts_corr/llm_report.py",
+    "chem_ts_corr/report.py",
+    "chem_ts_corr/web.py",
+}
+FORBIDDEN_SCORING_PATHS = {
+    "chem_ts_corr/screening.py",
+    "chem_ts_corr/service.py",
+    "chem_ts_corr/pipeline.py",
+    "chem_ts_corr/config.py",
+    "chem_ts_corr/ranking_baseline.py",
+}
+ALLOWED_PATCH_PATHS = {
+    *EXPECTED_PRODUCTION_PATHS,
+    "tests/test_four_layer_evidence_explanations.py",
+    "tests/test_four_layer_synthetic_baseline.py",
+    "tests/test_llm_report_prompt.py",
+    "tests/test_score_field_cleanup.py",
+}
+REQUIRED_PATCH_PATHS = EXPECTED_PRODUCTION_PATHS
 RANKING_FREEZE_FIELDS = [
     "variable",
     "final_score",
@@ -57,6 +79,21 @@ def _indexed(case_name: str, tmp_path: Path):
     case = CASES[case_name]()
     ranked = run_case(case, tmp_path)
     return case, ranked, ranked.set_index("variable")
+
+
+def _changed_paths_between(base: str, head: str = "HEAD") -> list[str]:
+    try:
+        output = subprocess.check_output(
+            ["git", "diff", "--name-only", f"{base}..{head}"],
+            text=True,
+            encoding="utf-8",
+        )
+    except subprocess.CalledProcessError as error:
+        pytest.fail(
+            f"Unable to inspect committed patch {base}..{head}. "
+            f"Fetch the required Git history before running this contract. ({error})"
+        )
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -572,29 +609,26 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             )
 
 
-def test_pr_8d_only_changes_audited_explanation_production_paths():
-    """PR-8D supplemental edits may not reopen any production scoring path."""
-    tracked = subprocess.check_output(
-        ["git", "diff", "--name-only"],
-        text=True,
-    ).splitlines()
-    untracked = subprocess.check_output(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        text=True,
-    ).splitlines()
-    changed = tracked + untracked
-    production = {
+def test_pr_8d_supplemental_patch_only_changes_explanation_production_paths():
+    changed_paths = _changed_paths_between(PR_8D_SUPPLEMENT_BASE)
+    production_paths = {
         path
-        for path in changed
+        for path in changed_paths
         if path.startswith("chem_ts_corr/") and path.endswith(".py")
     }
-    assert production <= {
-        "chem_ts_corr/evidence_explanations.py",
-        "chem_ts_corr/final_review_summary.py",
-        "chem_ts_corr/llm_report.py",
-        "chem_ts_corr/report.py",
-        "chem_ts_corr/web.py",
-    }
+    assert production_paths == EXPECTED_PRODUCTION_PATHS
+    assert production_paths.isdisjoint(FORBIDDEN_SCORING_PATHS)
+    unexpected = set(changed_paths) - ALLOWED_PATCH_PATHS
+    assert not unexpected, f"Unexpected PR-8D supplemental files: {sorted(unexpected)}"
+    assert REQUIRED_PATCH_PATHS <= set(changed_paths)
+
+
+def test_pr_8d_scope_contract_uses_committed_revision_range():
+    source = Path(__file__).read_text(encoding="utf-8")
+    assert 'PR_8D_SUPPLEMENT_BASE = "dde19ed71ed945012c8d27670aa5c9a26228c40b"' in source
+    assert 'f"{base}..{head}"' in source
+    old_workspace_command = '["git", "diff", "--name' + '-only"]'
+    assert old_workspace_command not in source
 
 
 def test_explanations_do_not_change_real_production_ranking_fields(tmp_path: Path, monkeypatch):

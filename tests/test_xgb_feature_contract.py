@@ -178,7 +178,7 @@ def test_risk_tokens_use_exact_semicolon_matching():
     assert bool(result.loc[0, "auto_eligible"]) is True
 
 
-@pytest.mark.parametrize("candidate_class", ["closed_loop_related", "capacity_driven"])
+@pytest.mark.parametrize("candidate_class", ["capacity_driven"])
 def test_risk_limited_classes_are_not_directly_excluded(candidate_class: str):
     result = build_xgb_candidate_pool(
         _summary([{"variable": "x", "final_recommendation": "risk_limited_review"}]),

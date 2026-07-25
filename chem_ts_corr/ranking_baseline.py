@@ -14,7 +14,6 @@ EXPECTED_CLASSES = {"reasonable_driver", "implausible_driver", "neutral"}
 RISK_FLAG_COLUMNS = {
     "target_leads_variable_flag": "target_leads_variable",
     "common_capacity_driver_flag": "common_capacity_driver",
-    "closed_loop_suspect_flag": "closed_loop_suspect",
     "strong_formula_leakage_flag": "strong_formula_leakage",
     "poor_data_quality_flag": "poor_data_quality",
     "lag_boundary_flag": "lag_boundary",
@@ -31,7 +30,6 @@ OUTPUT_COLUMNS = [
     "risk_flags",
     "target_leads_variable_flag",
     "common_capacity_driver_flag",
-    "closed_loop_suspect_flag",
     "strong_formula_leakage_flag",
     "poor_data_quality_flag",
     "lag_boundary_flag",
@@ -361,7 +359,6 @@ def _build_metrics(
         for column, key in [
             ("target_leads_variable_flag", "target_leads_count"),
             ("common_capacity_driver_flag", "common_capacity_count"),
-            ("closed_loop_suspect_flag", "closed_loop_count"),
             ("strong_formula_leakage_flag", "strong_formula_leakage_count"),
             ("poor_data_quality_flag", "poor_data_quality_count"),
             ("lag_boundary_flag", "lag_boundary_count"),
@@ -371,7 +368,6 @@ def _build_metrics(
         for column, key in [
             ("target_leads_variable_flag", "ab_target_leads_count"),
             ("common_capacity_driver_flag", "ab_common_capacity_count"),
-            ("closed_loop_suspect_flag", "ab_closed_loop_count"),
             ("strong_formula_leakage_flag", "ab_strong_formula_leakage_count"),
             ("poor_data_quality_flag", "ab_poor_data_quality_count"),
         ]:

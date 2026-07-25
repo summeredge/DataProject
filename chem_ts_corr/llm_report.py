@@ -26,7 +26,6 @@ PACKAGE_KEYS = [
 
 RISK_EXPLANATIONS = {
     "common_capacity_driver": "可能共同受负荷/产能变化驱动，相关性可能来自共同工况而非可干预链路。",
-    "closed_loop_suspect": "可能受现有闭环控制影响，变量和目标之间的时序关系会被控制器动作重塑。",
     "high_collinearity_risk": "与其它变量高度共线，单变量证据或重要性可能被替代变量分摊或放大。",
     "target_leads_variable": "目标变量领先候选变量，不应解释为候选变量先影响目标。",
     "lag_boundary": "最佳滞后靠近搜索边界，需要扩大窗口或做工程复核。",
@@ -138,7 +137,7 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 
 ## 硬约束
 - 不得声称发现确定性因果关系。
-- 不得使用未经限定的“X 导致 Y”、“X 是 Y 的原因”、“确定因果关系”、“可以直接作为控制变量”、“应直接投用控制”。
+- 不得使用未经限定的“X 导致 Y”、“X 是 Y 的原因”或直接控制建议。
 - 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
@@ -151,7 +150,6 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 只有明确存在同回路 SV/MV、远程设定值或 APC 可写入点时，AIC/AI/TI/PI/PV 类变量才可列为 loop_mv_candidate；不得仅凭 AIC/AI/TI/PI 前缀就把它们列为 MV 候选。
 - loop_mv_candidate 表示“当前 PV 数据代表的控制回路可进入 MV 候选复核”，不是说 .PV 点本身就是最终写入 MV。
 - 实际操纵点必须由工程人员核对 .SV、.MV、远程设定值或 APC 可写入点；有同回路 SV/MV 时应说明 related_sv/related_mv，没有时也应提示核对 DCS 中是否存在写入点。
-- 控制回路历史数据通常属于闭环数据，必须提示 PID 控制动作、SV/MV 变化、MV 饱和、自动/手动状态对相关性和预测性的影响。
 - 不得机械排除 .PV 并写成“.PV 不能做 MV，所以只能作为监控变量”；也不得写成“.PV 点本身就是最终写入 MV”。
 - 如果 meta/overview 显示 model_status=skipped、skip_model_lift=True 或 skip_rolling_corr=True，不得把 model_explanation_support、model_lift_support、rolling_stability_supported 作为主要证据；只能提示“输入证据字段中出现，但需核对该模块是否实际启用”。
 - XGBoost 时间外增量验证仅代表时间外预测增量证据，不代表确定性因果，也不改变前三层排名；不得用它回写或重排前三层候选，单独证明变量可操纵、是根本原因或作为 APC 投用依据。
@@ -164,11 +162,11 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 ### 跨层证据解释规则
 - 当前三层证据较强且 XGB 为 validated_incremental_signal 时，只能表述为“统计筛查、因果复核和时间外预测增量方向一致，建议优先进行工程复核。”不得据此声称变量导致目标变化、是根本原因、可直接作为 APC 操纵变量或可直接投用控制。
 - 当前三层证据较强但 XGB 为 redundant_with_baseline 时，应说明可能是目标变量自身历史已解释大部分波动、M1 中的控制变量已包含相同或相近信息、候选变量与基线特征存在信息冗余，或候选在时间外数据中的泛化增量不足。这些只是可能解释，不得断言具体原因，不得直接删除或否定候选；应降级为“工程复核仍有价值，但预测增量有限”。
-- 当前三层证据较弱但 XGB 显示正向增量时，只能作为补充预测线索；必须继续检查滞后方向、目标泄漏或公式型变量、共同负荷驱动、闭环控制响应、工况/批次/数据分布偏差、工艺机理解释和工程可操作性。不得因 XGB 正向改善直接提升为因果候选或控制候选。
+- 当前三层证据较弱但 XGB 显示正向增量时，只能作为补充预测线索；必须继续检查滞后方向、目标泄漏或公式型变量、共同负荷驱动、工况/批次/数据分布偏差和工程机理解释。不得因 XGB 正向改善直接提升为因果候选。
 - 当 XGB 为 unstable_out_of_time 时，必须说明不同时间折中的预测增量方向或幅度不一致，应降低对时间稳定性的判断；建议检查负荷、工况、批次、牌号、仪表漂移和数据分布变化，但不得断言上述任一因素已经发生。
 
 ## 风险解释必须覆盖
-common_capacity_driver、closed_loop_suspect、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
+common_capacity_driver、high_collinearity_risk、target_leads_variable、lag_boundary、ranked lag outside maxlag、fallback_missing_ranked_lag、strong_formula_leakage。
 
 ## 输出结构
 1. 总体结论
@@ -484,7 +482,7 @@ def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set
         )
         return base
 
-    downgrade = [x for x in ["closed_loop_suspect", "common_capacity_driver", "high_collinearity_risk", "fallback_missing_ranked_lag"] if x in text]
+    downgrade = [x for x in ["common_capacity_driver", "high_collinearity_risk", "fallback_missing_ranked_lag"] if x in text]
     lower = name.lower()
     is_loop_pv = suffix == "PV" and _looks_like_control_loop(loop_tag or "")
     is_measurement_heavy_loop_pv = suffix == "PV" and _is_measurement_heavy_loop(loop_tag or "")
@@ -503,7 +501,7 @@ def _classify_control(name: str, fields: dict[str, Any], all_variable_names: set
             write_points = "SV/MV/远程设定值/APC 可写入点"
         comment = (
             f"{name} 可作为 {loop_tag} 控制回路的历史数据代表；{loop_tag} 控制回路可作为 MV 候选复核，"
-            f"实际操纵点需核对或确认 {write_points}。由于该变量来自闭环回路，需检查控制模式、SV/MV 变化、"
+            f"实际操纵点需核对或确认 {write_points}。需检查控制模式、SV/MV 变化、"
             "MV 饱和、自动/手动状态和 lag_boundary 风险；不得把 PV 点本身直接视为最终写入 MV。"
         )
     elif any(x in lower for x in ["load", "feed", "flow", "负荷", "流量", "进料"]):

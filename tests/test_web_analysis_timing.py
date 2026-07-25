@@ -31,7 +31,6 @@ def test_run_analysis_returns_deterministic_stage_timings(monkeypatch, tmp_path)
         model_lift_scores=None,
         lag_peak_quality=None,
         rolling_corr_scores=None,
-        closed_loop_evidence=pd.DataFrame(),
     )
     monkeypatch.setattr(
         pipeline, "load_timeseries_csv", lambda *args, **kwargs: pd.DataFrame()

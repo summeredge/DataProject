@@ -76,11 +76,6 @@ DOWNLOAD_FILES = {
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
-    "closed_loop_evidence.csv",
-    "auto_closed_loop_diagnosis.csv",
-    "closed_loop_calibration_model.json",
-    "closed_loop_calibration_results.csv",
-    "closed_loop_calibration_metrics.json",
     "causal_review_candidates.csv",
     "conditional_granger_scores.csv",
     "causal_review_report.csv",
@@ -203,12 +198,6 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/analyze":
                 self._send_json(_analyze_response(self))
-                return
-            if self.path == "/api/run_auto_closed_loop_diagnosis":
-                self._send_json(_run_auto_closed_loop_diagnosis_response(self))
-                return
-            if self.path == "/api/run_closed_loop_calibration":
-                self._send_json(_run_closed_loop_calibration_response(self))
                 return
             if self.path == "/api/run_granger":
                 self._send_json(_run_granger_response(self))
@@ -450,8 +439,6 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         _list_field(form, "residual_control_columns") or capacity_columns
     )
     force_include_variables = _list_field(form, "force_include_variables")
-    manual_closed_loop_variables = _list_field(form, "manual_closed_loop_variables")
-    manual_non_closed_loop_variables = _list_field(form, "manual_non_closed_loop_variables")
     segment_column = _field(form, "segment_column", "") or None
     _validate_analysis_excluded_columns(
         input_path,
@@ -463,15 +450,6 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         capacity_columns=capacity_columns,
         residual_control_columns=residual_control_columns,
         force_include_variables=force_include_variables,
-    )
-    _validate_manual_closed_loop_annotations(
-        input_path,
-        resolved_encoding,
-        time_column=time_column,
-        target=target,
-        excluded_columns=excluded_columns,
-        manual_closed_loop_variables=manual_closed_loop_variables,
-        manual_non_closed_loop_variables=manual_non_closed_loop_variables,
     )
     config = AnalysisConfig(
         input_path=input_path,
@@ -492,8 +470,6 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         capacity_columns=capacity_columns,
         residual_control_columns=residual_control_columns,
         force_include_variables=force_include_variables,
-        manual_closed_loop_variables=manual_closed_loop_variables,
-        manual_non_closed_loop_variables=manual_non_closed_loop_variables,
         excluded_columns=excluded_columns,
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
@@ -568,49 +544,6 @@ def _validate_analysis_excluded_columns(
     ]
     if not candidates:
         raise ValueError("剔除后至少需要保留一个可分析数值候选列")
-
-
-def _validate_manual_closed_loop_annotations(
-    input_path: Path,
-    encoding: str,
-    *,
-    time_column: str,
-    target: str,
-    excluded_columns: list[str],
-    manual_closed_loop_variables: list[str],
-    manual_non_closed_loop_variables: list[str],
-) -> None:
-    closed = list(manual_closed_loop_variables)
-    non_closed = list(manual_non_closed_loop_variables)
-    conflicts = [column for column in closed if column in set(non_closed)]
-    if conflicts:
-        raise ValueError(
-            f'变量不能同时标记为“已确认闭环”和“已确认非闭环”：{"、".join(conflicts)}'
-        )
-
-    selected = closed + non_closed
-    if not selected:
-        return
-    if target in selected:
-        raise ValueError(f"人工闭环确认不能包含目标变量：{target}")
-    if time_column in selected:
-        raise ValueError(f"人工闭环确认不能包含时间列：{time_column}")
-    excluded = set(excluded_columns)
-    excluded_conflicts = [column for column in selected if column in excluded]
-    if excluded_conflicts:
-        raise ValueError(f"人工闭环确认不能包含已剔除列：{'、'.join(excluded_conflicts)}")
-
-    sample, _ = read_timeseries_table(input_path, encoding=encoding, nrows=5000)
-    unknown = [column for column in selected if column not in sample.columns]
-    if unknown:
-        raise ValueError(f"人工闭环确认包含不存在的变量：{'、'.join(unknown)}")
-    non_numeric = [
-        column
-        for column in selected
-        if pd.to_numeric(sample[column], errors="coerce").notna().mean() < 0.7
-    ]
-    if non_numeric:
-        raise ValueError(f"人工闭环确认只能包含数值列：{'、'.join(non_numeric)}")
 
 
 def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
@@ -699,9 +632,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
-    closed_loop_evidence = _safe_read_result_csv(output_dir / "closed_loop_evidence.csv")
-    auto_closed_loop_diagnosis = _safe_read_result_csv(output_dir / "auto_closed_loop_diagnosis.csv")
-    calibration_results = _safe_read_result_csv(output_dir / "closed_loop_calibration_results.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
@@ -716,9 +646,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary)),
         "rankedFeatures": _records(display_ranked.head(50)),
         "riskFlags": _records(risky.head(50)),
-        "closedLoopEvidence": _records(closed_loop_evidence.head(200)),
-        "autoClosedLoopDiagnosis": _records(auto_closed_loop_diagnosis.head(200)),
-        "closedLoopCalibrationResults": _records(calibration_results.head(200)),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
         "regimeScores": _records(regime.head(50)),
@@ -1904,38 +1831,6 @@ def _overview_payload(
     }
 
 
-def _run_auto_closed_loop_diagnosis_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    from chem_ts_corr.auto_closed_loop import build_auto_closed_loop_diagnosis
-
-    form = _multipart_form(handler)
-    output_dir = _resolve_run_dir(_field(form, "run_id"))
-    config = _read_run_config(output_dir)
-    diagnosis = build_auto_closed_loop_diagnosis(
-        _safe_read_result_csv(output_dir / "ranked_features.csv"),
-        _safe_read_result_csv(output_dir / "risk_flags.csv"),
-        _safe_read_result_csv(output_dir / "lag_peak_quality.csv"),
-        _safe_read_result_csv(output_dir / "rolling_corr_scores.csv"),
-        _safe_read_result_csv(output_dir / "model_lift_scores.csv"),
-        config.target,
-    )
-    diagnosis.to_csv(output_dir / "auto_closed_loop_diagnosis.csv", index=False, encoding="utf-8-sig")
-    return _build_result_payload(output_dir.name, output_dir, config)
-
-
-def _run_closed_loop_calibration_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    from chem_ts_corr.closed_loop_calibration import run_closed_loop_calibration
-
-    form = _multipart_form(handler)
-    output_dir = _resolve_run_dir(_field(form, "run_id"))
-    config = _read_run_config(output_dir)
-    run_closed_loop_calibration(
-        output_dir,
-        config.manual_closed_loop_variables,
-        config.manual_non_closed_loop_variables,
-    )
-    return _build_result_payload(output_dir.name, output_dir, config)
-
-
 def _lag_profile_response(params: dict[str, list[str]]) -> dict[str, Any]:
     run_id = _single(params, "run_id")
     variable = _single(params, "variable")
@@ -2610,23 +2505,6 @@ INDEX_HTML = r"""<!doctype html>
         <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
       </div>
       </div>
-      <div class="control-group">
-        <div class="control-group-title">人工闭环工程经验输入（可选）</div>
-        <label>已确认闭环/控制相关变量
-          <details id="manualClosedLoopDropdown" class="multi-dropdown">
-            <summary id="manualClosedLoopSummary">请选择已确认闭环变量</summary>
-            <div id="manualClosedLoopOptions" class="multi-options"></div>
-          </details>
-        </label>
-        <label>已确认非闭环变量
-          <details id="manualNonClosedLoopDropdown" class="multi-dropdown">
-            <summary id="manualNonClosedLoopSummary">请选择已确认非闭环变量</summary>
-            <div id="manualNonClosedLoopOptions" class="multi-options"></div>
-          </details>
-        </label>
-        <div class="help">该确认针对当前目标变量，用于记录工艺人员已知的闭环控制或反馈关系，作为推荐结果解释与人工复核上下文，不改变评分、排序或自动诊断。</div>
-        <div class="help">未标记为闭环的工程经验输入不代表该变量一定是上游根因。</div>
-      </div>
       <div id="status" class="status info" role="status" aria-live="polite"></div>
       <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
@@ -2771,7 +2649,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">
           <span>所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</span>
           <span>三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
-          <span>高共线性、闭环和共同负荷风险不等于变量不重要。对于数据证据强的候选，平台会保留优先复核建议，同时标记统计检验受限。</span>
+          <span>高共线性和共同负荷风险不等于变量无效。对于统计证据支持较强的候选，平台会保留工程复核建议，同时标记统计检验受限。</span>
         </div>
         <div class="causal-review-params">
           <label>条件Granger滞后模式
@@ -2798,7 +2676,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
         <h2>逐变量综合证据复核表</h2>
-        <div class="help">逐变量综合证据复核表会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、闭环、共同负荷等统计限制，若数据证据强，平台会保留优先复核建议并标记统计受限。该表仍不是因果结论。</div>
+        <div class="help">逐变量综合证据复核表会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、共同负荷等统计限制，若统计证据支持较强，平台会保留工程复核建议并标记统计受限。该表仍不是因果结论。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量综合证据复核表。</div>
       </div>
@@ -3052,63 +2930,6 @@ function updateForceIncludeSummary() {
   el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
 }
 
-function fillManualAnnotationOptions(kind, columns) {
-  const box = el(`${kind}Options`);
-  box.innerHTML = "";
-  columns.forEach((name) => {
-    const row = document.createElement("label");
-    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
-    const input = row.querySelector("input");
-    input.addEventListener("change", () => {
-      const other = kind === "manualClosedLoop" ? "manualNonClosedLoop" : "manualClosedLoop";
-      if (input.checked) {
-        setManualAnnotationSelection(
-          other,
-          getManualAnnotationSelection(other).filter((value) => value !== name),
-        );
-      }
-      updateManualAnnotationSummary(kind);
-    });
-    box.appendChild(row);
-  });
-  updateManualAnnotationSummary(kind);
-}
-
-function getManualAnnotationSelection(kind) {
-  return Array.from(document.querySelectorAll(`#${kind}Options input[type="checkbox"]:checked`)).map((node) => node.value);
-}
-
-function setManualAnnotationSelection(kind, values) {
-  const selected = new Set(values || []);
-  Array.from(document.querySelectorAll(`#${kind}Options input[type="checkbox"]`)).forEach((node) => {
-    node.checked = selected.has(node.value);
-  });
-  updateManualAnnotationSummary(kind);
-}
-
-function getManualClosedLoopSelection() {
-  return getManualAnnotationSelection("manualClosedLoop");
-}
-
-function getManualNonClosedLoopSelection() {
-  return getManualAnnotationSelection("manualNonClosedLoop");
-}
-
-function setManualClosedLoopSelection(values) {
-  setManualAnnotationSelection("manualClosedLoop", values);
-}
-
-function setManualNonClosedLoopSelection(values) {
-  setManualAnnotationSelection("manualNonClosedLoop", values);
-}
-
-function updateManualAnnotationSummary(kind) {
-  const selected = getManualAnnotationSelection(kind);
-  el(`${kind}Summary`).textContent = selected.length
-    ? `已选 ${selected.length} 项`
-    : (kind === "manualClosedLoop" ? "请选择已确认闭环变量" : "请选择已确认非闭环变量");
-}
-
 function fillSecondaryIncludeOptions(columns) {
   const box = el("secondaryIncludeOptions");
   box.innerHTML = "";
@@ -3195,8 +3016,6 @@ function refreshColumnSelectors() {
   const capacity = getCapacitySelection().filter((name) => !excluded.has(name));
   const forced = getForceIncludeSelection().filter((name) => !excluded.has(name));
   const secondary = getSecondaryIncludeSelection().filter((name) => !excluded.has(name));
-  const manualClosed = getManualClosedLoopSelection();
-  const manualNonClosed = getManualNonClosedLoopSelection();
 
   restoreSelect("targetColumn", available, current.targetColumn);
   restoreSelect("segmentColumn", available, current.segmentColumn, true, "不分段");
@@ -3209,13 +3028,6 @@ function refreshColumnSelectors() {
   setForceIncludeSelection(forced);
   fillSecondaryIncludeOptions(available);
   setSecondaryIncludeSelection(secondary);
-  const manualCandidates = available.filter((name) => name !== el("timeColumn").value && name !== el("targetColumn").value);
-  fillManualAnnotationOptions("manualClosedLoop", manualCandidates);
-  setManualClosedLoopSelection(manualClosed.filter((name) => manualCandidates.includes(name)));
-  fillManualAnnotationOptions("manualNonClosedLoop", manualCandidates);
-  setManualNonClosedLoopSelection(
-    manualNonClosed.filter((name) => manualCandidates.includes(name) && !getManualClosedLoopSelection().includes(name)),
-  );
   const whitelist = el("xgbWhitelist").value.split(/[,，]/).map((value) => value.trim()).filter((value) => value && !excluded.has(value));
   el("xgbWhitelist").value = whitelist.join(",");
   updateExcludedColumnDisabledState();
@@ -3274,8 +3086,6 @@ async function uploadFile() {
     recognizedColumns = [];
     recognizedNumericColumns = [];
     setExcludedColumnSelection([]);
-    setManualClosedLoopSelection([]);
-    setManualNonClosedLoopSelection([]);
     setStatus(`已上传：${data.filename}\n正在识别列...`);
     await loadColumns();
   } catch (error) {
@@ -3368,8 +3178,6 @@ async function analyze() {
     form.append("capacity_columns", getCapacitySelection().join(","));
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
-    form.append("manual_closed_loop_variables", getManualClosedLoopSelection().join(","));
-    form.append("manual_non_closed_loop_variables", getManualNonClosedLoopSelection().join(","));
     form.append("excluded_columns", getExcludedColumnSelection().join(","));
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
@@ -3475,54 +3283,6 @@ function renderAnalysisResult(data) {
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
   updateXgbRunAvailability();
-}
-
-function renderAutoClosedLoopDiagnosis(rows) {
-  renderGenericTable("autoClosedLoopDiagnosisTable", rows);
-}
-
-async function runAutoClosedLoopDiagnosis() {
-  if (!currentRunId) return setStatus("请先完成主筛查。", "error");
-  const form = new FormData();
-  form.append("run_id", currentRunId);
-  el("runAutoClosedLoopDiagnosis").disabled = true;
-  try {
-    const data = await postForm("/api/run_auto_closed_loop_diagnosis", form);
-    renderAnalysisResult(data);
-    setStatus("自动闭环影子诊断已刷新。", "success");
-  } catch (error) {
-    setStatus(error.message || String(error), "error");
-  } finally {
-    el("runAutoClosedLoopDiagnosis").disabled = false;
-  }
-}
-
-function renderClosedLoopCalibration(rows) {
-  const displayRows = rows.map((row) => {
-    const comparison = row.calibration_status !== "calibrated"
-      ? "校准样本不足"
-      : row.training_label === "unknown"
-        ? "无人工标签"
-        : ((Number(row.auto_closed_loop_probability) >= 0.5) === (row.training_label === "engineering_input_closed_loop") ? "一致" : "需要人工复核");
-    return { ...row, comparison };
-  });
-  renderGenericTable("closedLoopCalibrationTable", displayRows);
-}
-
-async function runClosedLoopCalibration() {
-  if (!currentRunId) return setStatus("请先完成主筛查。", "error");
-  const form = new FormData();
-  form.append("run_id", currentRunId);
-  el("runClosedLoopCalibration").disabled = true;
-  try {
-    const data = await postForm("/api/run_closed_loop_calibration", form);
-    renderAnalysisResult(data);
-    setStatus("闭环校准已完成。", "success");
-  } catch (error) {
-    setStatus(error.message || String(error), "error");
-  } finally {
-    el("runClosedLoopCalibration").disabled = false;
-  }
 }
 
 function sleep(ms) {
@@ -3931,15 +3691,14 @@ const termsHelpRows = [
   { category: "参数设置说明", name: "残差控制列", signal: "在残差相关或条件验证中需要控制的变量。", reading: "用于减弱共同负荷、已知干扰或强共线变量的影响。", action: "填入负荷、设定值、关键上游扰动等已知控制因素。" },
   { category: "参数设置说明", name: "强制复核变量", signal: "即使未进入主排序前列也要纳入复核的变量。", reading: "扩展复核范围，适合业务重点变量或专家指定变量。", action: "只加入有明确工艺理由的点位，避免复核清单过长。" },
   { category: "参数设置说明", name: "三层复核候选数量", signal: "进入最终三层复核的候选变量数量。", reading: "数量越大覆盖越广但计算和人工解释成本越高。", action: "先用默认数量快速定位，再按需要扩大范围。" },
-  { category: "参数设置说明", name: "风险标签包含过滤", signal: "按风险标签文本筛选复核或推荐结果。", reading: "只改变页面查看和复核聚焦范围，不表示未显示变量没有风险。", action: "用于定位共同负荷、闭环、数据质量等特定问题，留空表示不过滤。" },
+  { category: "参数设置说明", name: "风险标签包含过滤", signal: "按风险标签文本筛选复核或推荐结果。", reading: "只改变页面查看和复核聚焦范围，不表示未显示变量没有风险。", action: "用于定位共同负荷、数据质量等特定问题，留空表示不过滤。" },
   { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
   { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
   { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
   { category: "风险标签说明", name: "数据质量风险", signal: "缺失、常数段、异常尖峰或有效比例不足影响结果。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
-  { category: "风险标签说明", name: "闭环反馈风险", signal: "变量可能处于控制回路内，与目标互相调节。", reading: "相关方向可能被 PID、APC 或人工操作反转。", action: "结合控制策略和阀位/设定值，必要时按开闭环时段分段验证。" },
   { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
   { category: "证据等级与复核建议", name: "强预测证据", signal: "相关、模型提升、预测贡献、稳定性等多类证据同时较好。", reading: "该变量对预测目标有较稳定信息量，但仍不是因果结论。", action: "进入优先复核，结合机理、趋势和现场操作记录确认。" },
-  { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、闭环或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程策略。" },
+  { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、共同负荷或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程复核。" },
   { category: "证据等级与复核建议", name: "优先复核", signal: "综合排序或最终推荐摘要中优先级较高。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
   { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
   { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
@@ -4678,7 +4437,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use", "closed_loop_status", "closed_loop_reason"];
+  return ["variable", "driver_rank", "driver_priority_score", "candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "risk_flags", "candidate_summary"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4825,7 +4584,7 @@ function innovationDirectionExplanation(status, preprocessMode) {
   }
   const messages = {
     innovation_verified: "主筛查关系与变化量关系的方向和滞后基本一致。",
-    innovation_sign_conflict: "主筛查关系与变化量关系方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+    innovation_sign_conflict: "主筛查关系与变化量关系方向冲突，可能存在共同趋势、工况混合或异常点影响。",
     innovation_lag_conflict: "主筛查关系与变化量关系的滞后不一致，动态关系可能不稳定。",
     innovation_sign_unknown: "变化量方向无法可靠判断。",
     not_computed: "未完成变化量方向验证。",
@@ -4883,7 +4642,7 @@ function updateDirectionalityTimeDetails(lag, intervalMinutes) {
 function renderScreeningScoreDetails(row) {
   if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
   const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
-  const evidenceColumns = ["evidence_coverage_status", "evidence_missing_items", "evidence_completeness", "data_quality_score", "evidence_confidence"];
+  const evidenceColumns = ["layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "evidence_conflict_items", "risk_flags", "candidate_summary"];
   const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
@@ -4932,7 +4691,7 @@ function renderScreeningScoreDetails(row) {
     <p>${escapeHtml(correlationDirectionExplanation(correlationDirection, preprocessMode))}</p>
     <p>${escapeHtml(directionInteractionExplanation(row.lag, correlationDirection))}</p>
     <p>${escapeHtml(correlationConsistencyMessage(row.pearson, row.spearman))}</p>
-    <p class="help">时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。闭环控制、共同负荷、上游扰动和工况切换均可能产生类似结果。</p>
+    <p class="help">时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。共同负荷、上游扰动和工况切换均可能产生类似结果。</p>
     <h4>滞后相关曲线</h4>
     <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
@@ -5792,7 +5551,7 @@ function cellHtml(column, value, formatter = null) {
 
 function cellTitle(column, value) {
   if (column === "integrated_review_decision" && String(value ?? "") === "priority_review_with_statistical_limit") {
-    return "数据证据强，但统计检验受到高共线性、闭环、共同负荷或滞后边界限制；应优先人工复核，但不是因果结论。";
+    return "统计证据支持较强，但统计检验受到高共线性、共同负荷或滞后边界限制；建议工程复核，但不是因果结论。";
   }
   return "";
 }
@@ -5811,14 +5570,6 @@ const SIGNIFICANCE_COLUMNS = new Set([
 
 function formatCellValue(column, value) {
   const scoreValue = value === null || value === undefined || value === "" ? NaN : Number(value);
-  if (column === "closed_loop_reason") {
-    try {
-      const reasons = JSON.parse(String(value ?? ""));
-      if (Array.isArray(reasons)) return reasons.join("；");
-    } catch (_) {
-      // Older or manually edited results may not contain JSON reasons.
-    }
-  }
   if (column === "lag_boundary_flag" && typeof value === "boolean") {
     return value ? "是" : "否";
   }
@@ -5887,33 +5638,6 @@ function formatCellValue(column, value) {
       weak: "弱",
       medium: "中",
       strong: "强",
-    },
-    manual_closed_loop_status: {
-      engineering_input_closed_loop: "人工工程经验：闭环相关",
-      engineering_input_not_closed_loop: "人工工程经验：未标记闭环",
-      unknown: "未确认",
-    },
-    auto_closed_loop_status: {
-      suspected_closed_loop: "存在闭环嫌疑",
-      unknown: "未确认",
-    },
-    closed_loop_status: {
-      possible_closed_loop_influence: "可能存在闭环影响",
-      manual_context_requires_review: "人工工程经验待复核",
-      no_closed_loop_indicator: "未发现闭环指标",
-    },
-    closed_loop_evidence_level: {
-      confirmed: "已确认闭环",
-      rejected: "已排除闭环风险",
-      suspected: "疑似闭环",
-      conflict: "人工与自动判断冲突",
-      unknown: "未形成判断",
-    },
-    closed_loop_evidence_source: {
-      manual: "人工",
-      automatic: "自动",
-      manual_and_automatic: "人工与自动",
-      none: "无",
     },
   };
   return maps[column]?.[text] || formatValue(value);
@@ -6048,6 +5772,11 @@ function formatValue(value) {
       error: "错误",
       no_data: "无数据",
       insufficient_data: "数据不足",
+      not_available: "未获得",
+      supported: "支持",
+      partially_supported: "部分支持",
+      not_supported: "不支持",
+      conflicting: "存在冲突",
       not_run: "未运行",
       high_collinearity_risk: "高共线性风险",
       formula_leakage_risk: "公式泄漏风险",
@@ -6071,7 +5800,6 @@ function formatValue(value) {
       upstream_driver_candidate: "上游驱动候选",
       synchronous_association: "同步关联",
       downstream_response: "下游响应",
-      closed_loop_related: "闭环相关",
       formula_or_derived: "公式或派生变量",
       poor_quality: "低质量变量",
       unstable_over_time: "时序不稳定",
@@ -6096,7 +5824,6 @@ function formatValue(value) {
       formula_like: "公式类变量",
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
-      closed_loop_suspect: "疑似闭环反馈",
       target_leads_variable: "变量滞后目标",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量差",
@@ -6212,7 +5939,17 @@ function columnLabel(column) {
     evidence_completeness: "证据覆盖度",
     evidence_confidence: "证据修正系数",
     evidence_coverage_status: "证据覆盖状态",
+    layer1_association_status: "Layer 1 关联状态",
+    layer2_temporal_status: "Layer 2 时间状态",
+    layer3_independence_status: "Layer 3 独立性状态",
+    layer4_model_status: "Layer 4 模型状态",
+    stability_status: "稳定性状态",
+    data_quality_status: "数据质量状态",
+    evidence_support_items: "主要支持证据",
+    evidence_against_items: "主要反对证据",
     evidence_missing_items: "缺失证据",
+    evidence_conflict_items: "证据冲突",
+    candidate_summary: "候选解释",
     evidence_score_low: "证据得分下界",
     evidence_score_high: "证据得分上界",
     score_method: "评分方法",
@@ -6223,16 +5960,7 @@ function columnLabel(column) {
     formula_like_flag: "公式类变量",
     strong_formula_leakage_flag: "强公式泄漏",
     common_capacity_driver_flag: "疑似共同负荷驱动",
-    closed_loop_suspect_flag: "疑似闭环反馈",
-    manual_closed_loop_status: "人工确认",
-    automatic_closed_loop_indicator: "自动闭环指标",
     engineering_context: "工程上下文",
-    closed_loop_context: "闭环上下文",
-    closed_loop_status: "闭环状态",
-    auto_closed_loop_status: "自动判断",
-    closed_loop_evidence_level: "综合闭环状态",
-    closed_loop_evidence_source: "证据来源",
-    closed_loop_reason: "判断依据",
     target_leads_variable_flag: "变量滞后目标",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",
@@ -6443,12 +6171,6 @@ function reset() {
   el("forceIncludeOptions").innerHTML = "";
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
-  el("manualClosedLoopOptions").innerHTML = "";
-  el("manualClosedLoopSummary").textContent = "请选择已确认闭环变量";
-  el("manualClosedLoopDropdown").open = false;
-  el("manualNonClosedLoopOptions").innerHTML = "";
-  el("manualNonClosedLoopSummary").textContent = "请选择已确认非闭环变量";
-  el("manualNonClosedLoopDropdown").open = false;
   el("secondaryIncludeOptions").innerHTML = "";
   el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
   el("secondaryIncludeDropdown").open = false;

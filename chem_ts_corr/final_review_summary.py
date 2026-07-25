@@ -24,6 +24,18 @@ SUMMARY_COLUMNS = [
     "screening_grade",
     "screening_score",
     "screening_lag",
+    "layer1_association_status",
+    "layer2_temporal_status",
+    "layer3_independence_status",
+    "layer4_model_status",
+    "stability_status",
+    "data_quality_status",
+    "evidence_support_items",
+    "evidence_against_items",
+    "evidence_missing_items",
+    "evidence_conflict_items",
+    "candidate_summary",
+    "risk_flags",
     "conditional_status",
     "conditional_best_lag",
     "tested_lags",
@@ -58,7 +70,7 @@ _KEY_REASONS = {
 
 _NEXT_ACTIONS = {
     "priority_review": "优先核查工艺机理、操作方向、滞后时间和上下游关系。",
-    "priority_review_with_statistical_limit": "优先核查，但需重点检查闭环控制、共线性、共同负荷或滞后边界导致的统计限制。",
+    "priority_review_with_statistical_limit": "优先核查，但需重点检查共线性、共同负荷或滞后边界导致的统计限制。",
     "secondary_review": "作为二级候选，结合工艺流程和趋势图进一步确认。",
     "secondary_review_with_statistical_limit": "作为二级候选，优先检查统计限制来源，再判断是否保留。",
     "risk_limited_review": "仅作风险受限复核，需先排查共同负荷、稳定性或数据质量问题。",
@@ -112,6 +124,18 @@ def build_final_review_summary(
             "screening_grade": _coalesce(source.get("candidate_grade"), rank_row.get("candidate_grade")),
             "screening_score": _coalesce(source.get("final_score"), rank_row.get("final_score")),
             "screening_lag": _coalesce(source.get("lag"), rank_row.get("lag"), rank_row.get("best_lag")),
+            "layer1_association_status": rank_row.get("layer1_association_status", ""),
+            "layer2_temporal_status": rank_row.get("layer2_temporal_status", ""),
+            "layer3_independence_status": rank_row.get("layer3_independence_status", ""),
+            "layer4_model_status": rank_row.get("layer4_model_status", ""),
+            "stability_status": rank_row.get("stability_status", ""),
+            "data_quality_status": rank_row.get("data_quality_status", ""),
+            "evidence_support_items": rank_row.get("evidence_support_items", ""),
+            "evidence_against_items": rank_row.get("evidence_against_items", ""),
+            "evidence_missing_items": rank_row.get("evidence_missing_items", ""),
+            "evidence_conflict_items": rank_row.get("evidence_conflict_items", ""),
+            "candidate_summary": rank_row.get("candidate_summary", ""),
+            "risk_flags": rank_row.get("risk_flags", ""),
             "conditional_status": _coalesce(source.get("conditional_granger_status"), cond.get("status")),
             "conditional_best_lag": _coalesce(source.get("conditional_best_lag"), cond.get("best_lag")),
             "tested_lags": tested_lags,
@@ -197,7 +221,7 @@ def _conflicts(row: pd.Series) -> tuple[str, str]:
     flags = _text(row.get("risk_flags")).lower()
     if _text(row.get("data_priority")).lower() == "high" and stat in {"medium", "strong"}:
         types.append("strong_screening_but_statistical_limited")
-        reasons.append("主筛查或模型证据较强，但统计检验受共线性、闭环或共同负荷限制。")
+        reasons.append("主筛查或模型证据较强，但统计检验受共线性或共同负荷限制。")
     if grade in {"A", "B"} and not (cond.startswith("ok") and q is not None and q <= 0.05):
         types.append("strong_screening_but_conditional_weak")
         reasons.append("主筛查较强，但条件 Granger 独立预测支持不足。")
@@ -207,7 +231,7 @@ def _conflicts(row: pd.Series) -> tuple[str, str]:
     rank = _number(row.get("model_importance_rank"))
     if rank is not None and rank <= 5 and (not (cond.startswith("ok") and q is not None and q <= 0.05) or "high_collinearity_risk" in flags):
         types.append("model_supported_but_granger_weak")
-        reasons.append("模型解释支持较强，但 Granger 验证不足或受限，可能是非线性、共线性或闭环关系。")
+        reasons.append("模型解释支持较强，但 Granger 验证不足或受限，可能是非线性或共线性关系。")
     text = " ".join(_text(row.get(col)).lower() for col in ["risk_flags", "statistical_limit_reason", "evidence_reason", "integrated_review_reason"])
     if any(token in text for token in ["lag_boundary", "lag_boundary_risk", "滞后边界"]):
         types.append("boundary_lag_uncertain")

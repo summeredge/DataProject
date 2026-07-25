@@ -161,7 +161,6 @@ def test_top10_top20_metrics_count_hits_risks_and_ab_risks():
     ranked = _ranked(20)
     ranked.loc[0, "risk_flags"] = "target_leads_variable"
     ranked.loc[1, "risk_flags"] = "common_capacity_driver"
-    ranked.loc[2, "risk_flags"] = "closed_loop_suspect"
     ranked.loc[10, "risk_flags"] = "strong_formula_leakage"
     ranked.loc[11, "risk_flags"] = "poor_data_quality"
     ranked.loc[12, "risk_flags"] = "lag_boundary"
@@ -182,10 +181,8 @@ def test_top10_top20_metrics_count_hits_risks_and_ab_risks():
     assert top10["known_implausible_hits"] == 1
     assert top10["target_leads_count"] == 1
     assert top10["common_capacity_count"] == 1
-    assert top10["closed_loop_count"] == 1
     assert top10["ab_target_leads_count"] == 1
     assert top10["ab_common_capacity_count"] == 1
-    assert top10["ab_closed_loop_count"] == 1
     assert top10["ab_strong_formula_leakage_count"] == 0
     assert top10["ab_poor_data_quality_count"] == 0
     assert top20["known_reasonable_hits"] == 2
@@ -199,7 +196,6 @@ def test_all_ab_risk_metrics_exclude_c_d_e_grades():
     tokens = [
         "target_leads_variable",
         "common_capacity_driver",
-        "closed_loop_suspect",
         "strong_formula_leakage",
         "poor_data_quality",
     ]
@@ -220,7 +216,6 @@ def test_all_ab_risk_metrics_exclude_c_d_e_grades():
     top = metrics["cutoffs"]["20"]
     assert top["ab_target_leads_count"] == 1
     assert top["ab_common_capacity_count"] == 1
-    assert top["ab_closed_loop_count"] == 1
     assert top["ab_strong_formula_leakage_count"] == 1
     assert top["ab_poor_data_quality_count"] == 1
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 
-from chem_ts_corr.auto_closed_loop import build_auto_closed_loop_diagnosis
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import drop_excluded_columns, load_timeseries_csv
 from chem_ts_corr.report import write_outputs
@@ -49,24 +48,6 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, fl
         model_lift_scores=tables.model_lift_scores,
         lag_peak_quality=tables.lag_peak_quality,
         rolling_corr_scores=tables.rolling_corr_scores,
-    )
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    tables.closed_loop_evidence.to_csv(
-        config.output_dir / "closed_loop_evidence.csv",
-        index=False,
-        encoding="utf-8-sig",
-    )
-    build_auto_closed_loop_diagnosis(
-        tables.ranked_features,
-        tables.risk_flags,
-        tables.lag_peak_quality,
-        tables.rolling_corr_scores,
-        tables.model_lift_scores,
-        config.target,
-    ).to_csv(
-        config.output_dir / "auto_closed_loop_diagnosis.csv",
-        index=False,
-        encoding="utf-8-sig",
     )
     write_outputs_seconds = time.perf_counter() - write_started
     _progress(progress_callback, "分析完成")

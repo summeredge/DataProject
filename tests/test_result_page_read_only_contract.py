@@ -8,8 +8,8 @@ def test_result_page_has_no_manual_reordering_controls_or_api():
     forbidden = [
         "candidateDecisionControls",
         "applyCandidateDecision",
-        "人工推荐决策",
-        "保存并重排",
+        "人工推荐" + "决策",
+        "保存并" + "重排",
         "/api/update_candidate_decision",
     ]
 

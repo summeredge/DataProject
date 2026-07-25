@@ -42,7 +42,7 @@
 |conditional_fdr_q_value / predictive_contribution|causal_review.py / conditional Granger|causal_review_evidence.py / _assess_row|L3/L4|派生|否（筛选）|仅复核排序|无结果为 insufficient|无支持不等于失败|0.05/0.10 review 阈值|与筛选 Granger 完全隔离|否|
 |granger_fdr_q_value|causality.py / run_granger_tests|causal_review_evidence.py / _assess_row|L2|派生|否（筛选）|仅复核排序|无辅助支持|高 q 无支持|0.05/0.10 review 阈值|与 lag evidence 的重复奖励仅存在复核层|否|
 |model_importance_rank / model_lift|modeling.py / fit_explainable_model；screening.py / model_lift_scores|causal_review_evidence.py / _assess_row|L4|派生|筛选仅 model_lift|复核再计分|missing 无支持|低排名/无 lift 无支持|复核加分|XGB/SHAP 不回写筛选排序|否|
-|closed_loop_context/status/engineering_context|closed_loop.py / build_closed_loop_evidence|screening.py / 输出 merge；report.py|工程上下文|派生|否|否|历史闭环、APC/PID、人工状态只作上下文|空字符串|不适用|无|明确已退出排序；源码契约防回流|否|
+|engineering_context|外部工程元数据|CSV/API/report|工程上下文|派生|否|否|与四层统计证据隔离|空字符串|不适用|无|仅作上下文展示，不参与排序|否|
 
 ## 重复计分与历史残留结论
 
@@ -68,12 +68,9 @@
 |screening_lag|build_final_review_summary|final_review_summary|L2|复核输出|缺失为空|否|
 |risk_constraint_level|_risk_constraint_level|final_review_summary|risk|复核限制|缺失为 none|否|
 |statistical_limit_level|_statistical_limit_assessment|_integrated_decision,final_review_summary|risk|复核限制|缺失为 none|否|
-|closed_loop_context|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
-|closed_loop_status|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
-|engineering_context|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
-|closed_loop_reason|build_closed_loop_evidence|输出 merge|工程上下文|不参与评分/排序|空字符串|否|
+|engineering_context|外部工程元数据|CSV/API/report|工程上下文|不参与评分/排序|空字符串|否|
 
-闭环历史语义并非“完全退出”：它已退出主筛选评分、factor、等级和 `driver_rank`，但仍作为 `final_review_summary.py` 的解释文案残留（闭环控制/闭环关系），与共线性、共同负荷一起提示人工复核。该文案不读取闭环上下文字段，也不改变主排序；已登记为 review-only historical wording，而非不存在。
+工程上下文与四层统计证据、推荐用途和排序字段隔离；它只作为单独输出字段展示，不参与评分、等级或排序。
 
 1. 筛选总分中，原始关联不会以独立加法项重复进入；但 `association_score`、`innovation_score`、`independent_signal_score` 被几何合并，属于同一关联族的多证据约束。是否构成“重复奖励”需要后续用对照数据评估，当前不能据此改公式。
 2. lag 相关/lag_quality 进入筛选；Granger 只在筛选后因果复核中加分。因此不存在 Granger 回写 `final_score` 的重复奖励，但复核层确实同时使用 lag、Granger 和条件 Granger，必须与筛选排序分开解释。
@@ -82,7 +79,7 @@
 5. stability 直接通过 `stability_score` 入 profile，并通过不稳定 flag 改变用途；当前不稳定 flag 的相对 penalty 为 0，且不直接限制 candidate grade，所以不是“直接加分又等级封顶”。
 6. data quality 既进入 `evidence_confidence`，又可触发 `poor_data_quality` 的 0.44 cap 和类别/用途限制，确有双重约束；本 PR 只记录并冻结。
 7. optional 证据缺失会降低 `evidence_completeness`，但不会被替换为零分；已计算的 0 则保留为负面证据。风险 flag 是约束/提示，除列明的 penalty/cap 外不等价于变量无效。
-8. 闭环、APC、PID 和人工状态字段通过 `closed_loop_evidence` 仅合并到工程上下文输出；它们不读取进分数、factor、等级或排序。当前 `closed_loop_suspect_flag` 仍是风险表历史字段，但不写入 `risk_flags` token，也不参与 `_risk_adjustment`。
+8. 工程上下文仅通过 `engineering_context` 输出；它不读取进分数、factor、等级、推荐用途或排序。
 
 ## 入口覆盖与冻结
 

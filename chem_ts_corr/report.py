@@ -124,13 +124,13 @@ def build_markdown_summary(
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
 
-    lines.extend(["", "## 强初筛候选", ""])
+    lines.extend(["", "## 潜在驱动因素候选", ""])
     lines.extend(_table_lines(_core_columns(strong).head(15)))
-    lines.extend(["", "## 候选驱动因素排序", ""])
+    lines.extend(["", "## 统计证据支持与排序", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_class","driver_priority_factor","evidence_coverage_status","evidence_missing_items","evidence_score","evidence_score_low","evidence_score_high","evidence_completeness","evidence_confidence","association_score","innovation_score","independent_signal_score","correlation_evidence_score","correlation_evidence_status","regime_stability_final","regime_status","rolling_stability","rolling_status","stability_score","lag_quality","lag_quality_status","model_lift_score","model_lift_status","prediction_score","data_quality_score","score_method","risk_penalty_rate","risk_penalty","risk_score_cap"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","evidence_conflict_items","candidate_summary","risk_flags"] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
@@ -161,7 +161,7 @@ def build_markdown_summary(
     review = build_causal_review_candidates(ranked_features)
     lines.extend(_table_lines(review.head(15)))
 
-    lines.extend(["", "## 自动诊断建议", ""])
+    lines.extend(["", "## 工程复核", ""])
     advice: list[str] = []
     top10 = ranked_features.head(10) if not ranked_features.empty else pd.DataFrame()
     if not top10.empty and "lag_boundary_flag" in top10.columns:
@@ -218,14 +218,24 @@ def _risk_subset(frame: pd.DataFrame, column: str) -> pd.DataFrame:
 def _core_columns(frame: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "variable",
+        "driver_rank",
+        "driver_priority_score",
         "final_score",
+        "candidate_grade",
         "lag",
         "direction",
-        "raw_corr",
-        "residual_corr",
+        "layer1_association_status",
+        "layer2_temporal_status",
+        "layer3_independence_status",
+        "layer4_model_status",
+        "stability_status",
+        "data_quality_status",
+        "evidence_support_items",
+        "evidence_against_items",
+        "evidence_missing_items",
+        "evidence_conflict_items",
         "risk_flags",
-        "recommended_use",
-        "recommended_action",
+        "candidate_summary",
     ]
     return frame[[col for col in columns if col in frame.columns]] if not frame.empty else frame
 
@@ -264,7 +274,7 @@ def _format_cell(value: object, column: str = "") -> str:
 
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
-        return pd.DataFrame(columns=["variable","candidate_grade","recommended_use","final_score","fallback_reason"])
+        return pd.DataFrame(columns=["variable","driver_rank","driver_priority_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","evidence_conflict_items","risk_flags","candidate_summary","fallback_reason"])
     ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(index=ranked_features.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:

@@ -41,7 +41,6 @@ def test_terms_help_sections_cover_main_result_concepts():
         "变量滞后目标风险",
         "公式泄漏 / 计算耦合风险",
         "数据质量风险",
-        "闭环反馈风险",
         "共线性风险",
         "强预测证据",
         "风险受限证据",

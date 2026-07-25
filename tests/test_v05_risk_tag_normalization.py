@@ -47,7 +47,7 @@ def test_direction_and_formula_variants_are_grouped():
         assert marker in INDEX_HTML
 
 
-def test_data_regime_driver_loop_and_collinearity_variants_are_grouped():
+def test_data_regime_driver_and_collinearity_variants_are_grouped():
     required = [
         "poor_data_quality",
         "poor_quality_variable",
@@ -57,13 +57,11 @@ def test_data_regime_driver_loop_and_collinearity_variants_are_grouped():
         "stability_risk",
         "capacity_driven",
         "common_capacity_driver",
-        "closed_loop_suspect",
         "residual_collinearity",
         "high_collinearity_risk",
         "数据质量风险",
         "工况/时变不稳定风险",
         "共同负荷驱动风险",
-        "闭环反馈风险",
         "共线性风险",
     ]
     for marker in required:

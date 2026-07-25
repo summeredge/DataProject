@@ -96,7 +96,7 @@ def _decide_review(row: pd.Series) -> tuple[str, str]:
     if _has_risk_limited_signal(row) and not status.startswith("ok"):
         return (
             "risk_limited_review",
-            "存在共同负荷驱动或闭环/稳定性风险，预测验证受统计限制，仅限风险提示型人工复核，不是因果结论。",
+            "存在共同负荷驱动或稳定性风险，预测验证受统计限制，仅限风险提示型工程复核，不是因果结论。",
         )
     if not status.startswith("ok"):
         return (

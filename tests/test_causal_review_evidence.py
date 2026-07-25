@@ -60,9 +60,7 @@ def test_engineering_context_does_not_change_review_priority_or_decision():
     ])
     baseline = _ranked()
     contextual = _ranked(
-        engineering_context='{"closed_loop_status": "possible", "source": "manual_engineering_input"}',
-        closed_loop_status="possible_closed_loop_influence",
-        automatic_closed_loop_indicator="possible",
+        engineering_context='{"source": "engineering_note"}',
     )
 
     pd.testing.assert_frame_equal(

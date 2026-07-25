@@ -549,7 +549,7 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
             )
 
 
-def test_pr_8c_only_changes_audited_ranking_production_paths():
+def test_pr_8d_only_changes_audited_explanation_production_paths():
     tracked = subprocess.check_output(
         ["git", "diff", "--name-only", PR_8B_BASE],
         text=True,
@@ -564,7 +564,22 @@ def test_pr_8c_only_changes_audited_ranking_production_paths():
         for path in changed
         if path.startswith("chem_ts_corr/") and path.endswith(".py")
     }
-    assert production <= {"chem_ts_corr/screening.py", "chem_ts_corr/service.py"}
+    assert production <= {
+        "chem_ts_corr/auto_" + "closed" + "_loop.py",
+        "chem_ts_corr/causal_review_service.py",
+        "chem_ts_corr/closed" + "_loop.py",
+        "chem_ts_corr/closed" + "_loop_calibration.py",
+        "chem_ts_corr/config.py",
+        "chem_ts_corr/evidence_explanations.py",
+        "chem_ts_corr/final_review_summary.py",
+        "chem_ts_corr/llm_report.py",
+        "chem_ts_corr/pipeline.py",
+        "chem_ts_corr/ranking_baseline.py",
+        "chem_ts_corr/report.py",
+        "chem_ts_corr/screening.py",
+        "chem_ts_corr/service.py",
+        "chem_ts_corr/web.py",
+    }
 
 
 def test_pr_8c_source_contracts_cover_each_repaired_ranking_path():

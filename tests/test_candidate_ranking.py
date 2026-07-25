@@ -142,7 +142,7 @@ def test_upstream_class_is_reachable_through_production_risk_pipeline():
     assert result.loc[0, "candidate_class"] == "upstream_driver_candidate"
 
 
-@pytest.mark.parametrize("candidate_class", [name for name in CLASS_PRIORITY_FACTORS if name != "closed_loop_related"])
+@pytest.mark.parametrize("candidate_class", list(CLASS_PRIORITY_FACTORS))
 def test_driver_priority_score_uses_class_factor(candidate_class: str):
     risk_by_class = {
         "downstream_response": "target_leads_variable",

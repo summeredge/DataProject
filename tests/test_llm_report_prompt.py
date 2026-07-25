@@ -88,7 +88,7 @@ def test_build_llm_prompt_contains_strict_control_and_causality_constraints(tmp_
     assert "可能 DV / 前馈候选" in prompt
     assert "不建议直接用于控制" in prompt
     assert "common_capacity_driver" in prompt
-    assert "closed_loop_suspect" in prompt
+    assert "common_capacity_driver" in prompt
     assert "high_collinearity_risk" in prompt
     assert "fallback_missing_ranked_lag" in prompt
     assert "evidence_confidence 的中文含义是“证据修正系数”" in prompt

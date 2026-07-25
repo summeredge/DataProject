@@ -89,7 +89,6 @@ def test_target_leads_changes_driver_class_without_reducing_prediction_evidence(
     ("token", "cap", "grade"),
     [
         ("common_capacity_driver", 1.0, "A"),
-        ("closed_loop_suspect", 1.0, "A"),
         ("poor_data_quality", 0.44, "D"),
     ],
 )
@@ -289,6 +288,7 @@ def test_v2_risk_constants_separate_evidence_and_engineering_priority():
         "low_model_lift": 0.00,
         "poor_data_quality": 0.00,
         "residual_collinearity": 0.10,
+        "redundant_proxy": 0.00,
     }
     assert EVIDENCE_SCORE_CAPS == {
         "strong_formula_leakage": 0.25,

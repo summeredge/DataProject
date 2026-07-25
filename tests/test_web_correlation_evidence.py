@@ -239,11 +239,11 @@ def test_result_payload_exposes_run_preprocess_context_without_changing_csv_sche
     assert pd.read_csv(ranked_path).columns.tolist() == ranked.columns.tolist()
 
 
-def test_web_candidate_tables_use_only_requested_correlation_core_columns():
+def test_web_candidate_tables_show_four_layer_explanation_columns():
     candidate_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
 
-    for field in ["pearson", "spearman", "method", "correlation_direction"]:
+    for field in ["candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "candidate_summary"]:
         assert f'"{field}"' in candidate_columns
     for field in [
         "corr_q_value",
@@ -260,7 +260,7 @@ def test_web_candidate_tables_use_only_requested_correlation_core_columns():
         assert f'"{field}"' in overview_columns
 
 
-def test_candidate_table_labels_separate_time_relationship_and_correlation_direction():
+def test_candidate_table_orders_four_layer_explanations_after_ranking():
     core_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     labels = INDEX_HTML.split("function columnLabel(column)", 1)[1].split(
         "function resetUI", 1
@@ -270,20 +270,23 @@ def test_candidate_table_labels_separate_time_relationship_and_correlation_direc
         "variable",
         "driver_rank",
         "driver_priority_score",
-        "pearson",
-        "spearman",
-        "method",
-        "correlation_direction",
-        "lag",
-        "direction",
-        "candidate_class",
+        "candidate_grade",
+        "layer1_association_status",
+        "layer2_temporal_status",
+        "layer3_independence_status",
+        "layer4_model_status",
+        "stability_status",
+        "data_quality_status",
+        "evidence_support_items",
+        "evidence_against_items",
+        "evidence_missing_items",
         "risk_flags",
-        "recommended_use",
+        "candidate_summary",
     ]
     positions = [core_columns.index(f'"{field}"') for field in expected_order]
     assert positions == sorted(positions)
-    assert 'direction: "时间关系"' in labels
-    assert 'correlation_direction: "相关方向"' in labels
+    assert 'layer1_association_status: "Layer 1 关联状态"' in labels
+    assert 'candidate_summary: "候选解释"' in labels
 
 
 def test_candidate_detail_has_structured_correlation_evidence_and_labels():
@@ -334,7 +337,7 @@ def test_directionality_detail_maps_all_innovation_statuses_to_chinese_explanati
         "innovation_verified",
         "主筛查关系与变化量关系的方向和滞后基本一致。",
         "innovation_sign_conflict",
-        "主筛查关系与变化量关系方向冲突，可能存在共同趋势、闭环调节、工况混合或异常点影响。",
+        "主筛查关系与变化量关系方向冲突，可能存在共同趋势、工况混合或异常点影响。",
         "innovation_lag_conflict",
         "主筛查关系与变化量关系的滞后不一致，动态关系可能不稳定。",
         "innovation_sign_unknown",

@@ -89,5 +89,4 @@ def test_prompt_requires_pv_as_analysis_representative_and_loop_as_mv_candidate(
     assert "用 SV/MV" in prompt
     assert "实际操纵点" in prompt
     assert "loop_mv_candidate" in prompt
-    assert "闭环数据" in prompt
     assert "不得机械排除" in prompt

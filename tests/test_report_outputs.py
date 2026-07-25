@@ -57,7 +57,7 @@ def test_write_outputs_writes_expected_files(tmp_path: Path):
         assert (tmp_path / name).exists(), f"missing output: {name}"
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert "自动诊断建议" in summary
+    assert "工程复核" in summary
 
 
     review = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
@@ -104,7 +104,7 @@ def test_write_outputs_uses_metrics_top_k_for_near_miss_candidates(tmp_path: Pat
 def test_recommended_candidates_uses_candidate_grade_without_engineering_context():
     ranked = pd.DataFrame(
         [
-            {"variable": "candidate_a", "candidate_grade": "A", "recommended_use": "strong_screening_candidate", "final_score": 0.9, "engineering_context": '{"closed_loop_status": "possible"}'},
+            {"variable": "candidate_a", "candidate_grade": "A", "recommended_use": "strong_screening_candidate", "final_score": 0.9, "engineering_context": '{"source": "engineering_note"}'},
             {"variable": "candidate_b", "candidate_grade": "A", "recommended_use": "strong_screening_candidate", "final_score": 0.8},
         ]
     )

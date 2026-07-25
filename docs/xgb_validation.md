@@ -95,4 +95,4 @@ python scripts/benchmark_xgb_validation.py --rows 50000 --variables 50 --candida
 
 ## 10. 解释边界
 
-预测增量不等于因果成立，不代表变量可操纵，也不代表变量适合进入 APC。XGB 不会消除闭环反馈、共线性、共同负荷、公式泄漏或数据质量风险。结果只用于独立人工解释，不会修改 `final_score`、`driver_rank`、`final_rank`、候选等级或风险标签，也不会自动删除候选。
+预测增量不等于因果成立，不代表变量可操纵，也不代表变量适合进入 APC。XGB 不会消除共线性、共同负荷、公式泄漏或数据质量风险。结果只用于独立工程解释，不会修改 `final_score`、`driver_rank`、`final_rank`、候选等级或风险标签，也不会自动删除候选。

@@ -106,6 +106,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {
@@ -349,6 +351,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {
@@ -481,6 +485,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": 1.0,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [
         {
           "variable": "x_common",
@@ -623,7 +629,9 @@
       "common_driver_average_rank": null,
       "proxy_average_rank": 2.0,
       "common_driver_suppression_rate": null,
-      "proxy_separation_rate": 1.0,
+      "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
       "common_driver_details": [],
       "proxy_separation_details": [
         {
@@ -636,7 +644,10 @@
           "reference_grade": "A",
           "score_gap": 0.0002646602415741217,
           "risk_flags": "redundant_proxy",
-          "separated": true
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
+          "separated": false
         }
       ],
       "lag_identification_error": {
@@ -761,9 +772,10 @@
     "failure_reason": "",
     "failed_expectations": [],
     "passed_expectations": [
-      "true_precedes_proxy",
-      "proxy_redundancy_separated",
-      "proxy_separation_rate",
+      "redundancy_group_detected",
+      "proxy_group_unresolved",
+      "proxy_identification_rate",
+      "conservative_group_class",
       "stable_proxy_candidate_presence",
       "stable_proxy_top_k_overlap",
       "stable_proxy_spearman"
@@ -1132,6 +1144,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {
@@ -1263,6 +1277,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {
@@ -1409,6 +1425,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {},
@@ -1495,6 +1513,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {
@@ -2630,6 +2650,8 @@
       "proxy_average_rank": null,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
       "common_driver_details": [],
       "proxy_separation_details": [],
       "lag_identification_error": {},
@@ -3241,6 +3263,8 @@
       "proxy_average_rank": 2.0,
       "common_driver_suppression_rate": 1.0,
       "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
       "common_driver_details": [
         {
           "variable": "x_common",
@@ -3266,6 +3290,9 @@
           "reference_grade": "A",
           "score_gap": -0.0007142620183807624,
           "risk_flags": "redundant_proxy",
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
           "separated": false
         }
       ],
@@ -3334,8 +3361,8 @@
             "noise": 6
           },
           "true_driver_grades": {
-            "x_driver": "A",
-            "z_driver": "A"
+            "z_driver": "A",
+            "x_driver": "A"
           }
         },
         {
@@ -3361,8 +3388,8 @@
             "noise": 6
           },
           "true_driver_grades": {
-            "x_driver": "A",
-            "z_driver": "A"
+            "z_driver": "A",
+            "x_driver": "A"
           }
         },
         {
@@ -3388,8 +3415,8 @@
             "noise": 6
           },
           "true_driver_grades": {
-            "x_driver": "A",
-            "z_driver": "A"
+            "z_driver": "A",
+            "x_driver": "A"
           }
         },
         {
@@ -3415,8 +3442,8 @@
             "noise": 6
           },
           "true_driver_grades": {
-            "x_driver": "A",
-            "z_driver": "A"
+            "z_driver": "A",
+            "x_driver": "A"
           }
         }
       ]
@@ -3437,6 +3464,7 @@
       "common_driver_flag",
       "common_driver_suppression",
       "proxy_redundancy_unresolved",
+      "proxy_identification_rate",
       "noise_low",
       "model_evidence_present",
       "stable_mixed_recall",
@@ -3595,6 +3623,8 @@
       "proxy_average_rank": 1.0,
       "common_driver_suppression_rate": null,
       "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
       "common_driver_details": [],
       "proxy_separation_details": [
         {
@@ -3607,6 +3637,9 @@
           "reference_grade": "A",
           "score_gap": -0.0005470562717161398,
           "risk_flags": "redundant_proxy",
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
           "separated": false
         }
       ],
@@ -3625,7 +3658,7 @@
     "passed_expectations": [
       "model_lift_computed",
       "incremental_above_noise",
-      "incremental_proxy_separated"
+      "incremental_proxy_resolution_recorded"
     ]
   }
 }

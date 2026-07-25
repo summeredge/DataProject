@@ -238,6 +238,55 @@ def test_unavailable_model_evidence_is_not_zero_model_evidence():
     assert zero_lift["evidence_score"] < not_computed["evidence_score"]
 
 
+def _optional_component_result(component: str, value: float | None) -> pd.Series:
+    ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "lag": 1}])
+    ranked["innovation_score"] = 0.8 if component != "innovation" else value
+    empty = pd.DataFrame(columns=["variable"])
+    model = pd.DataFrame([{
+        "variable": "x",
+        "model_lift_score": 0.8 if component != "prediction" else value,
+        "status": "ok" if component != "prediction" or value is not None else "skipped: insufficient rows",
+    }])
+    stability = pd.DataFrame([{"variable": "x", "regime_stability_final": 0.8 if component != "stability" else value}])
+    rolling = pd.DataFrame([{"variable": "x", "rolling_stability": 0.8 if component != "stability" else value}])
+    lag_quality = pd.DataFrame([{"variable": "x", "lag_quality": 0.8 if component != "lag_quality" else value}])
+    if value is None and component == "stability":
+        stability = empty
+        rolling = empty
+    if value is None and component == "lag_quality":
+        lag_quality = empty
+    return final_ranked_features(
+        ranked, empty, stability, model,
+        pd.DataFrame([{"variable": "x", "risk_flags": "", "data_quality_score": 1.0}]),
+        lag_quality, rolling,
+    ).iloc[0]
+
+
+@pytest.mark.parametrize(
+    ("component", "missing_label"),
+    [
+        ("prediction", "模型提升"),
+        ("stability", "稳定性验证"),
+        ("lag_quality", "滞后质量"),
+        ("innovation", "变化量验证"),
+    ],
+)
+def test_missing_optional_component_is_not_explicit_zero(component: str, missing_label: str):
+    missing = _optional_component_result(component, None)
+    zero = _optional_component_result(component, 0.0)
+
+    assert missing["evidence_strength"] > zero["evidence_strength"]
+    assert missing["evidence_score"] > zero["evidence_score"]
+    assert missing["final_score"] > zero["final_score"]
+    assert missing_label in str(missing["evidence_missing_items"])
+    assert missing_label not in str(zero["evidence_missing_items"])
+    if component == "prediction":
+        assert pd.isna(missing["prediction_score"])
+        assert zero["prediction_score"] == 0.0
+        assert missing["layer4_model_status"] in {"not_available", "insufficient_data"}
+        assert zero["layer4_model_status"] == "not_supported"
+
+
 def test_pr_8c_followup_source_contracts_exclude_coverage_from_scores():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
     production_source = "\n".join(

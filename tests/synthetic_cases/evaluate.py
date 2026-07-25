@@ -22,13 +22,6 @@ COMMON_RISK_TOKENS = (
     "redundancy",
     "proxy",
 )
-PROXY_RISK_TOKENS = (
-    "proxy",
-    "redundancy",
-    "collinearity",
-    "independence",
-    "residual",
-)
 
 KEY_FIELDS = [
     "variable",
@@ -125,13 +118,46 @@ def _relationship_details(
             row["driver_priority_score"]
         )
         risk_flags = str(row["risk_flags"])
-        tokens = PROXY_RISK_TOKENS if separated else COMMON_RISK_TOKENS
+        reference_risk_flags = str(reference_row["risk_flags"])
+        tokens = COMMON_RISK_TOKENS
         if separated:
-            accepted = variable_rank > reference_rank and (
-                row["candidate_grade"] != reference_row["candidate_grade"]
-                or score_gap >= 0.05
-                or any(token in risk_flags for token in tokens)
-            )
+            proxy_redundant = "redundant_proxy" in risk_flags
+            reference_redundant = "redundant_proxy" in reference_risk_flags
+            if proxy_redundant and not reference_redundant:
+                identified = variable_rank > reference_rank and (
+                    GRADE_ORDER[str(row["candidate_grade"])]
+                    > GRADE_ORDER[str(reference_row["candidate_grade"])]
+                    or score_gap >= 0.05
+                    or float(row["driver_priority_factor"])
+                    < float(reference_row["driver_priority_factor"])
+                )
+                resolution_status = (
+                    "identified_proxy" if identified else "conflicting_assignment"
+                )
+            elif proxy_redundant and reference_redundant:
+                resolution_status = "unresolved_group"
+            elif reference_redundant:
+                resolution_status = "conflicting_assignment"
+            else:
+                resolution_status = "not_detected"
+            group_detected = resolution_status != "not_detected"
+            detail = {
+                "variable": variable,
+                "reference": reference,
+                "variable_rank": variable_rank,
+                "reference_rank": reference_rank,
+                "rank_gap": variable_rank - reference_rank,
+                "variable_grade": str(row["candidate_grade"]),
+                "reference_grade": str(reference_row["candidate_grade"]),
+                "score_gap": score_gap,
+                "risk_flags": risk_flags,
+                "reference_risk_flags": reference_risk_flags,
+                "group_detected": group_detected,
+                "resolution_status": resolution_status,
+                "separated": resolution_status == "identified_proxy",
+            }
+            details.append(detail)
+            continue
         else:
             accepted = variable_rank > reference_rank and (
                 GRADE_ORDER[str(row["candidate_grade"])]
@@ -189,7 +215,19 @@ def metrics(case: SyntheticCase, ranked: pd.DataFrame) -> dict[str, object]:
             else None
         ),
         "proxy_separation_rate": (
-            sum(detail["separated"] for detail in proxy_details) / len(proxy_details)
+            sum(detail["resolution_status"] == "identified_proxy" for detail in proxy_details)
+            / len(proxy_details)
+            if proxy_details
+            else None
+        ),
+        "proxy_identification_rate": (
+            sum(detail["resolution_status"] == "identified_proxy" for detail in proxy_details)
+            / len(proxy_details)
+            if proxy_details
+            else None
+        ),
+        "redundancy_group_detection_rate": (
+            sum(detail["group_detected"] for detail in proxy_details) / len(proxy_details)
             if proxy_details
             else None
         ),
@@ -465,19 +503,12 @@ def evaluate_case_expectations(
     elif scenario == "collinear_proxy":
         true = _row(ranked, "x1_driver")
         proxy = _row(ranked, "x2_proxy")
-        risk = "" if proxy is None else str(proxy["risk_flags"])
-        separated = (
-            true is not None
-            and proxy is not None
-            and (
-                proxy["candidate_grade"] != true["candidate_grade"]
-                or any(token in risk for token in ["redundancy", "proxy", "collinearity"])
-                or float(true["driver_priority_score"]) - float(proxy["driver_priority_score"]) >= 0.05
-            )
-        )
-        add("true_precedes_proxy", true is not None and proxy is not None and int(true["driver_rank"]) < int(proxy["driver_rank"]), "layer_3 x1_driver does not precede x2_proxy")
-        add("proxy_redundancy_separated", separated, "layer_3 true driver and collinear proxy receive near-identical A-grade evidence without redundancy signal")
-        add("proxy_separation_rate", metrics(case, ranked)["proxy_separation_rate"] == 1.0, "layer_3 proxy_separation_rate is below 1.0")
+        proxy_metrics = metrics(case, ranked)
+        detail = proxy_metrics["proxy_separation_details"][0] if proxy_metrics["proxy_separation_details"] else {}
+        add("redundancy_group_detected", proxy_metrics["redundancy_group_detection_rate"] == 1.0, "layer_3 collinear group was not detected")
+        add("proxy_group_unresolved", detail.get("resolution_status") == "unresolved_group", "layer_3 collinear group is incorrectly treated as identified proxy")
+        add("proxy_identification_rate", proxy_metrics["proxy_identification_rate"] == 0.0 and proxy_metrics["proxy_separation_rate"] == 0.0, "layer_3 unresolved group contributes to proxy identification rate")
+        add("conservative_group_class", true is not None and proxy is not None and true["candidate_class"] == proxy["candidate_class"] and true["driver_priority_factor"] == proxy["driver_priority_factor"], "layer_3 unresolved group does not share conservative class/factor")
     elif scenario == "nonlinear_stable_driver":
         row = _row(ranked, "x_nonlinear")
         noise_scores = pd.to_numeric(
@@ -527,8 +558,9 @@ def evaluate_case_expectations(
         add("model_lift_computed", true is not None and str(true["model_lift_status"]).startswith("ok") and pd.notna(true["prediction_score"]), "layer_4 model_lift_status/prediction_score missing")
         noise_has_no_support = noise is not None and pd.isna(noise["prediction_score"])
         add("incremental_above_noise", true is not None and noise is not None and pd.notna(true["prediction_score"]) and (noise_has_no_support or float(true["prediction_score"]) > float(noise["prediction_score"])), "layer_4 true incremental evidence does not exceed noise")
-        proxy_risk = "" if proxy is None else str(proxy["risk_flags"])
-        add("incremental_proxy_separated", true is not None and proxy is not None and (proxy["candidate_grade"] != true["candidate_grade"] or any(token in proxy_risk for token in ["redundancy", "proxy", "collinearity"]) or float(true["prediction_score"]) - float(proxy["prediction_score"]) >= 0.05), "layer_3/layer_4 collinear proxy receives indistinguishable incremental evidence")
+        proxy_details = metrics(case, ranked)["proxy_separation_details"]
+        resolution = proxy_details[0]["resolution_status"] if proxy_details else "not_detected"
+        add("incremental_proxy_resolution_recorded", resolution in {"identified_proxy", "unresolved_group"}, "layer_3/layer_4 proxy relationship is neither identified nor recorded as unresolved")
     elif scenario == "noise_only":
         high = ranked["candidate_grade"].isin(["A", "B"])
         add("noise_grade_control", not high.any(), "layer_1 FDR/noise control produces A/B candidate")
@@ -543,11 +575,14 @@ def evaluate_case_expectations(
             add("downstream_grade_cap", indexed.loc["x_downstream", "candidate_grade"] not in {"A", "B"}, "mixed layer_2 downstream candidate_grade not capped")
             add("common_driver_flag", "common_capacity_driver" in str(indexed.loc["x_common", "risk_flags"]), "mixed layer_3 common_capacity_driver missing")
             add("common_driver_suppression", metrics(case, ranked)["common_driver_suppression_rate"] == 1.0, "mixed layer_3 common_driver_suppression_rate is below 1.0")
+            proxy_metrics = metrics(case, ranked)
+            proxy_detail = proxy_metrics["proxy_separation_details"][0] if proxy_metrics["proxy_separation_details"] else {}
             add("proxy_redundancy_unresolved", all(
                 "redundant_proxy" in str(indexed.loc[name, "risk_flags"])
                 and indexed.loc[name, "layer3_independence_status"] == "not_supported"
                 for name in ["x_driver", "x_proxy"]
-            ) and indexed.loc["x_driver", "candidate_class"] == indexed.loc["x_proxy", "candidate_class"] and indexed.loc["x_driver", "driver_priority_factor"] == indexed.loc["x_proxy", "driver_priority_factor"], "mixed layer_3 unresolved proxy group is not conservatively classified")
+            ) and indexed.loc["x_driver", "candidate_class"] == indexed.loc["x_proxy", "candidate_class"] and indexed.loc["x_driver", "driver_priority_factor"] == indexed.loc["x_proxy", "driver_priority_factor"] and proxy_detail.get("resolution_status") == "unresolved_group", "mixed layer_3 unresolved proxy group is not conservatively classified")
+            add("proxy_identification_rate", proxy_metrics["redundancy_group_detection_rate"] == 1.0 and proxy_metrics["proxy_identification_rate"] == 0.0 and proxy_metrics["proxy_separation_rate"] == 0.0, "mixed unresolved proxy group contributes to proxy identification rate")
             add("noise_low", indexed.loc["noise", "candidate_grade"] not in {"A", "B"} and int(indexed.loc["noise", "driver_rank"]) > int(indexed.loc["x_driver", "driver_rank"]), "mixed noise receives high grade or precedes true driver")
             add("model_evidence_present", pd.notna(indexed.loc["x_driver", "prediction_score"]), "mixed layer_4 prediction_score missing")
     for name, passed, failure in stability_contract_checks(scenario, stability):

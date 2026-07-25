@@ -18,7 +18,7 @@ from tests.synthetic_cases.evaluate import (
     run_case,
     stability_contract_checks,
 )
-from tests.synthetic_cases.four_layer_cases import CASES
+from tests.synthetic_cases.four_layer_cases import CASES, SyntheticCase
 from tests.synthetic_cases.generate_baseline import (
     BASELINE_PATH,
     STABILITY_SCENARIOS,
@@ -77,6 +77,56 @@ def test_reference_maps_identify_each_spurious_relationship():
     assert CASES["model_incremental_validation"]().reference_map == {
         "x_proxy": "x_incremental"
     }
+
+
+def _proxy_metric_case(reference_flags: str, proxy_flags: str, *, proxy_rank: int = 2, proxy_grade: str = "B"):
+    case = SyntheticCase(
+        frame=pd.DataFrame(), target="target", true_drivers=frozenset({"reference"}),
+        spurious_variables=frozenset({"proxy"}), lags={}, directions={},
+        variable_types={"proxy": frozenset({"proxy"})},
+        reference_map={"proxy": "reference"}, metadata={"scenario": "unit"},
+    )
+    ranked = pd.DataFrame([
+        {"variable": "reference", "driver_rank": 1, "candidate_grade": "A", "driver_priority_factor": 1.0, "driver_priority_score": 0.80, "risk_flags": reference_flags, "corr_q_value": 0.01},
+        {"variable": "proxy", "driver_rank": proxy_rank, "candidate_grade": proxy_grade, "driver_priority_factor": 0.80, "driver_priority_score": 0.70, "risk_flags": proxy_flags, "corr_q_value": 0.01},
+    ])
+    return metrics(case, ranked)
+
+
+def test_proxy_metrics_do_not_treat_unresolved_group_as_identified():
+    result = _proxy_metric_case("redundant_proxy", "redundant_proxy")
+    detail = result["proxy_separation_details"][0]
+    assert detail["group_detected"] is True
+    assert detail["resolution_status"] == "unresolved_group"
+    assert detail["separated"] is False
+    assert result["redundancy_group_detection_rate"] == 1.0
+    assert result["proxy_identification_rate"] == 0.0
+    assert result["proxy_separation_rate"] == 0.0
+
+
+def test_proxy_metrics_require_reference_to_remain_unflagged():
+    result = _proxy_metric_case("", "redundant_proxy")
+    detail = result["proxy_separation_details"][0]
+    assert detail["resolution_status"] == "identified_proxy"
+    assert detail["separated"] is True
+    assert result["proxy_identification_rate"] == 1.0
+    assert result["proxy_separation_rate"] == result["proxy_identification_rate"]
+
+
+def test_proxy_metrics_record_not_detected_relationship():
+    result = _proxy_metric_case("", "")
+    detail = result["proxy_separation_details"][0]
+    assert detail["group_detected"] is False
+    assert detail["resolution_status"] == "not_detected"
+    assert detail["separated"] is False
+
+
+def test_proxy_metrics_record_conflicting_assignment():
+    result = _proxy_metric_case("redundant_proxy", "")
+    detail = result["proxy_separation_details"][0]
+    assert detail["group_detected"] is True
+    assert detail["resolution_status"] == "conflicting_assignment"
+    assert detail["separated"] is False
 
 
 @pytest.mark.parametrize(
@@ -162,22 +212,23 @@ def test_common_driver_contract(tmp_path: Path):
     assert ranked.loc["x_common", "layer3_independence_status"] == "not_supported"
 
 
-def test_collinear_proxy_contract(tmp_path: Path):
+def test_collinear_proxy_group_is_detected_but_not_resolved(tmp_path: Path):
     case, raw, ranked = _indexed("collinear_proxy", tmp_path)
     true = ranked.loc["x1_driver"]
     proxy = ranked.loc["x2_proxy"]
     assert case.frame["x1_driver"].corr(case.frame["x2_proxy"]) > 0.99
-    assert int(true["driver_rank"]) < int(proxy["driver_rank"])
-    risk = str(proxy["risk_flags"])
-    assert (
-        proxy["candidate_grade"] != true["candidate_grade"]
-        or any(token in risk for token in ["redundancy", "proxy", "collinearity"])
-        or float(true["driver_priority_score"])
-        - float(proxy["driver_priority_score"])
-        >= 0.05
-    )
-    assert metrics(case, raw)["proxy_separation_rate"] == 1.0
+    assert "redundant_proxy" in str(true["risk_flags"])
+    assert "redundant_proxy" in str(proxy["risk_flags"])
+    assert true["layer3_independence_status"] == "not_supported"
     assert proxy["layer3_independence_status"] == "not_supported"
+    assert true["candidate_class"] == proxy["candidate_class"]
+    assert true["driver_priority_factor"] == proxy["driver_priority_factor"]
+    detail = metrics(case, raw)["proxy_separation_details"][0]
+    assert metrics(case, raw)["redundancy_group_detection_rate"] == 1.0
+    assert metrics(case, raw)["proxy_identification_rate"] == 0.0
+    assert metrics(case, raw)["proxy_separation_rate"] == 0.0
+    assert detail["resolution_status"] == "unresolved_group"
+    assert detail["separated"] is False
 
 
 def test_noise_and_spurious_false_positive_rates_are_distinct(tmp_path: Path):
@@ -223,6 +274,9 @@ def test_noise_and_spurious_false_positive_rates_are_distinct(tmp_path: Path):
         "reference_grade",
         "score_gap",
         "risk_flags",
+        "reference_risk_flags",
+        "group_detected",
+        "resolution_status",
         "separated",
     }
     assert set(mixed_metrics["common_driver_details"][0]) == {
@@ -355,16 +409,11 @@ def test_model_incremental_validation_runs_layer_4(tmp_path: Path):
 
 
 def test_model_incremental_proxy_separation(tmp_path: Path):
-    _, _, ranked = _indexed("model_incremental_validation", tmp_path)
-    true = ranked.loc["x_incremental"]
+    case, raw, ranked = _indexed("model_incremental_validation", tmp_path)
     proxy = ranked.loc["x_proxy"]
-    risk = str(proxy["risk_flags"])
-    assert (
-        proxy["candidate_grade"] != true["candidate_grade"]
-        or any(token in risk for token in ["redundancy", "proxy", "collinearity"])
-        or float(true["prediction_score"]) - float(proxy["prediction_score"]) >= 0.05
-    )
     assert proxy["layer3_independence_status"] == "not_supported"
+    detail = metrics(case, raw)["proxy_separation_details"][0]
+    assert detail["resolution_status"] in {"identified_proxy", "unresolved_group"}
 
 
 def test_mixed_evidence_true_drivers_and_noise(tmp_path: Path):
@@ -410,7 +459,11 @@ def test_mixed_evidence_proxy_contract(tmp_path: Path):
     assert driver["layer3_independence_status"] == "not_supported"
     assert proxy["candidate_class"] == driver["candidate_class"]
     assert proxy["driver_priority_factor"] == driver["driver_priority_factor"]
+    detail = metrics(case, raw)["proxy_separation_details"][0]
+    assert metrics(case, raw)["redundancy_group_detection_rate"] == 1.0
+    assert metrics(case, raw)["proxy_identification_rate"] == 0.0
     assert metrics(case, raw)["proxy_separation_rate"] == 0.0
+    assert detail["resolution_status"] == "unresolved_group"
 
 
 @pytest.mark.parametrize("name", sorted(STABILITY_SCENARIOS))

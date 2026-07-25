@@ -543,8 +543,11 @@ def evaluate_case_expectations(
             add("downstream_grade_cap", indexed.loc["x_downstream", "candidate_grade"] not in {"A", "B"}, "mixed layer_2 downstream candidate_grade not capped")
             add("common_driver_flag", "common_capacity_driver" in str(indexed.loc["x_common", "risk_flags"]), "mixed layer_3 common_capacity_driver missing")
             add("common_driver_suppression", metrics(case, ranked)["common_driver_suppression_rate"] == 1.0, "mixed layer_3 common_driver_suppression_rate is below 1.0")
-            add("proxy_separation", indexed.loc["x_proxy", "candidate_grade"] != indexed.loc["x_driver", "candidate_grade"] or float(indexed.loc["x_driver", "driver_priority_score"]) - float(indexed.loc["x_proxy", "driver_priority_score"]) >= 0.05, "mixed layer_3 proxy is not separated from true driver")
-            add("proxy_separation_rate", metrics(case, ranked)["proxy_separation_rate"] == 1.0, "mixed layer_3 proxy_separation_rate is below 1.0")
+            add("proxy_redundancy_unresolved", all(
+                "redundant_proxy" in str(indexed.loc[name, "risk_flags"])
+                and indexed.loc[name, "layer3_independence_status"] == "not_supported"
+                for name in ["x_driver", "x_proxy"]
+            ) and indexed.loc["x_driver", "candidate_class"] == indexed.loc["x_proxy", "candidate_class"] and indexed.loc["x_driver", "driver_priority_factor"] == indexed.loc["x_proxy", "driver_priority_factor"], "mixed layer_3 unresolved proxy group is not conservatively classified")
             add("noise_low", indexed.loc["noise", "candidate_grade"] not in {"A", "B"} and int(indexed.loc["noise", "driver_rank"]) > int(indexed.loc["x_driver", "driver_rank"]), "mixed noise receives high grade or precedes true driver")
             add("model_evidence_present", pd.notna(indexed.loc["x_driver", "prediction_score"]), "mixed layer_4 prediction_score missing")
     for name, passed, failure in stability_contract_checks(scenario, stability):

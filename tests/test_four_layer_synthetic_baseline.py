@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -75,6 +77,42 @@ def test_reference_maps_identify_each_spurious_relationship():
     assert CASES["model_incremental_validation"]().reference_map == {
         "x_proxy": "x_incremental"
     }
+
+
+@pytest.mark.parametrize(
+    "name", ["collinear_proxy", "mixed_evidence", "model_incremental_validation"]
+)
+def test_redundancy_resolution_is_invariant_to_column_order(name: str, tmp_path: Path):
+    case = CASES[name]()
+    candidates = [column for column in case.frame if column != case.target]
+    orders = [
+        list(case.frame.columns),
+        list(reversed(candidates)) + [case.target],
+        list(np.random.default_rng(809).permutation(case.frame.columns)),
+    ]
+    fields = [
+        "layer3_independence_status",
+        "candidate_class",
+        "driver_priority_factor",
+        "driver_priority_score",
+        "driver_rank",
+        "candidate_grade",
+        "recommended_use",
+    ]
+    results = []
+    for index, columns in enumerate(orders):
+        reordered = replace(case, frame=case.frame.loc[:, columns])
+        ranked = run_case(reordered, tmp_path / f"order-{index}")
+        ranked["redundant_proxy_flag"] = ranked["risk_flags"].str.contains(
+            r"(?:^|;)redundant_proxy(?:;|$)", regex=True
+        )
+        results.append(
+            ranked.reindex(columns=["variable", "redundant_proxy_flag", *fields])
+            .sort_values("variable")
+            .reset_index(drop=True)
+        )
+    for result in results[1:]:
+        pd.testing.assert_frame_equal(result, results[0], check_exact=True)
 
 
 @pytest.mark.parametrize("name", list(CASES))
@@ -364,14 +402,15 @@ def test_mixed_evidence_common_driver_contract(tmp_path: Path):
 
 def test_mixed_evidence_proxy_contract(tmp_path: Path):
     case, raw, ranked = _indexed("mixed_evidence", tmp_path)
-    assert (
-        ranked.loc["x_proxy", "candidate_grade"]
-        != ranked.loc["x_driver", "candidate_grade"]
-        or float(ranked.loc["x_driver", "driver_priority_score"])
-        - float(ranked.loc["x_proxy", "driver_priority_score"])
-        >= 0.05
-    )
-    assert metrics(case, raw)["proxy_separation_rate"] == 1.0
+    proxy = ranked.loc["x_proxy"]
+    driver = ranked.loc["x_driver"]
+    assert "redundant_proxy" in str(proxy["risk_flags"])
+    assert "redundant_proxy" in str(driver["risk_flags"])
+    assert proxy["layer3_independence_status"] == "not_supported"
+    assert driver["layer3_independence_status"] == "not_supported"
+    assert proxy["candidate_class"] == driver["candidate_class"]
+    assert proxy["driver_priority_factor"] == driver["driver_priority_factor"]
+    assert metrics(case, raw)["proxy_separation_rate"] == 0.0
 
 
 @pytest.mark.parametrize("name", sorted(STABILITY_SCENARIOS))

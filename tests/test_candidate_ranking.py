@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
     CLASS_PRIORITY_FACTORS,
+    _data_quality_score,
+    _redundant_proxy_variables,
     classify_candidate,
     final_ranked_features,
     risk_flags,
@@ -229,6 +232,38 @@ def test_all_inputs_are_not_modified():
 
     for actual, expected in zip(frames, before):
         pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_redundancy_resolution_uses_evidence_not_column_order():
+    index = pd.date_range("2025-01-01", periods=40, freq="h")
+    source = pd.Series(range(40), index=index, dtype=float)
+    frame = pd.DataFrame({"target": source.shift(-1), "x1": source, "x2": source}, index=index)
+    equal = pd.DataFrame([
+        {"variable": "x1", "score": 0.8, "lag": 1},
+        {"variable": "x2", "score": 0.8, "lag": 1},
+    ])
+    separated = equal.copy()
+    separated.loc[1, "score"] = 0.74
+
+    assert _redundant_proxy_variables(frame, equal, "target") == {"x1", "x2"}
+    assert _redundant_proxy_variables(frame, separated, "target") == {"x2"}
+    reversed_frame = frame[["x2", "target", "x1"]]
+    assert _redundant_proxy_variables(reversed_frame, equal, "target") == {"x1", "x2"}
+    assert _redundant_proxy_variables(reversed_frame, separated, "target") == {"x2"}
+
+
+def test_data_quality_score_uses_all_component_dimensions():
+    zero = {"missing_rate": 0.0, "saturation_ratio": 0.0, "abnormal_jump_ratio": 0.0, "robust_outlier_ratio": 0.0}
+    outlier = {**zero, "robust_outlier_ratio": 0.01}
+    all_rates = {"missing_rate": 0.1, "saturation_ratio": 0.05, "abnormal_jump_ratio": 0.005, "robust_outlier_ratio": 0.01}
+    rates = pd.Series(all_rates).to_numpy(dtype=float)
+    references = pd.Series([0.20, 0.20, 0.01, 0.01]).to_numpy(dtype=float)
+    expected = (pd.Series(np.exp(-np.log(2) * rates / references)).prod()) ** (1 / len(rates))
+
+    assert _data_quality_score(zero) == pytest.approx(1.0)
+    assert _data_quality_score(outlier) < _data_quality_score(zero)
+    assert _data_quality_score(all_rates) == pytest.approx(expected)
+    assert _data_quality_score({**all_rates, "missing_rate": 0.15}) <= _data_quality_score(all_rates)
 
 
 def test_shadow_output_static_guardrails():

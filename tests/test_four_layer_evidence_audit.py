@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from chem_ts_corr import causal_review_evidence, final_review_summary, screening
 from chem_ts_corr.config import AnalysisConfig
@@ -116,14 +117,14 @@ def test_final_ranking_baseline_is_frozen():
         "driver_rank", "candidate_grade", "recommended_use",
     ]].to_dict("records")
     expected = pd.DataFrame([
-        {"variable": "upstream", "final_score": 0.7421023851203975, "driver_priority_factor": 1.0,
-         "driver_priority_score": 0.7421023851203975, "driver_rank": 1, "candidate_grade": "B",
+        {"variable": "upstream", "final_score": 0.7271088721789382, "driver_priority_factor": 1.0,
+         "driver_priority_score": 0.7271088721789382, "driver_rank": 1, "candidate_grade": "B",
          "recommended_use": "prediction_candidate"},
-        {"variable": "capacity", "final_score": 0.5746554492601353, "driver_priority_factor": 0.75,
-         "driver_priority_score": 0.43099158694510153, "driver_rank": 2, "candidate_grade": "C",
+        {"variable": "capacity", "final_score": 0.5451660268468049, "driver_priority_factor": 0.75,
+         "driver_priority_score": 0.4088745201351037, "driver_rank": 2, "candidate_grade": "C",
          "recommended_use": "capacity_driven"},
-        {"variable": "downstream", "final_score": 0.7500341454106302, "driver_priority_factor": 0.45,
-         "driver_priority_score": 0.3375153654347836, "driver_rank": 3, "candidate_grade": "C",
+        {"variable": "downstream", "final_score": 0.7233067357159925, "driver_priority_factor": 0.45,
+         "driver_priority_score": 0.3254880310721966, "driver_rank": 3, "candidate_grade": "C",
          "recommended_use": "state_indicator"},
     ])
     pd.testing.assert_frame_equal(pd.DataFrame(actual), expected, check_exact=False, rtol=1e-12)
@@ -167,12 +168,12 @@ def test_service_and_pipeline_entries_write_the_same_frozen_ranked_features(tmp_
         check_dtype=False,
     )
     expected = pd.DataFrame([
-        {"variable": "upstream", "final_score": 0.6360317321967022,
-         "driver_priority_factor": 1.0, "driver_priority_score": 0.6360317321967022,
-         "driver_rank": 1, "candidate_grade": "B", "recommended_use": "manual_review_required"},
-        {"variable": "other", "final_score": 0.25347875635415,
-         "driver_priority_factor": 0.45, "driver_priority_score": 0.11406544035936751,
-         "driver_rank": 2, "candidate_grade": "E", "recommended_use": "state_indicator"},
+        {"variable": "upstream", "final_score": 0.8967827122876123,
+         "driver_priority_factor": 1.0, "driver_priority_score": 0.8967827122876123,
+         "driver_rank": 1, "candidate_grade": "A", "recommended_use": "strong_screening_candidate"},
+        {"variable": "other", "final_score": 0.4126856616471688,
+         "driver_priority_factor": 0.45, "driver_priority_score": 0.18570854774122597,
+         "driver_rank": 2, "candidate_grade": "D", "recommended_use": "state_indicator"},
     ])
     pd.testing.assert_frame_equal(exported[fields], expected, check_dtype=False, check_exact=False, rtol=1e-12)
 
@@ -195,3 +196,55 @@ def test_engineering_context_is_not_accessed_by_any_scoring_or_review_sort_funct
     for entry in registry:
         if entry["score_role"] == "not_in_scoring":
             assert str(entry["field"]) not in accessed
+
+
+def _single_evidence_result(*, model_status: str = "not_computed", model_score: float = np.nan, complete: bool = False):
+    ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "lag": 1}])
+    empty = pd.DataFrame(columns=["variable"])
+    model = pd.DataFrame([
+        {"variable": "x", "model_lift_score": model_score, "status": model_status}
+    ])
+    stability = pd.DataFrame([{"variable": "x", "regime_stability_final": 0.8}]) if complete else empty
+    lag_quality = pd.DataFrame([{"variable": "x", "lag_quality": 0.8}]) if complete else empty
+    rolling = pd.DataFrame([{"variable": "x", "rolling_stability": 0.8}]) if complete else empty
+    return final_ranked_features(
+        ranked, empty, stability, model,
+        pd.DataFrame([{"variable": "x", "risk_flags": "", "data_quality_score": 1.0}]),
+        lag_quality, rolling,
+    ).iloc[0]
+
+
+def test_missing_optional_evidence_does_not_reduce_ranking_score():
+    association_only = _single_evidence_result()
+    complete = _single_evidence_result(model_status="ok", model_score=0.8, complete=True)
+
+    assert association_only["evidence_strength"] == pytest.approx(complete["evidence_strength"])
+    assert association_only["evidence_score"] == pytest.approx(complete["evidence_score"])
+    assert association_only["final_score"] == pytest.approx(complete["final_score"])
+    assert association_only["evidence_completeness"] != complete["evidence_completeness"]
+    assert association_only["evidence_coverage_status"] != complete["evidence_coverage_status"]
+    assert association_only["evidence_missing_items"] != complete["evidence_missing_items"]
+
+
+def test_unavailable_model_evidence_is_not_zero_model_evidence():
+    not_computed = _single_evidence_result(model_status="not_computed")
+    insufficient = _single_evidence_result(model_status="skipped: insufficient rows")
+    zero_lift = _single_evidence_result(model_status="ok", model_score=0.0)
+
+    assert pd.isna(not_computed["prediction_score"])
+    assert pd.isna(insufficient["prediction_score"])
+    assert zero_lift["prediction_score"] == 0.0
+    assert not_computed["evidence_score"] == pytest.approx(insufficient["evidence_score"])
+    assert zero_lift["evidence_score"] < not_computed["evidence_score"]
+
+
+def test_pr_8c_followup_source_contracts_exclude_coverage_from_scores():
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8") for path in Path("chem_ts_corr").rglob("*.py")
+    )
+
+    assert "order = {column: index for index, column in enumerate(frame.columns)}" not in production_source
+    assert "anchor, proxy" not in production_source
+    assert "** (1 / 3)" not in inspect.getsource(screening._data_quality_score)
+    assert 'final["data_quality_score"] * final["evidence_completeness"]' not in source

@@ -84,6 +84,7 @@ def _available_weight_profile_scores(
 REGIME_NAMES = ("low", "mid", "high")
 MIN_REGIMES_FOR_STABILITY = 2
 REGIME_UNSTABLE_THRESHOLD = 0.50
+EVIDENCE_SEPARATION_MARGIN = 0.05
 REGIME_CONSISTENCY_WEIGHTS = {
     "strength": 0.60,
     "lag": 0.40,
@@ -829,19 +830,35 @@ def _data_quality_score(diag: Mapping[str, object]) -> float:
     )
     reference_rates = np.array([0.20, 0.20, 0.01, 0.01])
     quality_components = np.exp(-np.log(2) * rates / reference_rates)
-    return float(np.clip(np.prod(quality_components) ** (1 / 3), 0.0, 1.0))
+    return float(
+        np.clip(
+            np.prod(quality_components) ** (1 / len(quality_components)), 0.0, 1.0
+        )
+    )
 
 
 def _redundant_proxy_variables(
     frame: pd.DataFrame | None,
     ranked: pd.DataFrame,
     target: str | None,
+    *,
+    residual_map: Mapping[str, object] | None = None,
+    stability_map: Mapping[str, Mapping[str, object]] | None = None,
+    diag_map: Mapping[str, Mapping[str, object]] | None = None,
+    lag_map: Mapping[str, Mapping[str, object]] | None = None,
+    rolling_map: Mapping[str, Mapping[str, object]] | None = None,
+    lift_map: Mapping[str, Mapping[str, object]] | None = None,
 ) -> set[str]:
-    """PR-8C collinear_proxy/model_proxy: flag only near-identical lagged candidates."""
+    """Resolve redundant positive-lag candidate groups from computed evidence."""
     if frame is None or not target or target not in frame.columns:
         return set()
     period_ns = sample_period_ns(frame)
-    order = {column: index for index, column in enumerate(frame.columns)}
+    residual_map = residual_map or {}
+    stability_map = stability_map or {}
+    diag_map = diag_map or {}
+    lag_map = lag_map or {}
+    rolling_map = rolling_map or {}
+    lift_map = lift_map or {}
     candidates = [
         str(row["variable"])
         for _, row in ranked.iterrows()
@@ -849,24 +866,114 @@ def _redundant_proxy_variables(
         and str(row.get("variable", "")) != target
         and _safe_float(row.get("lag", 0), default=0.0) > 0
     ]
-    lag_map = {
+    candidate_lags = {
         str(row["variable"]): int(_safe_float(row.get("lag", 0), default=0.0))
         for _, row in ranked.iterrows()
     }
-    redundant: set[str] = set()
+    adjacency = {variable: set() for variable in candidates}
     for index, left in enumerate(candidates):
         for right in candidates[index + 1 :]:
             pair = pd.DataFrame(
                 {
-                    left: lagged_series(frame[left], frame.index, lag_map[left], period_ns=period_ns),
-                    right: lagged_series(frame[right], frame.index, lag_map[right], period_ns=period_ns),
+                    left: lagged_series(frame[left], frame.index, candidate_lags[left], period_ns=period_ns),
+                    right: lagged_series(frame[right], frame.index, candidate_lags[right], period_ns=period_ns),
                 }
             ).dropna()
             if len(pair) < 30 or abs(float(pair[left].corr(pair[right]))) < 0.995:
                 continue
-            anchor, proxy = sorted([left, right], key=lambda value: order[value])
-            redundant.add(proxy)
+            adjacency[left].add(right)
+            adjacency[right].add(left)
+
+    profiles = {
+        str(row["variable"]): _redundancy_evidence_profile(
+            row,
+            residual_map=residual_map,
+            stability_map=stability_map,
+            diag_map=diag_map,
+            lag_map=lag_map,
+            rolling_map=rolling_map,
+            lift_map=lift_map,
+        )
+        for _, row in ranked.iterrows()
+        if str(row.get("variable", "")) in adjacency
+    }
+    redundant: set[str] = set()
+    visited: set[str] = set()
+    for variable in candidates:
+        if variable in visited:
+            continue
+        stack = [variable]
+        group: set[str] = set()
+        while stack:
+            current = stack.pop()
+            if current in group:
+                continue
+            group.add(current)
+            stack.extend(adjacency[current] - group)
+        visited.update(group)
+        if len(group) < 2:
+            continue
+        representatives = [
+            candidate
+            for candidate in group
+            if all(
+                candidate == other
+                or _evidence_clearly_exceeds(
+                    profiles[candidate], profiles[other]
+                )
+                for other in group
+            )
+        ]
+        if len(representatives) == 1:
+            redundant.update(group - set(representatives))
+        else:
+            redundant.update(group)
     return redundant
+
+
+def _redundancy_evidence_profile(
+    row: pd.Series,
+    *,
+    residual_map: Mapping[str, object],
+    stability_map: Mapping[str, Mapping[str, object]],
+    diag_map: Mapping[str, Mapping[str, object]],
+    lag_map: Mapping[str, Mapping[str, object]],
+    rolling_map: Mapping[str, Mapping[str, object]],
+    lift_map: Mapping[str, Mapping[str, object]],
+) -> dict[str, float]:
+    variable = str(row["variable"])
+    stability = stability_map.get(variable, {})
+    rolling = rolling_map.get(variable, {})
+    lift = lift_map.get(variable, {})
+    return {
+        "independence": _safe_float(residual_map.get(variable, np.nan), default=np.nan),
+        "prediction": _safe_float(
+            lift.get("model_lift_score", lift.get("model_lift", np.nan)), default=np.nan
+        ),
+        "data_quality": _data_quality_score(diag_map.get(variable, {})),
+        "stability": _safe_float(
+            stability.get("regime_stability_final", rolling.get("rolling_stability", np.nan)),
+            default=np.nan,
+        ),
+        "lag_quality": _safe_float(lag_map.get(variable, {}).get("lag_quality", np.nan), default=np.nan),
+        "association": _safe_float(
+            row.get("association_score", row.get("score", np.nan)), default=np.nan
+        ),
+    }
+
+
+def _evidence_clearly_exceeds(
+    candidate: Mapping[str, float], other: Mapping[str, float]
+) -> bool:
+    differences = [
+        candidate[field] - other[field]
+        for field in candidate
+        if np.isfinite(candidate[field]) and np.isfinite(other.get(field, np.nan))
+    ]
+    return bool(
+        any(difference >= EVIDENCE_SEPARATION_MARGIN for difference in differences)
+        and not any(difference <= -EVIDENCE_SEPARATION_MARGIN for difference in differences)
+    )
 
 
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None, *, frame: pd.DataFrame | None = None, target: str | None = None) -> pd.DataFrame:
@@ -881,7 +988,17 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     lag_map = lag_peak_quality.set_index("variable").to_dict("index") if lag_peak_quality is not None and not lag_peak_quality.empty else {}
     roll_map = rolling_corr_scores.set_index("variable").to_dict("index") if rolling_corr_scores is not None and not rolling_corr_scores.empty else {}
     lift_map = model_lift_scores.set_index("variable").to_dict("index") if model_lift_scores is not None and not model_lift_scores.empty else {}
-    redundant_variables = _redundant_proxy_variables(frame, ranked, target)
+    redundant_variables = _redundant_proxy_variables(
+        frame,
+        ranked,
+        target,
+        residual_map=residual_map,
+        stability_map=stability_map,
+        diag_map=diag_map,
+        lag_map=lag_map,
+        rolling_map=roll_map,
+        lift_map=lift_map,
+    )
 
     rows = []
     for _, row in ranked.iterrows():
@@ -952,6 +1069,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             "low_model_lift": "模型增益偏低",
             "poor_data_quality": "数据质量较差",
             "residual_collinearity": "残差控制共线性高",
+            "redundant_proxy": "与其他候选变量高度冗余，独立信息不足",
         }
         reason = "；".join(reason_map.get(flag, flag) for flag in flags)
         rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "redundant_proxy_flag": variable in redundant_variables, "closed_loop_suspect_flag": closed_loop, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
@@ -1059,9 +1177,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     ) / 4.0
     data_quality_raw = final.get("data_quality_score", pd.Series(1.0, index=final.index))
     final["data_quality_score"] = pd.to_numeric(data_quality_raw, errors="coerce").fillna(1.0).clip(0, 1)
-    final["evidence_confidence"] = np.sqrt(
-        final["data_quality_score"] * final["evidence_completeness"]
-    )
+    # Coverage remains an output contract.  Only measured data quality adjusts
+    # the score; unavailable optional evidence is omitted by profile reweighting.
+    final["evidence_confidence"] = final["data_quality_score"]
     evidence_items = {
         "innovation_score": "变化量验证",
         "prediction_score": "模型提升",

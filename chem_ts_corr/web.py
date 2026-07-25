@@ -4664,6 +4664,9 @@ function renderScreeningScoreDetails(row) {
   return `
     <h4>排序结果</h4>
     <div class="detail-grid">${renderFields(rankingColumns)}</div>
+    <p>证据强度：基于实际可用证据和允许权重组合计算。</p>
+    <p>证据得分 = 证据强度 × 数据质量修正系数。</p>
+    <p>稳健综合得分 = 证据得分经过明确风险扣减或分数上限后的结果。</p>
     <p>驱动优先得分 = 稳健综合得分 × 候选类别优先系数。</p>
     ${equalScoreNote}
     <h4>证据覆盖</h4>
@@ -4695,7 +4698,7 @@ function renderScreeningScoreDetails(row) {
     <h4>滞后相关曲线</h4>
     <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
-    <p>证据修正系数由证据覆盖度和数据质量共同计算，用于修正综合证据得分，不表示统计概率或因果置信度。</p>
+    <p>证据修正系数当前仅反映数据质量。证据覆盖度用于说明哪些证据尚未获得，不参与综合得分和候选排名。</p>
   `;
 }
 

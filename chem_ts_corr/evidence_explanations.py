@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pandas as pd
@@ -48,7 +49,9 @@ def _explain_row(row: pd.Series) -> dict[str, str]:
     support: list[str] = []
     against: list[str] = []
     missing: list[str] = []
-    conflict: list[str] = _tokens(row.get("evidence_conflict_items"))
+    existing_conflict = _text(row.get("evidence_conflict_items"))
+    conflict: list[str] = _tokens(existing_conflict)
+    generated_conflict: list[str] = []
     for label, field in _LAYER_FIELDS:
         status = _text(row.get(field))
         if status in {"supported", "partially_supported"}:
@@ -58,17 +61,21 @@ def _explain_row(row: pd.Series) -> dict[str, str]:
         elif status in {"not_available", "insufficient_data"}:
             missing.append(f"{label}{STATUS_LABELS[status]}")
         elif status == "conflicting":
-            conflict.append(f"{label}存在冲突")
+            generated_conflict.append(f"{label}存在冲突")
 
     existing_missing = _tokens(row.get("evidence_missing_items"))
     missing.extend(item for item in existing_missing if item not in missing)
-    conflict = _unique(conflict)
+    conflict = _unique([*conflict, *generated_conflict])
+    conflict_items = existing_conflict
+    for item in _unique(generated_conflict):
+        if item not in _tokens(conflict_items):
+            conflict_items = "；".join(filter(None, [conflict_items, item]))
     summary = _summary(row, support, against, missing, conflict)
     return {
         "evidence_support_items": "；".join(_unique(support)),
         "evidence_against_items": "；".join(_unique(against)),
         "evidence_missing_items": "；".join(_unique(missing)),
-        "evidence_conflict_items": "；".join(conflict),
+        "evidence_conflict_items": conflict_items,
         "candidate_summary": summary,
     }
 
@@ -82,20 +89,36 @@ def _summary(
 ) -> str:
     flags = set(_tokens(row.get("risk_flags")))
     temporal = _text(row.get("layer2_temporal_status"))
-    if "target_leads_variable" in flags:
+    lag = _number(row.get("lag"))
+    if "target_leads_variable" in flags or (
+        temporal == "conflicting" and lag is not None and lag < 0
+    ):
         return "下游响应可能：目标变量在时间上领先该变量，不建议直接解释为上游驱动。"
-    if temporal == "partially_supported" and _number(row.get("lag")) == 0:
+    if (
+        conflict
+        or _text(row.get("layer3_independence_status")) == "not_supported"
+        or _text(row.get("stability_status")) == "conflicting"
+        or flags
+        & {
+            "common_capacity_driver",
+            "redundant_proxy",
+            "residual_collinearity",
+            "strong_formula_leakage",
+            "poor_data_quality",
+        }
+    ):
+        return "需要工程复核：存在统计证据支持，但同时存在独立性、稳定性、数据质量或时间冲突提示。"
+    if temporal == "partially_supported" and lag == 0:
         return "同步关联候选：相关性明显，但未观察到稳定领先关系。"
-    if {
+    core_statuses = [
         _text(row.get("layer1_association_status")),
         _text(row.get("layer2_temporal_status")),
         _text(row.get("layer3_independence_status")),
         _text(row.get("layer4_model_status")),
         _text(row.get("stability_status")),
-    } >= {"supported"}:
+    ]
+    if all(status == "supported" for status in core_statuses):
         return "潜在驱动因素候选：关联、时间、独立性、模型与稳定性证据均支持，建议工程复核。"
-    if conflict or "common_capacity_driver" in flags or "redundant_proxy" in flags:
-        return "需要工程复核：存在统计证据支持，但同时有独立性或时间冲突提示。"
     if missing:
         return "潜在驱动因素候选：部分统计证据未获得或数据不足，建议补充证据后工程复核。"
     if against:
@@ -104,7 +127,7 @@ def _summary(
 
 
 def _tokens(value: Any) -> list[str]:
-    return [item.strip() for item in _text(value).split("；") if item.strip()]
+    return [item.strip() for item in re.split(r"[;；,，|]", _text(value)) if item.strip()]
 
 
 def _unique(items: list[str]) -> list[str]:

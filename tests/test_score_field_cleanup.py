@@ -282,10 +282,11 @@ def test_report_uses_formal_fields_and_blank_missing_evidence():
 def test_report_risk_and_regime_explanations_are_current():
     markdown = build_markdown_summary("target", _summary_frame(), pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame())
 
-    for text in ["工业稳健 V3", "可用相关证据按等权几何均值合并", "risk_score_cap", "工况覆盖度"]:
+    for text in ["多个允许权重组合所得分数的中位数", "证据修正系数当前仅由数据质量得分决定", "风险标签只有在明确配置了扣减或分数上限时才改变 final_score", "工况覆盖度"]:
         assert text in markdown
     assert "工业稳健 V2" not in markdown
-    assert "不表示概率、统计置信度或因果置信度" in markdown
+    assert "可用相关证据按等权几何" + "均值合并" not in markdown
+    assert "证据修正系数由证据覆盖度和数据质量共同" + "计算" not in markdown
     assert "证据置信度" not in markdown
     assert "剩余已计算项按原始权重重归一" not in markdown
 
@@ -342,7 +343,8 @@ def test_web_detail_explains_score_chain_and_evidence_correction():
         "data_quality_status",
         "evidence_conflict_items",
         "驱动优先得分 = 稳健综合得分 × 候选类别优先系数",
-        "不表示统计概率或因果置信度",
+        "证据修正系数当前仅反映数据质量",
+        "证据覆盖度用于说明哪些证据尚未获得，不参与综合得分和候选排名",
     ]:
         assert marker in detail
 

@@ -142,7 +142,9 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
 - 必须按 overview.score_method 说明当前评分版本；评分版本仅表示评分语义，不代表新的因果算法，也不得据此声称确定性因果关系。
-- evidence_confidence 的中文含义是“证据修正系数”，由证据覆盖度和数据质量共同计算；它不是概率、统计置信度或因果置信度。解释候选证据时应同时参考 evidence_coverage_status 和 evidence_missing_items。
+- evidence_confidence 的中文含义为“证据修正系数”，当前仅由 data_quality_score 决定。evidence_completeness 和 evidence_coverage_status 只表示证据覆盖情况，不参与 evidence_score、final_score 或候选排名。
+- 缺失证据不是零分证据。未计算、不可用或数据不足的可选证据会从当前权重组合中省略并重新归一化；实际计算得到的零值才代表弱证据。
+- evidence_strength 是多个允许权重组合结果的中位数，不得解释为等权几何平均、概率或统计置信度。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。
 - .PV 可以作为过程变量或控制回路历史数据代表；即使属于 FIC/TIC/PIC/AIC 等 PID 回路，相关性、滞后、Granger、模型解释等分析仍可使用 .PV。

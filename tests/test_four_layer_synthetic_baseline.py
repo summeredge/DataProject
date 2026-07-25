@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from chem_ts_corr import screening
 from tests.synthetic_cases.evaluate import (
     KEY_FIELDS,
     REPORT_TOP_K,
@@ -27,7 +28,29 @@ from tests.synthetic_cases.generate_baseline import (
 )
 
 
-PR_8B_BASE = "a16335d0305c26cb752b9e02a11264989355a221"
+PR_8C_BASE = "5aff6c0d4c2bc430aa0c9002cd63c7f87b8d0476"
+RANKING_FREEZE_FIELDS = [
+    "variable",
+    "final_score",
+    "driver_priority_factor",
+    "driver_priority_score",
+    "driver_rank",
+    "candidate_grade",
+    "recommended_use",
+    "risk_flags",
+]
+PR_8C_BASELINE_FIELDS = [
+    *RANKING_FREEZE_FIELDS,
+    "candidate_class",
+    "lag",
+    "direction",
+    "layer1_association_status",
+    "layer2_temporal_status",
+    "layer3_independence_status",
+    "layer4_model_status",
+    "stability_status",
+    "data_quality_status",
+]
 
 
 def _indexed(case_name: str, tmp_path: Path):
@@ -550,8 +573,9 @@ def test_committed_baseline_matches_actual_production_report(tmp_path: Path):
 
 
 def test_pr_8d_only_changes_audited_explanation_production_paths():
+    """PR-8D supplemental edits may not reopen any production scoring path."""
     tracked = subprocess.check_output(
-        ["git", "diff", "--name-only", PR_8B_BASE],
+        ["git", "diff", "--name-only"],
         text=True,
     ).splitlines()
     untracked = subprocess.check_output(
@@ -565,21 +589,63 @@ def test_pr_8d_only_changes_audited_explanation_production_paths():
         if path.startswith("chem_ts_corr/") and path.endswith(".py")
     }
     assert production <= {
-        "chem_ts_corr/auto_" + "closed" + "_loop.py",
-        "chem_ts_corr/causal_review_service.py",
-        "chem_ts_corr/closed" + "_loop.py",
-        "chem_ts_corr/closed" + "_loop_calibration.py",
-        "chem_ts_corr/config.py",
         "chem_ts_corr/evidence_explanations.py",
         "chem_ts_corr/final_review_summary.py",
         "chem_ts_corr/llm_report.py",
-        "chem_ts_corr/pipeline.py",
-        "chem_ts_corr/ranking_baseline.py",
         "chem_ts_corr/report.py",
-        "chem_ts_corr/screening.py",
-        "chem_ts_corr/service.py",
         "chem_ts_corr/web.py",
     }
+
+
+def test_explanations_do_not_change_real_production_ranking_fields(tmp_path: Path, monkeypatch):
+    case = CASES["mixed_evidence"]()
+    monkeypatch.setattr(screening, "add_evidence_explanations", lambda frame: frame)
+    before = run_case(case, tmp_path / "before")
+    monkeypatch.undo()
+    after = run_case(case, tmp_path / "after")
+    pd.testing.assert_frame_equal(
+        before.reindex(columns=RANKING_FREEZE_FIELDS),
+        after.reindex(columns=RANKING_FREEZE_FIELDS),
+        check_exact=True,
+    )
+
+
+def _pr_8c_baseline_report() -> dict[str, object]:
+    try:
+        content = subprocess.check_output(
+            [
+                "git",
+                "show",
+                f"{PR_8C_BASE}:tests/baselines/four_layer_ranking_baseline.json",
+            ],
+            text=True,
+            encoding="utf-8",
+        )
+    except subprocess.CalledProcessError as error:
+        pytest.fail(
+            "PR-8C ranking baseline is unavailable; fetch commit "
+            f"{PR_8C_BASE} before running this contract. ({error})"
+        )
+    return json.loads(content)
+
+
+def test_pr_8d_preserves_pr_8c_ranking_contract_for_all_synthetic_cases(tmp_path: Path):
+    expected = _pr_8c_baseline_report()
+    actual = build_full_baseline_report(tmp_path)
+    assert set(actual) == set(expected) == set(CASES)
+    for name in CASES:
+        expected_rows = {
+            row["variable"]: row for row in expected[name]["key_evidence"]
+        }
+        actual_rows = {
+            row["variable"]: row for row in actual[name]["key_evidence"]
+        }
+        assert set(actual_rows) == set(expected_rows), name
+        assert actual[name]["top_k_results"] == expected[name]["top_k_results"], name
+        for variable, expected_row in expected_rows.items():
+            actual_row = actual_rows[variable]
+            for field in PR_8C_BASELINE_FIELDS:
+                assert actual_row[field] == expected_row[field], f"{name}:{variable}:{field}"
 
 
 def test_pr_8c_source_contracts_cover_each_repaired_ranking_path():

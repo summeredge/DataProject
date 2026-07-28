@@ -153,13 +153,11 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     residual_output = pd.DataFrame(columns=["variable"])
     if residual_controls:
         _progress(progress_callback, "正在计算负荷控制后的残差关联")
-        best_lags = raw_ranked.set_index("variable")["lag"].to_dict()
         residual_output = residual_corr_scores(
             scaled,
             config.target,
             residual_controls,
             config.max_lag,
-            best_lags=best_lags,
             target_mask=analysis_target_mask,
         )
     # PR-2 output is intentionally isolated from screening scores and risks.

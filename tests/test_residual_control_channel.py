@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pandas as pd
 
+from chem_ts_corr import screening
 from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.screening import residual_corr_scores
 from chem_ts_corr.service import analyze_numeric_frame
@@ -14,41 +18,63 @@ def _frame(n: int = 180) -> pd.DataFrame:
     rng = np.random.default_rng(17)
     index = pd.date_range("2026-01-01", periods=n, freq="min")
     load = rng.normal(size=n)
-    target = 1.8 * load + rng.normal(scale=0.15, size=n)
     return pd.DataFrame(
-        {"target": target, "load": load, "common": 1.6 * load + rng.normal(scale=0.15, size=n)},
-        index=index,
+        {"target": 1.8 * load + rng.normal(scale=0.15, size=n), "load": load,
+         "common": 1.6 * load + rng.normal(scale=0.15, size=n)}, index=index,
     )
 
 
 def test_residual_channel_common_load_is_removed_and_control_is_reference():
     scores = residual_corr_scores(_frame(), "target", ["load"], 4)
-
     common = scores.set_index("variable").loc["common"]
     control = scores.set_index("variable").loc["load"]
+
     assert abs(float(common["residual_signed_corr"])) < 0.3
-    assert common["residual_status"] == "ok"
+    assert common["residual_method"] in {"pearson", "spearman"}
+    assert common["residualization_method"] == "ols"
+    assert common["residual_signed_corr"] == common[
+        "residual_pearson" if common["residual_method"] == "pearson" else "residual_spearman"
+    ]
+    assert common["residual_corr"] == abs(common["residual_signed_corr"])
     assert control["residual_status"] == "control_reference_not_residualized"
     assert pd.isna(control["residual_corr"])
 
 
-def test_residual_channel_keeps_independent_lag_and_target_mask():
+def test_residual_channel_finds_distant_lag_independently_of_raw_lag():
+    rng = np.random.default_rng(91)
+    n = 480
+    index = pd.date_range("2026-01-01", periods=n, freq="min")
+    load = rng.normal(size=n)
+    signal = rng.normal(size=n)
+    frame = pd.DataFrame({
+        "target": -3 * load + signal + rng.normal(scale=0.02, size=n),
+        "load": load,
+        "candidate": 3 * load + pd.Series(signal).shift(-20).to_numpy(),
+    }, index=index)
+    raw = summarize_best_lags(compute_lag_scores(frame[["target", "candidate"]], "target", 30)).iloc[0]
+    residual = residual_corr_scores(frame, "target", ["load"], 30).set_index("variable").loc["candidate"]
+
+    assert abs(int(raw["lag"])) <= 1
+    assert int(residual["residual_lag"]) == 20
+    assert float(residual["residual_corr"]) > 0.95
+
+
+def test_residual_hints_do_not_change_simultaneous_control_or_full_scan():
     frame = _frame()
-    rng = np.random.default_rng(18)
-    signal = rng.normal(size=len(frame))
-    frame["target"] = 1.8 * frame["load"] + signal
-    frame["lagged_signal"] = pd.Series(signal, index=frame.index).shift(-2) + rng.normal(scale=0.05, size=len(frame))
-    mask = pd.Series(False, index=frame.index)
-    mask.iloc[60:] = True
+    without_hint = residual_corr_scores(frame, "target", ["load"], 12)
+    wrong_hint = residual_corr_scores(frame, "target", ["load"], 12, best_lags={"common": -12, "load": 9})
+    fields = [
+        "residual_pearson", "residual_spearman", "residual_signed_corr", "residual_corr",
+        "residual_method", "residual_lag", "residual_direction", "residual_lag_quality", "residual_status",
+    ]
+    pd.testing.assert_frame_equal(without_hint[fields], wrong_hint[fields])
+    source = inspect.getsource(screening.residual_corr_scores)
+    assert "lagged_series(" not in source
+    assert "_best_lag_review_scores(" not in source
+    assert "compute_lag_scores(" in source
 
-    scores = residual_corr_scores(frame, "target", ["load"], 4, target_mask=mask)
-    row = scores.set_index("variable").loc["lagged_signal"]
-    assert int(row["residual_lag"]) == 2
-    assert float(row["residual_corr"]) > 0.8
-    assert int(row["residual_n"]) < int(mask.sum())
 
-
-def test_residual_channel_reports_no_valid_controls_and_rank_deficiency():
+def test_residual_channel_reports_no_valid_controls_rank_deficiency_and_infinities():
     frame = _frame()
     frame["constant"] = 1.0
     no_valid = residual_corr_scores(frame, "target", ["missing", "constant"], 3)
@@ -58,44 +84,59 @@ def test_residual_channel_reports_no_valid_controls_and_rank_deficiency():
     deficient = residual_corr_scores(frame, "target", ["load", "load_copy"], 3)
     row = deficient.set_index("variable").loc["common"]
     assert row["residual_status"] == "rank_deficient"
-    assert int(row["control_matrix_rank"]) < int(row["control_count"]) + 1
+    assert row["residualization_method"] == "ols_rank_deficient"
+
+    frame.loc[frame.index[:2], "common"] = [np.inf, -np.inf]
+    finite = residual_corr_scores(frame, "target", ["load"], 3).set_index("variable").loc["common"]
+    assert int(finite["residual_n"]) == len(frame) - 2 - 3
+    assert not np.isinf(pd.to_numeric(finite.drop(labels=["requested_control_columns", "effective_control_columns", "residual_method", "residualization_method", "residual_direction", "residual_status"]), errors="coerce")).any()
 
 
-def test_residual_channel_preserves_physical_time_gaps():
-    frame = _frame(160)
-    frame = pd.concat([frame.iloc[:80], frame.iloc[100:]])
-    frame["lagged_signal"] = frame["target"].shift(-2)
-    scores = residual_corr_scores(frame, "target", ["load"], 3)
-    row = scores.set_index("variable").loc["lagged_signal"]
-    assert row["residual_status"] == "ok"
-    assert int(row["residual_n"]) == len(frame) - 2
-
-
-def test_residual_output_is_reported_without_changing_initial_outputs(tmp_path):
+def test_residual_fit_failure_does_not_stop_other_candidates(monkeypatch):
     frame = _frame()
-    common = dict(
-        input_path=tmp_path / "input.csv", time_column="time", target="target",
-        output_dir=tmp_path, max_lag=3, top_k=2, enable_model=False,
+    frame["good_candidate"] = frame["target"] + 0.1
+    frame["bad_candidate"] = frame["target"] - 0.1
+    frame["another_good_candidate"] = frame["target"] * 0.8
+    original = screening._residualize
+
+    def fail_bad(y, x, fit_mask=None):
+        if y.name == "bad_candidate":
+            raise np.linalg.LinAlgError("synthetic failure")
+        return original(y, x, fit_mask)
+
+    monkeypatch.setattr(screening, "_residualize", fail_bad)
+    scores = residual_corr_scores(frame, "target", ["load"], 3).set_index("variable")
+    bad = scores.loc["bad_candidate"]
+    assert bad["residual_status"] == "fit_failed"
+    assert bad[["residual_pearson", "residual_spearman", "residual_corr", "residual_lag"]].isna().all()
+    assert scores.loc["good_candidate", "residual_status"] == "ok"
+    assert scores.loc["another_good_candidate", "residual_status"] == "ok"
+    assert {"load", "good_candidate", "bad_candidate", "another_good_candidate"}.issubset(scores.index)
+
+
+def test_residual_output_isolated_from_same_configuration_initial_outputs(tmp_path, monkeypatch):
+    frame = _frame()
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
+        max_lag=3, top_k=2, residual_control_columns=["load"], enable_model=False,
         skip_model_lift=True, skip_rolling_corr=True,
     )
-    without = analyze_numeric_frame(frame, AnalysisConfig(**common, residual_control_columns=[]))
-    with_controls = analyze_numeric_frame(frame, AnalysisConfig(**common, residual_control_columns=["load"]))
+    original = screening.residual_corr_scores
+    monkeypatch.setattr(screening, "residual_corr_scores", lambda *args, **kwargs: pd.DataFrame(columns=["variable"]))
+    without_output = analyze_numeric_frame(frame, config)
+    monkeypatch.setattr(screening, "residual_corr_scores", original)
+    with_output = analyze_numeric_frame(frame, config)
 
-    ranked_columns = ["variable", "driver_rank", "final_score", "candidate_grade", "recommended_use"]
-    pd.testing.assert_frame_equal(
-        without.ranked_features[ranked_columns], with_controls.ranked_features[ranked_columns]
-    )
-    assert set(without.recommended_candidates["variable"]) - {"load"} == set(with_controls.recommended_candidates["variable"])
-    pd.testing.assert_frame_equal(without.risk_flags, with_controls.risk_flags)
-    assert not with_controls.residual_corr_scores.empty
+    for name in ["ranked_features", "risk_flags", "recommended_candidates"]:
+        pd.testing.assert_frame_equal(getattr(without_output, name), getattr(with_output, name))
+    assert with_output.residual_corr_scores.empty is False
 
     write_outputs(
-        tmp_path, "target", with_controls.ranked_features, with_controls.lag_scores,
-        with_controls.granger_tests, with_controls.importance, with_controls.metrics,
-        diagnostics=with_controls.diagnostics, residual_corr_scores=with_controls.residual_corr_scores,
-        risk_flags=with_controls.risk_flags, lag_peak_quality=with_controls.lag_peak_quality,
-        recommended_candidates=with_controls.recommended_candidates,
+        tmp_path, config.target, with_output.ranked_features, with_output.lag_scores,
+        with_output.granger_tests, with_output.importance, with_output.metrics,
+        diagnostics=with_output.diagnostics, residual_corr_scores=with_output.residual_corr_scores,
+        risk_flags=with_output.risk_flags, lag_peak_quality=with_output.lag_peak_quality,
+        recommended_candidates=with_output.recommended_candidates,
     )
-    payload = _build_result_payload("run", tmp_path, AnalysisConfig(**common, residual_control_columns=["load"]))
-    residual_csv = pd.read_csv(tmp_path / "residual_corr_scores.csv", encoding="utf-8-sig")
-    assert len(payload["residualScores"]) == len(residual_csv) > 0
+    payload = _build_result_payload("run", tmp_path, config)
+    assert len(payload["residualScores"]) == len(with_output.residual_corr_scores) > 0

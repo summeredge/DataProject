@@ -160,7 +160,7 @@ def test_local_review_matches_full_scan_when_peak_is_inside_window():
     assert float(local[local["method"]]) == pytest.approx(float(full[full["method"]]), abs=1e-12)
 
 
-def test_residual_and_each_regime_use_local_window(monkeypatch):
+def test_residual_uses_one_full_scan_while_regimes_keep_local_windows(monkeypatch):
     rng = np.random.default_rng(7)
     n = 1200
     target = rng.normal(size=n)
@@ -190,10 +190,8 @@ def test_residual_and_each_regime_use_local_window(monkeypatch):
     screening.regime_scores(frame, "target", "cap", 360, best_lags={"x": 0, "cap": 0})
 
     x_calls = [lags for variable, lags in calls if variable == "x"]
-    assert len(x_calls) == 5
-    assert x_calls[0] == list(range(-18, 19))
-    assert x_calls[1] == list(range(-360, 361))
-    assert x_calls[2:] == [list(range(-18, 19))] * 3
+    assert x_calls[0] == list(range(-360, 361))
+    assert x_calls[1:] == [list(range(-18, 19))] * 3
 
 
 def test_residual_and_regime_outputs_match_full_scan_for_in_window_peak():

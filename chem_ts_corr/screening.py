@@ -11,7 +11,7 @@ from chem_ts_corr.common import to_float
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.feature_alignment import fit_linear_model, predict_linear_model
-from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
@@ -178,6 +178,15 @@ def diagnostics(frame: pd.DataFrame, roles: dict[str, str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+RESIDUAL_SCORE_COLUMNS = [
+    "variable", "residual_pearson", "residual_spearman", "residual_signed_corr",
+    "residual_corr", "residual_method", "residual_lag", "residual_direction",
+    "residual_n", "residual_lag_quality", "residual_lag_boundary_flag",
+    "residual_status", "requested_control_columns", "effective_control_columns",
+    "control_count", "control_matrix_rank", "control_condition_number",
+]
+
+
 def residual_corr_scores(
     frame: pd.DataFrame,
     target: str,
@@ -186,10 +195,13 @@ def residual_corr_scores(
     best_lags: Mapping[str, int] | None = None,
     target_mask: pd.Series | None = None,
 ) -> pd.DataFrame:
-    out_cols = ["variable", "lag", "residual_corr", "residual_p_value", "residual_r2", "direction", "residual_method", "condition_number", "used_control_columns"]
-    capacity_columns = [col for col in (capacity_columns or []) if col in frame.columns]
-    if not capacity_columns:
-        return pd.DataFrame(columns=out_cols)
+    requested_controls = list(dict.fromkeys(str(column) for column in (capacity_columns or [])))
+    available_controls = [
+        column for column in requested_controls
+        if column in frame.columns and column != target
+    ]
+    if not requested_controls:
+        return pd.DataFrame(columns=RESIDUAL_SCORE_COLUMNS)
     period_ns = sample_period_ns(frame)
     aligned_controls = pd.DataFrame(
         {
@@ -199,47 +211,107 @@ def residual_corr_scores(
                 int((best_lags or {}).get(column, 0) or 0),
                 period_ns=period_ns,
             )
-            for column in capacity_columns
+            for column in available_controls
         },
         index=frame.index,
     )
-    target_residual, t_method, t_cond, used_cols = _residualize(
-        frame[target], aligned_controls, fit_mask=target_mask
+    resolved_mask = (
+        target_mask.reindex(frame.index).fillna(False).astype(bool)
+        if target_mask is not None
+        else pd.Series(True, index=frame.index, dtype=bool)
     )
-    all_scores: list[pd.DataFrame] = []
+    rows: list[dict[str, object]] = []
     for column in frame.columns:
-        if column == target or column in capacity_columns:
+        if column == target:
             continue
-        candidate_residual, c_method, c_cond, c_used_cols = _residualize(
-            frame[column], aligned_controls, fit_mask=target_mask
-        )
-        pair = pd.DataFrame({target: target_residual, column: candidate_residual}).dropna()
+        base = _residual_result_row(column, requested_controls)
+        if column in available_controls:
+            base["residual_status"] = "control_reference_not_residualized"
+            rows.append(base)
+            continue
+        pair = pd.concat([frame[[target, column]], aligned_controls], axis=1).loc[resolved_mask]
+        usable_controls = [
+            control for control in available_controls
+            if pair[control].notna().any() and pair[control].nunique(dropna=True) > 1
+        ]
+        if not usable_controls:
+            base["residual_status"] = "no_valid_controls"
+            rows.append(base)
+            continue
+        pair = pair[[target, column, *usable_controls]].dropna()
+        usable_controls = [
+            control for control in usable_controls if pair[control].nunique(dropna=True) > 1
+        ]
+        if not usable_controls:
+            base["residual_status"] = "no_valid_controls"
+            rows.append(base)
+            continue
+        pair = pair[[target, column, *usable_controls]].dropna()
         if len(pair) < max(10, max_lag + 5):
+            base.update({
+                "effective_control_columns": ",".join(usable_controls),
+                "control_count": len(usable_controls),
+                "residual_n": len(pair),
+                "residual_status": "insufficient_joint_samples",
+            })
+            rows.append(base)
             continue
+        control_matrix = np.column_stack([np.ones(len(pair)), pair[usable_controls].to_numpy(dtype=float)])
+        matrix_rank = int(np.linalg.matrix_rank(control_matrix))
+        condition_number = float(np.linalg.cond(control_matrix))
+        target_residual, method, _, _ = _residualize(pair[target], pair[usable_controls])
+        candidate_residual, _, _, _ = _residualize(pair[column], pair[usable_controls])
+        residual_pair = pd.DataFrame({target: target_residual, column: candidate_residual}, index=pair.index)
         best = _best_lag_review_scores(
-            pair,
-            target,
-            max_lag,
-            (best_lags or {}).get(column),
-            target_mask=target_mask,
+            residual_pair, target, max_lag, (best_lags or {}).get(column)
         )
-        if not best.empty:
-            all_scores.append(best)
-    if not all_scores:
-        return pd.DataFrame(columns=out_cols)
-    scores = pd.concat(all_scores, ignore_index=True).sort_values(
-        "score", ascending=False
-    ).reset_index(drop=True)
-    if scores.empty:
-        return pd.DataFrame(columns=out_cols)
-    out = scores.rename(columns={"score": "residual_corr", "p_value": "residual_p_value", "r2": "residual_r2"})
-    out["residual_method"] = t_method
-    out["condition_number"] = t_cond
-    out["used_control_columns"] = ",".join(used_cols)
-    for col in out_cols:
-        if col not in out.columns:
-            out[col] = np.nan
-    return out[out_cols]
+        base.update({
+            "effective_control_columns": ",".join(usable_controls),
+            "control_count": len(usable_controls),
+            "control_matrix_rank": matrix_rank,
+            "control_condition_number": condition_number,
+            "residual_method": "ols_rank_deficient" if matrix_rank < control_matrix.shape[1] else method,
+            "residual_status": "rank_deficient" if matrix_rank < control_matrix.shape[1] else "ok",
+        })
+        if best.empty:
+            base["residual_status"] = "no_valid_residual_lag" if matrix_rank == control_matrix.shape[1] else "rank_deficient_no_valid_residual_lag"
+            rows.append(base)
+            continue
+        best_row = best.iloc[0]
+        # Lag quality is assessed against the full physical-time lag curve.
+        lag_scores = compute_lag_scores(residual_pair, target, max_lag)
+        quality = build_lag_peak_quality(lag_scores, max_lag)
+        quality_row = quality.loc[quality["variable"] == column]
+        method_name = str(best_row["method"])
+        signed = best_row[method_name]
+        base.update({
+            "residual_pearson": best_row["pearson"],
+            "residual_spearman": best_row["spearman"],
+            "residual_signed_corr": signed,
+            "residual_corr": best_row["score"],
+            "residual_lag": int(best_row["lag"]),
+            "residual_direction": best_row["direction"],
+            "residual_n": int(best_row["n"]),
+            "residual_lag_boundary_flag": bool(best_row["lag_boundary_flag"]),
+            "residual_lag_quality": (
+                quality_row.iloc[0]["lag_quality"] if not quality_row.empty else np.nan
+            ),
+        })
+        rows.append(base)
+    return pd.DataFrame(rows, columns=RESIDUAL_SCORE_COLUMNS)
+
+
+def _residual_result_row(variable: str, requested_controls: list[str]) -> dict[str, object]:
+    row: dict[str, object] = {column: np.nan for column in RESIDUAL_SCORE_COLUMNS}
+    row.update({
+        "variable": variable,
+        "requested_control_columns": ",".join(requested_controls),
+        "effective_control_columns": "",
+        "control_count": 0,
+        "control_matrix_rank": np.nan,
+        "control_condition_number": np.nan,
+    })
+    return row
 
 
 def regime_scores(
@@ -1475,29 +1547,20 @@ def _residualize(
     if len(fit_data) < 5 or not usable_columns:
         return y - fit_data.iloc[:, 0].mean(), "demean", np.nan, []
     fit_features = fit_x[usable_columns]
-    fit_matrix = np.column_stack(
-        [np.ones(len(fit_data)), fit_features.to_numpy(dtype=float)]
-    )
+    fit_matrix = np.column_stack([np.ones(len(fit_data)), fit_features.to_numpy(dtype=float)])
     cond = float(np.linalg.cond(fit_matrix))
-    method = "ols"
-    if cond > 1e8:
-        method = "ridge"
-        model = fit_linear_model(
-            fit_features,
-            fit_data.iloc[:, 0].to_numpy(),
-            ridge_alpha=1e-3,
-        )
-    else:
-        model = fit_linear_model(
-            fit_features,
-            fit_data.iloc[:, 0].to_numpy(),
-        )
-    fitted = predict_linear_model(model, application_data[usable_columns])
+    coefficients, _, _, _ = np.linalg.lstsq(
+        fit_matrix, fit_data.iloc[:, 0].to_numpy(dtype=float), rcond=None
+    )
+    application_matrix = np.column_stack(
+        [np.ones(len(application_data)), application_data[usable_columns].to_numpy(dtype=float)]
+    )
+    fitted = np.dot(application_matrix, coefficients)
     residual = pd.Series(
         index=application_data.index,
         data=application_data.iloc[:, 0].to_numpy() - fitted,
     )
-    return residual.reindex(y.index), method, cond, usable_columns
+    return residual.reindex(y.index), "ols", cond, usable_columns
 
 
 def _nearby_lags(best_lag: int | None, max_lag: int, radius: int = 2) -> list[int]:

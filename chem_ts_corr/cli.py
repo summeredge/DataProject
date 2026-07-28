@@ -95,7 +95,7 @@ def main() -> None:
             segment_min=args.segment_min,
             segment_max=args.segment_max,
             capacity_columns=[item for item in args.capacity_columns.split(",") if item],
-            residual_control_columns=[item for item in args.residual_control_columns.split(",") if item] or [item for item in args.capacity_columns.split(",") if item],
+            residual_control_columns=[item for item in args.residual_control_columns.split(",") if item],
             force_include_variables=[item for item in args.force_include_variables.split(",") if item],
             roles_path=args.roles_path,
             enable_granger=args.enable_granger,

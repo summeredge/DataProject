@@ -446,9 +446,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     resolved_encoding = _resolve_encoding(input_path, encoding)
     excluded_columns = normalize_excluded_columns(_list_field(form, "excluded_columns"))
     capacity_columns = _list_field(form, "capacity_columns")
-    residual_control_columns = (
-        _list_field(form, "residual_control_columns") or capacity_columns
-    )
+    residual_control_columns = _list_field(form, "residual_control_columns")
     force_include_variables = _list_field(form, "force_include_variables")
     segment_column = _field(form, "segment_column", "") or None
     _validate_analysis_excluded_columns(
@@ -660,7 +658,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "recommendedCandidates": _records(_initial_screening_frame(recommended)),
         "riskFlags": _records(risky.head(50)),
         "lagScores": [],
-        "residualScores": _records(residual.head(50)),
+        "residualScores": _records(residual),
         "regimeScores": _records(regime.head(50)),
         "modelLiftScores": _records(lift.head(50)),
         "rollingCorrScores": _records(rolling.head(50)),

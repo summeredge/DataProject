@@ -52,7 +52,7 @@ def write_outputs(
     near_miss = build_near_miss_candidates(
         lag_scores,
         ranked_features,
-        residual_corr_scores=residual_corr_scores,
+        residual_corr_scores=None,
         lag_peak_quality=lag_peak_quality,
         risk_flags=risk_flags,
         screening_top_n=_metric_int(metrics, "top_k") or 50,
@@ -73,6 +73,10 @@ def write_outputs(
         "risk_flags.csv": risk_flags,
         "lag_peak_quality.csv": lag_peak_quality,
     }
+    if residual_corr_scores is not None and not residual_corr_scores.empty:
+        files["residual_corr_scores.csv"] = _order_residual_scores(
+            residual_corr_scores, ranked_features
+        )
     for name, frame in files.items():
         (frame if frame is not None else pd.DataFrame()).to_csv(
             output_dir / name, index=False, encoding="utf-8-sig"
@@ -87,6 +91,15 @@ def write_outputs(
         risk_flags if risk_flags is not None else pd.DataFrame(),
     )
     (output_dir / "summary.md").write_text(summary, encoding="utf-8")
+
+
+def _order_residual_scores(residual_scores: pd.DataFrame, ranked_features: pd.DataFrame) -> pd.DataFrame:
+    if "variable" not in residual_scores.columns or "variable" not in ranked_features.columns:
+        return residual_scores
+    order = {variable: index for index, variable in enumerate(ranked_features["variable"])}
+    return residual_scores.assign(
+        _rank_order=residual_scores["variable"].map(order).fillna(len(order))
+    ).sort_values(["_rank_order", "variable"], kind="stable").drop(columns="_rank_order")
 
 
 

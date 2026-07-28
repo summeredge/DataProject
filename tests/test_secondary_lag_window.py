@@ -190,8 +190,10 @@ def test_residual_and_each_regime_use_local_window(monkeypatch):
     screening.regime_scores(frame, "target", "cap", 360, best_lags={"x": 0, "cap": 0})
 
     x_calls = [lags for variable, lags in calls if variable == "x"]
-    assert len(x_calls) == 4
-    assert all(lags == list(range(-18, 19)) for lags in x_calls)
+    assert len(x_calls) == 5
+    assert x_calls[0] == list(range(-18, 19))
+    assert x_calls[1] == list(range(-360, 361))
+    assert x_calls[2:] == [list(range(-18, 19))] * 3
 
 
 def test_residual_and_regime_outputs_match_full_scan_for_in_window_peak():

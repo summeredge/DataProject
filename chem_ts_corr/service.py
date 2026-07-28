@@ -81,6 +81,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         build_recommended_candidates,
         final_ranked_features,
         load_roles,
+        residual_corr_scores,
         risk_flags,
     )
 
@@ -149,14 +150,27 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     missing_forced = [value for value in (config.force_include_variables or []) if value not in scaled.columns]
     residual_controls = config.residual_control_columns or config.capacity_columns
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
-    residual = pd.DataFrame(columns=["variable"])
+    residual_output = pd.DataFrame(columns=["variable"])
+    if residual_controls:
+        _progress(progress_callback, "正在计算负荷控制后的残差关联")
+        best_lags = raw_ranked.set_index("variable")["lag"].to_dict()
+        residual_output = residual_corr_scores(
+            scaled,
+            config.target,
+            residual_controls,
+            config.max_lag,
+            best_lags=best_lags,
+            target_mask=analysis_target_mask,
+        )
+    # PR-2 output is intentionally isolated from screening scores and risks.
+    residual_for_scoring = pd.DataFrame(columns=["variable"])
     regime_output = pd.DataFrame(columns=["variable"])
     lift = pd.DataFrame(columns=["variable"])
     rolling = pd.DataFrame(columns=["variable"])
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(
         raw_ranked,
-        residual,
+        residual_for_scoring,
         regime_output,
         diag,
         roles,
@@ -169,7 +183,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     )
     ranked = final_ranked_features(
         raw_ranked,
-        residual,
+        residual_for_scoring,
         regime_output,
         lift,
         risks,
@@ -192,7 +206,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
 
     metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "effective_variables": float(len(ranked)), "recommended_candidate_count": float(len(recommended)), "control_reference_count": float(ranked[["is_residual_control", "is_capacity_reference", "is_segment_reference"]].any(axis=1).sum()), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
-    return AnalysisTables(ranked, recommended, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
+    return AnalysisTables(ranked, recommended, lag_scores, granger, importance, diag, residual_output, regime_output, risks, lift, lag_peak, rolling, metrics)
 
 
 def _innovation_evidence(

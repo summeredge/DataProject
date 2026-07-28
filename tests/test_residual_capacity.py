@@ -4,7 +4,7 @@ import pytest
 
 from chem_ts_corr import screening
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
-from chem_ts_corr.screening import residual_corr_scores, regime_scores, risk_flags
+from chem_ts_corr.screening import RESIDUAL_SCORE_COLUMNS, residual_corr_scores, regime_scores, risk_flags
 
 
 def test_residual_fit_uses_target_regime_and_applies_coefficients_to_full_timeline():
@@ -86,7 +86,8 @@ def test_residual_corr_and_risk_flags_common_capacity_driver():
     )
 
     assert not residual.empty
-    assert {"residual_method", "condition_number", "used_control_columns"}.issubset(residual.columns)
+    assert residual.columns.tolist() == RESIDUAL_SCORE_COLUMNS
+    assert residual.set_index("variable").loc["cap", "residual_status"] == "control_reference_not_residualized"
     assert not risks.empty
     row = risks.loc[risks["variable"] == "cand"].iloc[0]
     assert bool(row["common_capacity_driver_flag"]) is True

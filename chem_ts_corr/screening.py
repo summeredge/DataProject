@@ -1436,12 +1436,12 @@ def build_recommended_candidates(
         ].copy()
         residual["_status_priority"] = residual["residual_status"].map({"ok": 0, "rank_deficient": 1})
         residual["_quality_sort"] = residual["_residual_quality"].fillna(-np.inf)
-        residual_rows = residual.sort_values(
+        valid_residual_rows = residual.sort_values(
             ["_residual_corr", "_quality_sort", "_residual_n", "_status_priority", "variable"],
             ascending=[False, False, False, True, True], kind="stable",
         )
-        residual_rows = residual_rows.drop_duplicates(subset="variable", keep="first")
-        residual_rows = residual_rows.head(residual_top_k) if residual_top_k is not None else residual_rows
+        valid_residual_rows = valid_residual_rows.drop_duplicates(subset="variable", keep="first")
+        residual_rows = valid_residual_rows.head(residual_top_k) if residual_top_k is not None else valid_residual_rows
         residual_rank = {name: index + 1 for index, name in enumerate(residual_rows["variable"])}
 
     selected_variables = set(raw_rank) | set(residual_rank) | (forced & set(frame["variable"]))
@@ -1463,7 +1463,7 @@ def build_recommended_candidates(
         default="force_included",
     )
     raw_corr = pd.to_numeric(pool.get("raw_corr", pool.get("score", pd.Series(np.nan, index=pool.index))), errors="coerce")
-    residual_lookup = residual_rows.set_index("variable")["_residual_corr"] if not residual_rows.empty else pd.Series(dtype=float)
+    residual_lookup = valid_residual_rows.set_index("variable")["_residual_corr"] if "valid_residual_rows" in locals() and not valid_residual_rows.empty else pd.Series(dtype=float)
     pool["common_capacity_candidate_flag"] = (
         pool["selected_by_raw"]
         & ~pool["selected_by_residual"]

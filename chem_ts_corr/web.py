@@ -113,6 +113,11 @@ INITIAL_SCREENING_COLUMNS = (
     "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
     "corr_q_value", "pearson_r2", "spearman_r2",
 )
+RECOMMENDED_CANDIDATE_COLUMNS = (
+    *INITIAL_SCREENING_COLUMNS,
+    "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
+    "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
+)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -635,7 +640,7 @@ def _non_negative_seconds(value: object) -> float:
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
     ranked = order_initial_candidates(_safe_read_result_csv(output_dir / "ranked_features.csv"))
-    recommended = order_initial_candidates(_safe_read_result_csv(output_dir / "recommended_candidates.csv"))
+    recommended = _order_recommended_candidates(_safe_read_result_csv(output_dir / "recommended_candidates.csv"))
     display_ranked = _with_correlation_display_fields(_initial_screening_frame(ranked))
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
@@ -655,7 +660,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "analysisContext": {"preprocess_mode": config.preprocess_mode},
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary), recommended),
         "rankedFeatures": _records(display_ranked),
-        "recommendedCandidates": _records(_initial_screening_frame(recommended)),
+        "recommendedCandidates": _records(_recommended_candidate_frame(recommended)),
         "riskFlags": _records(risky.head(50)),
         "lagScores": [],
         "residualScores": _records(residual),
@@ -1969,6 +1974,19 @@ def _with_correlation_display_fields(ranked: pd.DataFrame) -> pd.DataFrame:
 
 def _initial_screening_frame(ranked: pd.DataFrame) -> pd.DataFrame:
     return ranked[[column for column in INITIAL_SCREENING_COLUMNS if column in ranked.columns]].copy()
+
+
+def _recommended_candidate_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    return frame[[column for column in RECOMMENDED_CANDIDATE_COLUMNS if column in frame.columns]].copy()
+
+
+def _order_recommended_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+    if "candidate_pool_rank" not in frame.columns:
+        return frame
+    ordered = frame.copy()
+    ordered["_candidate_pool_rank"] = pd.to_numeric(ordered["candidate_pool_rank"], errors="coerce")
+    ordered["_candidate_variable"] = ordered.get("variable", pd.Series("", index=ordered.index)).astype(str)
+    return ordered.sort_values(["_candidate_pool_rank", "_candidate_variable"], na_position="last", kind="stable").drop(columns=["_candidate_pool_rank", "_candidate_variable"])
 
 
 def _correlation_direction(value: object) -> str:
@@ -5354,6 +5372,10 @@ function evidenceText(items, emptyText = "-") {
 }
 
 function displayCellValue(column, value) {
+  if (column === "candidate_source") {
+    const labels = {raw_only: "原始通道", residual_only: "残差通道", raw_and_residual: "原始与残差双通道", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
+    return labels[value] || value;
+  }
   const formatted = column === "risk_flags" ? formatRiskFlags(value) : formatCellValue(column, value);
   return formatted === "" || formatted === null || formatted === undefined ? "-" : String(formatted);
 }

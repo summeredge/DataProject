@@ -8,6 +8,8 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
         "variable", "final_score", "candidate_grade", "lag", "direction", "raw_corr", "residual_corr",
         "rolling_stability", "regime_stability_final", "lag_boundary_flag", "model_lift_score",
         "risk_level", "risk_flags", "recommended_use", "recommended_action", "force_included",
+        "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
+        "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
         "review_priority", "review_reason", "review_tier",
     ]
     if ranked_features.empty:

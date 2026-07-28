@@ -1259,9 +1259,10 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         control_columns=control_columns,
         primary_rank_column=PRIMARY_RANK_COLUMN,
     )
-    final = final.sort_values("final_score", ascending=False, kind="stable")
+    final = order_initial_candidates(final)
     if top_k is not None and not final["force_included"].any():
         final = final.head(top_k)
+    final["driver_rank"] = np.arange(1, len(final) + 1)
     for c in cols:
         if c not in final.columns:
             final[c] = np.nan
@@ -1277,7 +1278,6 @@ def _finalize_driver_ranking(
 ) -> pd.DataFrame:
     final = final.copy()
     final["driver_priority_score"] = final["final_score"]
-    final["driver_rank"] = final["final_score"].rank(method="first", ascending=False).astype(int)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
@@ -1290,10 +1290,34 @@ def _finalize_driver_ranking(
         rank_base = final
         if control_set:
             rank_base = rank_base[~rank_base["variable"].astype(str).isin(control_set)]
-        top = rank_base.sort_values("final_score", ascending=False, kind="stable").head(top_k)
+        top = order_initial_candidates(rank_base).head(top_k)
         forced_rows = final[final["force_included"]]
         final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
-    return final.sort_values("final_score", ascending=False, kind="stable")
+    final = order_initial_candidates(final)
+    final["driver_rank"] = np.arange(1, len(final) + 1)
+    return final
+
+
+def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Order initial candidates by score, evidence, lag quality, then variable."""
+    if frame.empty:
+        return frame.copy()
+    ordered = frame.copy()
+    ordered["_initial_final_score"] = pd.to_numeric(
+        ordered.get("final_score", pd.Series(np.nan, index=ordered.index)), errors="coerce"
+    ).fillna(-np.inf)
+    ordered["_initial_association_score"] = pd.to_numeric(
+        ordered.get("association_score", pd.Series(np.nan, index=ordered.index)), errors="coerce"
+    ).fillna(-np.inf)
+    ordered["_initial_lag_quality"] = pd.to_numeric(
+        ordered.get("lag_quality", pd.Series(np.nan, index=ordered.index)), errors="coerce"
+    ).fillna(-np.inf)
+    ordered["_initial_variable"] = ordered.get("variable", pd.Series("", index=ordered.index)).astype(str)
+    return ordered.sort_values(
+        ["_initial_final_score", "_initial_association_score", "_initial_lag_quality", "_initial_variable"],
+        ascending=[False, False, False, True],
+        kind="stable",
+    ).drop(columns=["_initial_final_score", "_initial_association_score", "_initial_lag_quality", "_initial_variable"])
 
 
 def _grade_candidate(row: pd.Series) -> str:

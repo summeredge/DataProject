@@ -307,4 +307,5 @@ def test_statistical_screening_contracts_remain_in_source():
     assert "_redundant_proxy_variables" in source
     assert "robust_outlier_ratio" in source
     assert "__squared" in source
-    assert 'sort_values("final_score", ascending=False' in source
+    assert "def order_initial_candidates" in source
+    assert '"_initial_final_score"' in source

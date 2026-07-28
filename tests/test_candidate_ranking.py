@@ -268,4 +268,5 @@ def test_shadow_output_static_guardrails():
     assert 'sort_values("driver_rank")' not in source
     assert 'sort_values("driver_priority_score")' not in source
     assert "PRIMARY_RANK_COLUMN" in source
-    assert 'sort_values("final_score", ascending=False' in source
+    assert "def order_initial_candidates" in source
+    assert '"_initial_final_score"' in source

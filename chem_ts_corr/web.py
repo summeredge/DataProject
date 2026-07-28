@@ -34,6 +34,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.screening import order_initial_candidates
 from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
@@ -102,39 +103,15 @@ SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
-INITIAL_SCREENING_HIDDEN_COLUMNS = {
-    "candidate_class",
-    "driver_priority_factor",
-    "driver_priority_score",
-    "driver_rank",
-    "layer1_association_status",
-    "layer2_temporal_status",
-    "layer3_independence_status",
-    "layer4_model_status",
-    "four_layer_coverage_status",
-    "four_layer_missing_items",
-    "evidence_support_items",
-    "evidence_against_items",
-    "evidence_conflict_items",
-    "candidate_summary",
-    "regime_stability_final",
-    "regime_consistency_score",
-    "regime_coverage",
-    "regime_strength_consistency",
-    "regime_sign_consistency",
-    "regime_lag_consistency",
-    "regime_count",
-    "regime_status",
-    "rolling_stability",
-    "rolling_status",
-    "stability_score",
-    "stability_status",
-    "model_lift_score",
-    "model_lift_status",
-    "prediction_score",
-    "evidence_coverage_status",
-    "evidence_missing_items",
-}
+INITIAL_SCREENING_COLUMNS = (
+    "variable", "final_score", "pearson", "spearman", "method", "dominant_corr",
+    "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
+    "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
+    "human_reason", "recommended_use", "recommended_action", "force_included",
+    "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
+    "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
+    "corr_q_value", "pearson_r2", "spearman_r2",
+)
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -658,7 +635,7 @@ def _non_negative_seconds(value: object) -> float:
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    ranked = order_initial_candidates(_safe_read_result_csv(output_dir / "ranked_features.csv"))
     display_ranked = _with_correlation_display_fields(_initial_screening_frame(ranked))
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
@@ -1847,11 +1824,7 @@ def _overview_payload(
 ) -> dict[str, Any]:
     high_risk = int((risk.get("risk_count", pd.Series(dtype=float)) > 0).sum()) if not risk.empty else 0
     review = int((ranked.get("recommended_use", pd.Series(dtype=str)).astype(str) == "prediction_candidate").sum()) if not ranked.empty else 0
-    overview_ranked = (
-        ranked.sort_values("final_score", ascending=False, kind="stable")
-        if "final_score" in ranked.columns
-        else ranked
-    )
+    overview_ranked = ranked
     return {
         "top10": _records(overview_ranked.head(10)),
         "effective_variables": int(len(ranked)),
@@ -1981,7 +1954,7 @@ def _with_correlation_display_fields(ranked: pd.DataFrame) -> pd.DataFrame:
 
 
 def _initial_screening_frame(ranked: pd.DataFrame) -> pd.DataFrame:
-    return ranked.drop(columns=sorted(INITIAL_SCREENING_HIDDEN_COLUMNS), errors="ignore").copy()
+    return ranked[[column for column in INITIAL_SCREENING_COLUMNS if column in ranked.columns]].copy()
 
 
 def _correlation_direction(value: object) -> str:
@@ -4348,10 +4321,16 @@ function stddev(values) {
 
 const candidateTable = "table";
 const candidateCoreColumns = coreCandidateColumns;
+const INITIAL_SCREENING_DETAIL_COLUMNS = [
+  "dominant_corr", "lag_quality", "lag_quality_status", "lag_boundary_flag", "n",
+  "data_quality_score", "risk_level", "human_reason", "recommended_action", "force_included",
+  "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status",
+  "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2",
+];
 
 function candidateDetailColumns(row) {
   const core = new Set(candidateCoreColumns());
-  return Object.keys(row || {}).filter((column) => !core.has(column));
+  return INITIAL_SCREENING_DETAIL_COLUMNS.filter((column) => !core.has(column) && Object.prototype.hasOwnProperty.call(row || {}, column));
 }
 
 const CORRELATION_OVERVIEW_COLUMNS = [
@@ -4474,7 +4453,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"];
+  return ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -5020,7 +4999,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],

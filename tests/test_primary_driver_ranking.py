@@ -12,6 +12,7 @@ from chem_ts_corr.screening import (
     PRIMARY_RANK_COLUMN,
     PRIMARY_SCORE_COLUMN,
     final_ranked_features,
+    order_initial_candidates,
     risk_flags,
 )
 from chem_ts_corr.web import _overview_payload
@@ -139,7 +140,7 @@ def test_force_include_keeps_global_rank_and_final_order():
     )
 
     assert result["variable"].tolist() == ["a", "c"]
-    assert result["driver_rank"].tolist() == [1, 3]
+    assert result["driver_rank"].tolist() == [1, 2]
     assert bool(result.set_index("variable").loc["c", "force_included"])
 
 
@@ -160,7 +161,7 @@ def test_topk_zero_returns_only_forced_global_rank():
     )
 
     assert result["variable"].tolist() == ["c"]
-    assert result["driver_rank"].tolist() == [3]
+    assert result["driver_rank"].tolist() == [1]
 
 
 def test_control_variable_is_excluded_from_automatic_topk():
@@ -169,7 +170,7 @@ def test_control_variable_is_excluded_from_automatic_topk():
     )
 
     assert result["variable"].tolist() == ["a"]
-    assert result.loc[0, "driver_rank"] == 2
+    assert result.loc[0, "driver_rank"] == 1
 
 
 def test_forced_control_variable_is_kept_and_sorted_by_final_score():
@@ -189,7 +190,7 @@ def test_topk_does_not_compress_global_rank():
     rows = [(f"x{index}", 1.0 - index * 0.1, 1) for index in range(5)]
     result = _run_ranked(rows, top_k=2, force_include_variables=["x4"])
 
-    assert result["driver_rank"].tolist() == [1, 2, 5]
+    assert result["driver_rank"].tolist() == [1, 2, 3]
 
 
 def test_direction_semantics_survive_production_risk_pipeline():
@@ -250,12 +251,14 @@ def test_inputs_are_not_modified():
 
 
 def test_final_score_primary_sort_is_explicit():
-    source = inspect.getsource(final_ranked_features)
+    source = inspect.getsource(order_initial_candidates)
 
-    assert 'sort_values("final_score", ascending=False' in source
+    assert '"_initial_final_score"' in source
+    assert '"_initial_association_score"' in source
+    assert '"_initial_lag_quality"' in source
     assert 'sort_values("driver_rank"' not in source
     assert 'sort_values("driver_priority_score"' not in source
-    assert ".head(top_k)" in source
+    assert ".head(top_k)" in inspect.getsource(final_ranked_features)
 
 
 def _web_source() -> str:

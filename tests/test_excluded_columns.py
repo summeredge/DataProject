@@ -78,12 +78,8 @@ def test_main_analysis_removes_columns_from_every_variable_result(tmp_path: Path
     for filename in [
         "diagnostics.csv",
         "lag_scores.csv",
-        "residual_corr_scores.csv",
-        "regime_scores.csv",
         "risk_flags.csv",
         "ranked_features.csv",
-        "model_lift_scores.csv",
-        "rolling_corr_scores.csv",
     ]:
         result = pd.read_csv(config.output_dir / filename, encoding="utf-8-sig")
         assert "excluded_columns" not in result.columns
@@ -225,4 +221,4 @@ def test_second_initial_analysis_with_one_of_eleven_variables_excluded_keeps_ali
     assert not ranked.empty
     assert "x10" not in set(ranked["variable"].astype(str))
     assert web._scaled_frame_cache_key(first) != web._scaled_frame_cache_key(second)
-    assert (second.output_dir / "model_lift_scores.csv").read_text(encoding="utf-8-sig").splitlines() == ["variable"]
+    assert not (second.output_dir / "model_lift_scores.csv").exists()

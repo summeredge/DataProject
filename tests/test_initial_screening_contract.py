@@ -4,16 +4,33 @@ import inspect
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from chem_ts_corr import screening
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.report import build_recommended_candidates, build_markdown_summary
+from chem_ts_corr.report import build_recommended_candidates, build_markdown_summary, write_outputs
 from chem_ts_corr.screening import final_ranked_features
 from chem_ts_corr.service import analyze_numeric_frame
 from chem_ts_corr.web import INDEX_HTML, _build_result_payload
 
 
 FORBIDDEN_INITIAL_FIELDS = {
+    "evidence_completeness",
+    "evidence_available_count",
+    "evidence_coverage_status",
+    "evidence_missing_items",
+    "evidence_score_low",
+    "evidence_score_high",
+    "score_method",
+    "prediction_score",
+    "model_lift_score",
+    "model_lift_status",
+    "stability_score",
+    "stability_status",
+    "rolling_stability",
+    "rolling_status",
+    "regime_stability_final",
+    "regime_status",
     "layer1_association_status",
     "layer2_temporal_status",
     "layer3_independence_status",
@@ -24,6 +41,23 @@ FORBIDDEN_INITIAL_FIELDS = {
     "evidence_against_items",
     "evidence_conflict_items",
     "candidate_summary",
+}
+
+INITIAL_SCREENING_FIELDS = {
+    "variable", "final_score", "pearson", "spearman", "method", "dominant_corr",
+    "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
+    "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
+    "human_reason", "recommended_use", "recommended_action", "force_included",
+    "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
+    "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
+    "corr_q_value", "pearson_r2", "spearman_r2",
+}
+
+FOLLOWUP_OUTPUTS = {
+    "granger_tests.csv", "shap_or_importance.csv", "residual_corr_scores.csv",
+    "regime_scores.csv", "model_lift_scores.csv", "rolling_corr_scores.csv",
+    "enhanced_validation_summary.csv", "conditional_granger_scores.csv",
+    "causal_review_report.csv", "causal_review_evidence.csv", "final_review_summary.csv",
 }
 
 
@@ -86,7 +120,7 @@ def test_initial_screening_orders_candidates_by_final_score_descending(monkeypat
 
     assert result.set_index("variable").loc["high_final", "final_score"] > result.set_index("variable").loc["low_final", "final_score"]
     assert result.set_index("variable").loc["high_final", "driver_priority_score"] < result.set_index("variable").loc["low_final", "driver_priority_score"]
-    assert result.set_index("variable").loc["high_final", "driver_rank"] > result.set_index("variable").loc["low_final", "driver_rank"]
+    assert result.set_index("variable").loc["high_final", "driver_rank"] < result.set_index("variable").loc["low_final", "driver_rank"]
     assert result["variable"].tolist() == ["high_final", "low_final"]
 
 
@@ -95,7 +129,7 @@ def test_initial_screening_top_k_uses_final_score_not_driver_priority_score(monk
     result = _run_ranked([("high_final", 0.90, -1), ("low_final", 0.80, 1)], top_k=1)
 
     assert result.loc[0, "driver_priority_score"] < 0.5
-    assert result.loc[0, "driver_rank"] == 2
+    assert result.loc[0, "driver_rank"] == 1
     assert result["variable"].tolist() == ["high_final"]
 
 
@@ -106,7 +140,7 @@ def test_initial_recommendations_preserve_final_score_order(monkeypatch):
 
     assert recommendations["variable"].tolist() == ["high_final", "low_final"]
     assert recommendations["final_score"].tolist() == [0.90, 0.80]
-    assert recommendations["driver_priority_score"].tolist() == [0.10, 0.20]
+    assert recommendations["driver_priority_score"].tolist() == pytest.approx([0.10, 0.20])
 
 
 def test_closed_loop_legacy_inputs_do_not_change_initial_results():
@@ -135,14 +169,9 @@ def test_initial_api_filters_four_layer_fields(tmp_path: Path):
             {
                 "variable": "x",
                 "final_score": 0.8,
-                "driver_rank": 1,
-                "driver_priority_score": 0.8,
-                **{field: "supported" for field in FORBIDDEN_INITIAL_FIELDS if field.endswith("status")},
-                "four_layer_missing_items": "",
-                "evidence_support_items": "Layer 1",
-                "evidence_against_items": "",
-                "evidence_conflict_items": "",
-                "candidate_summary": "四层解释",
+                **{field: "forbidden" for field in FORBIDDEN_INITIAL_FIELDS},
+                "pearson": 0.7,
+                "lag": 2,
             }
         ]
     )
@@ -153,12 +182,14 @@ def test_initial_api_filters_four_layer_fields(tmp_path: Path):
     payload = _build_result_payload("run", tmp_path, config)
     assert not (FORBIDDEN_INITIAL_FIELDS & set(payload["rankedFeatures"][0]))
     assert not (FORBIDDEN_INITIAL_FIELDS & set(payload["overview"]["top10"][0]))
+    assert set(payload["rankedFeatures"][0]) <= INITIAL_SCREENING_FIELDS
+    assert set(payload["overview"]["top10"][0]) <= INITIAL_SCREENING_FIELDS
 
 
 def test_initial_web_contract_excludes_four_layer_fields():
     initial_blocks = [
-        INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("function renderCompactDetailTable", 1)[0],
-        INDEX_HTML.split("function renderScreeningScoreDetails", 1)[1].split("function timeRelationshipExplanation", 1)[0],
+        INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}\n", 1)[0],
+        INDEX_HTML.split("const INITIAL_SCREENING_DETAIL_COLUMNS", 1)[1].split("];", 1)[0],
         INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0],
     ]
 
@@ -167,6 +198,47 @@ def test_initial_web_contract_excludes_four_layer_fields():
     assert '"final_score"' in initial_blocks[0]
     assert '"pearson"' in initial_blocks[0]
     assert '"spearman"' in initial_blocks[0]
+
+
+def test_initial_detail_columns_are_whitelisted():
+    detail_source = INDEX_HTML.split("function candidateDetailColumns(row)", 1)[1].split("function renderCandidateTable", 1)[0]
+
+    assert "Object.keys(row" not in detail_source
+    assert "INITIAL_SCREENING_DETAIL_COLUMNS" in detail_source
+    assert "driver_priority_score" not in detail_source
+
+
+def test_initial_write_outputs_does_not_create_followup_placeholders(tmp_path: Path):
+    ranked = pd.DataFrame([{"variable": "x", "final_score": 0.8, "candidate_grade": "A", "recommended_use": "prediction_candidate"}])
+    write_outputs(
+        tmp_path, "target", ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {},
+    )
+
+    assert not {path.name for path in tmp_path.iterdir()} & FOLLOWUP_OUTPUTS
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+    payload = _build_result_payload("run", tmp_path, config)
+    assert not ({item["name"] for item in payload["downloads"]} & FOLLOWUP_OUTPUTS)
+    assert payload["enhancedValidationSummary"] == []
+    assert payload["grangerTests"] == []
+    assert payload["importance"] == []
+
+
+def test_initial_tie_break_order_is_independent_of_input_order(monkeypatch):
+    original = screening._finalize_driver_ranking
+
+    def force_tied_final_scores(frame, *args, **kwargs):
+        result = original(frame, *args, **kwargs)
+        result["final_score"] = 0.8
+        result["association_score"] = result["variable"].map({"a": 0.7, "b": 0.8, "c": 0.8})
+        result["lag_quality"] = result["variable"].map({"a": 0.9, "b": 0.7, "c": 0.7})
+        result["driver_priority_score"] = result["variable"].map({"a": 0.9, "b": 0.1, "c": 0.2})
+        return result
+
+    monkeypatch.setattr(screening, "_finalize_driver_ranking", force_tied_final_scores)
+    result = _run_ranked([("c", 0.8, 1), ("a", 0.8, 1), ("b", 0.8, 1)])
+
+    assert result["variable"].tolist() == ["b", "c", "a"]
+    assert result["driver_rank"].tolist() == [1, 2, 3]
 
 
 def test_initial_analysis_does_not_expose_unexecuted_followup_results(tmp_path: Path):
@@ -203,7 +275,11 @@ def test_initial_screening_source_has_no_four_layer_explanation_call():
     source = inspect.getsource(final_ranked_features)
 
     assert "add_evidence_explanations" not in source
-    assert not any(field in source for field in FORBIDDEN_INITIAL_FIELDS)
+    assert not any(field in source for field in {
+        "layer1_association_status", "layer2_temporal_status", "layer3_independence_status",
+        "layer4_model_status", "four_layer_coverage_status", "four_layer_missing_items",
+        "evidence_support_items", "evidence_against_items", "evidence_conflict_items", "candidate_summary",
+    })
 
 
 def test_summary_restores_initial_screening_positioning():

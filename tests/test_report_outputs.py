@@ -50,7 +50,6 @@ def test_write_outputs_writes_expected_files(tmp_path: Path):
         "recommended_candidates.csv",
         "lag_scores.csv",
         "risk_flags.csv",
-        "rolling_corr_scores.csv",
         "causal_review_candidates.csv",
         "summary.md",
     ]:

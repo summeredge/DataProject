@@ -6,8 +6,8 @@ import pandas as pd
 
 from chem_ts_corr.common import to_int
 from chem_ts_corr.causal_review import build_causal_review_candidates
-from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.near_miss import build_near_miss_candidates
+from chem_ts_corr.screening import order_initial_candidates
 
 
 DISPLAY_SCORE_COLUMNS = {
@@ -45,17 +45,6 @@ def write_outputs(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_variable_importance = build_model_variable_importance(
-        importance,
-        ranked_features,
-        risk_flags=risk_flags,
-    )
-    model_discovered = build_model_discovered_candidates(
-        importance,
-        ranked_features,
-        risk_flags=risk_flags,
-        max_lag=_metric_int(metrics, "max_lag"),
-    )
     near_miss = build_near_miss_candidates(
         lag_scores,
         ranked_features,
@@ -70,18 +59,10 @@ def write_outputs(
         "recommended_candidates.csv": build_recommended_candidates(ranked_features),
         "causal_review_candidates.csv": build_causal_review_candidates(ranked_features),
         "lag_scores.csv": lag_scores,
-        "granger_tests.csv": granger_tests,
-        "shap_or_importance.csv": importance,
-        "model_variable_importance.csv": model_variable_importance,
-        "model_discovered_candidates.csv": model_discovered,
         "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,
-        "residual_corr_scores.csv": residual_corr_scores,
-        "regime_scores.csv": regime_scores,
         "risk_flags.csv": risk_flags,
-        "model_lift_scores.csv": model_lift_scores,
         "lag_peak_quality.csv": lag_peak_quality,
-        "rolling_corr_scores.csv": rolling_corr_scores,
     }
     for name, frame in files.items():
         (frame if frame is not None else pd.DataFrame()).to_csv(
@@ -247,7 +228,7 @@ def _format_cell(value: object, column: str = "") -> str:
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
         return pd.DataFrame(columns=["variable", "final_score", "candidate_grade", "recommended_use", "fallback_reason"])
-    ordered = ranked_features.sort_values("final_score", ascending=False, kind="stable") if "final_score" in ranked_features.columns else ranked_features.copy()
+    ordered = order_initial_candidates(ranked_features)
     ab = ordered[ordered.get("candidate_grade", pd.Series(index=ordered.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:

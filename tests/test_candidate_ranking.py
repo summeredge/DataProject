@@ -195,7 +195,7 @@ def test_main_output_order_and_topk_use_final_score():
         top_k=1,
     )
 
-    assert result["variable"].tolist() == ["a"]
+    assert result["variable"].tolist() == ["a", "b"]
     assert result.loc[0, "driver_rank"] == 1
 
 

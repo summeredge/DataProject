@@ -37,7 +37,7 @@ def test_secondary_variables_include_topk_forced_and_extra():
         extra_variables=["X", "B", "Y"],
     )
 
-    assert variables == ["A", "B", "X", "Y"]
+    assert variables == ["A", "B", "C", "D", "X", "Y"]
 
 
 def test_secondary_variables_include_config_forced_when_no_force_column():
@@ -57,7 +57,7 @@ def test_secondary_variables_include_config_forced_when_no_force_column():
         extra_variables=["D", "A"],
     )
 
-    assert variables == ["A", "C", "D"]
+    assert variables == ["A", "B", "C", "D"]
 
 
 def test_secondary_lag_search_changed_normalizes_resample_rule():

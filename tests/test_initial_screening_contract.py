@@ -50,6 +50,7 @@ INITIAL_SCREENING_FIELDS = {
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
     "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
     "human_reason", "recommended_use", "recommended_action", "force_included",
+    "variable_role", "is_residual_control", "is_capacity_reference", "is_segment_reference",
     "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
     "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
     "corr_q_value", "pearson_r2", "spearman_r2",
@@ -126,13 +127,13 @@ def test_initial_screening_orders_candidates_by_final_score_descending(monkeypat
     assert result["variable"].tolist() == ["high_final", "low_final"]
 
 
-def test_initial_screening_top_k_uses_final_score_not_driver_priority_score(monkeypatch):
+def test_initial_screening_top_k_does_not_truncate_complete_final_score_order(monkeypatch):
     _inject_opposed_compatibility_priorities(monkeypatch)
     result = _run_ranked([("high_final", 0.90, -1), ("low_final", 0.80, 1)], top_k=1)
 
     assert result.loc[0, "driver_priority_score"] < 0.5
     assert result.loc[0, "driver_rank"] == 1
-    assert result["variable"].tolist() == ["high_final"]
+    assert result["variable"].tolist() == ["high_final", "low_final"]
 
 
 def test_initial_recommendations_preserve_final_score_order(monkeypatch):

@@ -1075,7 +1075,7 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
     return pd.DataFrame(rows, columns=cols)
 
 
-def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
+def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None, capacity_columns: list[str] | None = None, segment_column: str | None = None) -> pd.DataFrame:
     cols = [
         "variable", "lag", "direction", "pearson", "spearman", "method",
         "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value",
@@ -1090,6 +1090,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         "risk_cap_reason", "final_score", "association_rank", "candidate_class",
         "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade",
         "recommended_use", "recommended_action", "force_included", "engineering_context",
+        "is_residual_control", "is_capacity_reference", "is_segment_reference", "variable_role",
     ]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -1255,13 +1256,12 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     final = _finalize_driver_ranking(
         final,
         force_include_variables=force_include_variables,
-        top_k=top_k,
         control_columns=control_columns,
+        capacity_columns=capacity_columns,
+        segment_column=segment_column,
         primary_rank_column=PRIMARY_RANK_COLUMN,
     )
     final = order_initial_candidates(final)
-    if top_k is not None and not final["force_included"].any():
-        final = final.head(top_k)
     final["driver_rank"] = np.arange(1, len(final) + 1)
     for c in cols:
         if c not in final.columns:
@@ -1274,6 +1274,8 @@ def _finalize_driver_ranking(
     force_include_variables: list[str] | None = None,
     top_k: int | None = None,
     control_columns: list[str] | None = None,
+    capacity_columns: list[str] | None = None,
+    segment_column: str | None = None,
     primary_rank_column: str = PRIMARY_RANK_COLUMN,
 ) -> pd.DataFrame:
     final = final.copy()
@@ -1282,20 +1284,43 @@ def _finalize_driver_ranking(
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
     final["recommended_use"] = final.apply(_recommend_use, axis=1)
-    control_set = set(control_columns or [])
-    if control_set:
-        final.loc[final["variable"].astype(str).isin(control_set), "recommended_use"] = "control_variable_reference"
+    variables = final["variable"].astype(str)
+    residual_set = {str(value) for value in (control_columns or [])}
+    capacity_set = {str(value) for value in (capacity_columns or [])}
+    final["is_residual_control"] = variables.isin(residual_set)
+    final["is_capacity_reference"] = variables.isin(capacity_set)
+    final["is_segment_reference"] = bool(segment_column) & variables.eq(str(segment_column))
+    final["variable_role"] = np.select(
+        [final["is_residual_control"], final["is_capacity_reference"], final["is_segment_reference"]],
+        ["residual_control", "capacity_reference", "segment_reference"],
+        default="candidate",
+    )
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
-    if top_k is not None:
-        rank_base = final
-        if control_set:
-            rank_base = rank_base[~rank_base["variable"].astype(str).isin(control_set)]
-        top = order_initial_candidates(rank_base).head(top_k)
-        forced_rows = final[final["force_included"]]
-        final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
     final = order_initial_candidates(final)
     final["driver_rank"] = np.arange(1, len(final) + 1)
     return final
+
+
+def build_recommended_candidates(
+    ranked_features: pd.DataFrame,
+    top_k: int | None,
+    force_include_variables: list[str] | None = None,
+    exclude_control_columns: bool = True,
+) -> pd.DataFrame:
+    """Build the downstream candidate pool from the complete initial ranking."""
+    if ranked_features.empty:
+        return ranked_features.copy(deep=True)
+    frame = ranked_features.copy(deep=True)
+    forced = {str(value) for value in (force_include_variables or [])}
+    variable = frame["variable"].astype(str)
+    reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
+    references = frame.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1)
+    eligible = ~references if exclude_control_columns else pd.Series(True, index=frame.index)
+    top = order_initial_candidates(frame.loc[eligible]).head(top_k) if top_k is not None else order_initial_candidates(frame.loc[eligible])
+    forced_rows = frame.loc[variable.isin(forced)]
+    return order_initial_candidates(
+        pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
+    ).reset_index(drop=True)
 
 
 def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:

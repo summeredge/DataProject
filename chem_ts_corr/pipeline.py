@@ -37,6 +37,7 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, fl
         config.output_dir,
         target=config.target,
         ranked_features=tables.ranked_features,
+        recommended_candidates=getattr(tables, "recommended_candidates", None),
         lag_scores=tables.lag_scores,
         granger_tests=tables.granger_tests,
         importance=tables.importance,

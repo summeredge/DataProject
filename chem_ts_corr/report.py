@@ -7,7 +7,10 @@ import pandas as pd
 from chem_ts_corr.common import to_int
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.near_miss import build_near_miss_candidates
-from chem_ts_corr.screening import order_initial_candidates
+from chem_ts_corr.screening import (
+    build_recommended_candidates as _build_recommended_candidates,
+    order_initial_candidates,
+)
 
 
 DISPLAY_SCORE_COLUMNS = {
@@ -42,6 +45,7 @@ def write_outputs(
     model_lift_scores: pd.DataFrame | None = None,
     lag_peak_quality: pd.DataFrame | None = None,
     rolling_corr_scores: pd.DataFrame | None = None,
+    recommended_candidates: pd.DataFrame | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -56,7 +60,7 @@ def write_outputs(
 
     files = {
         "ranked_features.csv": ranked_features,
-        "recommended_candidates.csv": build_recommended_candidates(ranked_features),
+        "recommended_candidates.csv": recommended_candidates if recommended_candidates is not None else build_recommended_candidates(ranked_features),
         "causal_review_candidates.csv": build_causal_review_candidates(ranked_features),
         "lag_scores.csv": lag_scores,
         "near_miss_candidates.csv": near_miss,
@@ -103,6 +107,17 @@ def build_markdown_summary(
     lines = [f"# 初步筛选摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
+    reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
+    control_reference_count = int(
+        ranked_features.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1).sum()
+    )
+    lines.extend(
+        [
+            f"- 有效分析变量数量: {len(ranked_features)}",
+            f"- 重点候选数量: {_metric_int(metrics, 'recommended_candidate_count') or 0}",
+            f"- 控制/负荷参考变量数量: {control_reference_count}",
+        ]
+    )
 
     lines.extend(["", "## 强初筛候选", ""])
     lines.extend(_table_lines(_core_columns(strong).head(15)))
@@ -226,14 +241,4 @@ def _format_cell(value: object, column: str = "") -> str:
 
 
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
-    if ranked_features.empty:
-        return pd.DataFrame(columns=["variable", "final_score", "candidate_grade", "recommended_use", "fallback_reason"])
-    ordered = order_initial_candidates(ranked_features)
-    ab = ordered[ordered.get("candidate_grade", pd.Series(index=ordered.index, dtype=str)).isin(["A", "B"])].copy()
-    if not ab.empty:
-        if "fallback_reason" not in ab.columns:
-            ab["fallback_reason"] = ""
-        return ab
-    top = ordered.head(10).copy()
-    top["fallback_reason"] = "no_A_or_B_candidates"
-    return top
+    return _build_recommended_candidates(ranked_features, top_k=None)

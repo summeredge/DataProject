@@ -163,7 +163,7 @@ def test_ranking_and_topk_use_final_score_descending():
     assert result["driver_priority_score"].tolist() == pytest.approx(result["final_score"])
     assert result["driver_priority_factor"].tolist() == pytest.approx([1.0, 1.0])
     assert result["driver_rank"].tolist() == [1, 2]
-    assert top["variable"].tolist() == ["a"]
+    assert top["variable"].tolist() == ["a", "b"]
 
 
 def _summary_frame() -> pd.DataFrame:

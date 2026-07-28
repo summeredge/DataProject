@@ -21,7 +21,9 @@ def test_control_column_excluded_from_top_by_default():
         ranked, residual, stability, lift, risks, lag_peak, rolling,
         force_include_variables=[], top_k=1, control_columns=["ctrl"],
     )
-    assert out.iloc[0]["variable"] == "sig"
+    assert out.iloc[0]["variable"] == "ctrl"
+    assert out["variable"].tolist() == ["ctrl", "sig"]
+    assert out.iloc[0]["variable_role"] == "residual_control"
 
 
 def test_control_column_can_be_force_included_and_marked_reference():
@@ -32,7 +34,7 @@ def test_control_column_can_be_force_included_and_marked_reference():
     )
     ctrl = out[out["variable"] == "ctrl"].iloc[0]
     assert bool(ctrl["force_included"]) is True
-    assert ctrl["recommended_use"] == "control_variable_reference"
+    assert ctrl["variable_role"] == "residual_control"
 
 
 def test_control_variable_reference_has_recommended_action_text():

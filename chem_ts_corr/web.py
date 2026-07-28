@@ -108,6 +108,7 @@ INITIAL_SCREENING_COLUMNS = (
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
     "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
     "human_reason", "recommended_use", "recommended_action", "force_included",
+    "variable_role", "is_residual_control", "is_capacity_reference", "is_segment_reference",
     "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
     "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
     "corr_q_value", "pearson_r2", "spearman_r2",
@@ -636,6 +637,7 @@ def _non_negative_seconds(value: object) -> float:
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
     ranked = order_initial_candidates(_safe_read_result_csv(output_dir / "ranked_features.csv"))
+    recommended = order_initial_candidates(_safe_read_result_csv(output_dir / "recommended_candidates.csv"))
     display_ranked = _with_correlation_display_fields(_initial_screening_frame(ranked))
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
@@ -653,8 +655,9 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     return {
         "run_id": run_id,
         "analysisContext": {"preprocess_mode": config.preprocess_mode},
-        "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary)),
+        "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary), recommended),
         "rankedFeatures": _records(display_ranked.head(50)),
+        "recommendedCandidates": _records(_initial_screening_frame(recommended).head(50)),
         "riskFlags": _records(risky.head(50)),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
@@ -725,9 +728,12 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查并生成 ranked_features.csv")
+    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
+    if recommended.empty:
+        raise ValueError("请先完成主筛查并生成 recommended_candidates.csv")
 
     variables = _secondary_variables_from_ranked(
-        ranked,
+        recommended,
         base_config,
         extra_variables=extra_variables,
     )
@@ -871,10 +877,11 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     secondary_config = _secondary_config_from_form(base_config, form)
     extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
+    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
+    if ranked.empty or recommended.empty:
         raise ValueError("请先完成主筛查")
     variables = _secondary_variables_from_ranked(
-        ranked,
+        recommended,
         base_config,
         extra_variables=extra_variables,
     )
@@ -905,10 +912,11 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     secondary_config = _secondary_config_from_form(base_config, form)
     extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
+    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
+    if ranked.empty or recommended.empty:
         raise ValueError("请先完成主筛查")
     variables = _secondary_variables_from_ranked(
-        ranked,
+        recommended,
         base_config,
         extra_variables=extra_variables,
     )
@@ -1258,7 +1266,7 @@ def _secondary_variables_from_ranked(
     )
     if ranked.empty or "variable" not in ranked.columns:
         return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
-    top = ranked.head(config.top_k)["variable"].astype(str).tolist()
+    top = ranked["variable"].astype(str).tolist()
     if "force_included" in ranked.columns:
         forced = ranked[ranked["force_included"].astype(bool)]["variable"].astype(str).tolist()
     else:
@@ -1820,14 +1828,18 @@ def _scatter_matrix_response(params: dict[str, list[str]]) -> dict[str, Any]:
 
 
 def _overview_payload(
-    ranked: pd.DataFrame, risk: pd.DataFrame, config: AnalysisConfig, metrics: dict[str, str]
+    ranked: pd.DataFrame, risk: pd.DataFrame, config: AnalysisConfig, metrics: dict[str, str], recommended: pd.DataFrame | None = None
 ) -> dict[str, Any]:
     high_risk = int((risk.get("risk_count", pd.Series(dtype=float)) > 0).sum()) if not risk.empty else 0
     review = int((ranked.get("recommended_use", pd.Series(dtype=str)).astype(str) == "prediction_candidate").sum()) if not ranked.empty else 0
     overview_ranked = ranked
+    reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
+    control_reference_count = int(ranked.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1).sum())
     return {
         "top10": _records(overview_ranked.head(10)),
         "effective_variables": int(len(ranked)),
+        "recommended_candidate_count": int(len(recommended)) if recommended is not None else 0,
+        "control_reference_count": control_reference_count,
         "risk_tagged_count": high_risk,
         "high_risk_count": high_risk,
         "secondary_review_count": review,
@@ -2536,7 +2548,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
-        <h2>前 10 个推荐变量</h2>
+        <h2>初步分析 Top 10</h2>
         <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <section id="candidatesTab">
@@ -4969,7 +4981,9 @@ function renderRowDetails(row) {
 function renderOverview(overview) {
   const metrics = [
     ["数据规模", overview.rows_after_preprocess ?? overview.rows_after_segment ?? ""],
-    ["有效变量数量", overview.effective_variables ?? ""],
+    ["有效分析变量数量", overview.effective_variables ?? ""],
+    ["重点候选数量", overview.recommended_candidate_count ?? ""],
+    ["控制/负荷参考变量数量", overview.control_reference_count ?? ""],
     ["有风险标签变量数量", overview.risk_tagged_count ?? overview.high_risk_count ?? ""],
     ["建议二级复核变量数量", overview.secondary_review_count ?? ""],
   ];
@@ -5381,7 +5395,7 @@ function missingText(targetId) {
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
-  if (targetId === "overviewTop") return "暂无前 10 个推荐变量。";
+  if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
   return "无可展示结果。";
 }
 

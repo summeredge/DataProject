@@ -11,6 +11,7 @@ import pytest
 from chem_ts_corr.screening import (
     PRIMARY_RANK_COLUMN,
     PRIMARY_SCORE_COLUMN,
+    build_recommended_candidates,
     final_ranked_features,
     order_initial_candidates,
     risk_flags,
@@ -95,8 +96,11 @@ def test_overview_payload_orders_by_final_score():
     assert [row["variable"] for row in overview["top10"]] == ["risky", "safe"]
 
 
-def test_topk_selects_highest_final_score():
-    assert _reversal(top_k=1)["variable"].tolist() == ["a"]
+def test_topk_does_not_truncate_complete_ranking():
+    result = _reversal(top_k=1)
+
+    assert result["variable"].tolist() == ["a", "b"]
+    assert result["driver_rank"].tolist() == [1, 2]
 
 
 def test_association_and_primary_ranks_follow_same_score_order():
@@ -122,6 +126,13 @@ def test_equal_scores_keep_input_order():
     assert result["driver_rank"].tolist() == [1, 2]
 
 
+def test_complete_ranking_is_stable_when_input_column_order_changes():
+    first = _run_ranked([("b", 0.8, 1), ("a", 0.8, 1)])
+    second = _run_ranked([("a", 0.8, 1), ("b", 0.8, 1)])
+
+    assert first["variable"].tolist() == second["variable"].tolist() == ["a", "b"]
+
+
 def test_final_score_is_monotonic_without_topk():
     result = _run_ranked(
         [("down", 0.9, -1), ("up", 0.58, 1), ("sync", 0.7, 0), ("capacity", 0.8, 1)],
@@ -132,45 +143,48 @@ def test_final_score_is_monotonic_without_topk():
     assert result["driver_rank"].is_monotonic_increasing
 
 
-def test_force_include_keeps_global_rank_and_final_order():
+def test_force_include_marks_complete_ranking_without_changing_it():
     result = _run_ranked(
         [("a", 0.9, 1), ("b", 0.8, 1), ("c", 0.7, 1)],
         top_k=1,
         force_include_variables=["c"],
     )
 
-    assert result["variable"].tolist() == ["a", "c"]
-    assert result["driver_rank"].tolist() == [1, 2]
+    assert result["variable"].tolist() == ["a", "b", "c"]
+    assert result["driver_rank"].tolist() == [1, 2, 3]
     assert bool(result.set_index("variable").loc["c", "force_included"])
 
 
-def test_force_include_duplicate_is_deduplicated():
+def test_force_include_does_not_remove_other_complete_results():
     result = _run_ranked(
         [("a", 0.9, 1), ("b", 0.8, 1)], top_k=1, force_include_variables=["a"]
     )
 
-    assert result["variable"].tolist() == ["a"]
+    assert result["variable"].tolist() == ["a", "b"]
     assert bool(result.loc[0, "force_included"])
 
 
-def test_topk_zero_returns_only_forced_global_rank():
+def test_topk_zero_does_not_truncate_complete_ranking():
     result = _run_ranked(
         [("a", 0.9, 1), ("b", 0.8, 1), ("c", 0.7, 1)],
         top_k=0,
         force_include_variables=["c"],
     )
 
-    assert result["variable"].tolist() == ["c"]
-    assert result["driver_rank"].tolist() == [1]
+    assert result["variable"].tolist() == ["a", "b", "c"]
+    assert result["driver_rank"].tolist() == [1, 2, 3]
 
 
-def test_control_variable_is_excluded_from_automatic_topk():
+def test_control_variable_remains_in_complete_ranking_with_role():
     result = _run_ranked(
         [("ctrl", 0.9, 1), ("a", 0.8, 1)], top_k=1, control_columns=["ctrl"]
     )
 
-    assert result["variable"].tolist() == ["a"]
-    assert result.loc[0, "driver_rank"] == 1
+    assert result["variable"].tolist() == ["ctrl", "a"]
+    assert result["driver_rank"].tolist() == [1, 2]
+    control = result.set_index("variable").loc["ctrl"]
+    assert bool(control["is_residual_control"])
+    assert control["variable_role"] == "residual_control"
 
 
 def test_forced_control_variable_is_kept_and_sorted_by_final_score():
@@ -183,14 +197,49 @@ def test_forced_control_variable_is_kept_and_sorted_by_final_score():
 
     assert result["variable"].tolist() == ["ctrl", "a"]
     assert result["driver_rank"].tolist() == [1, 2]
-    assert result.set_index("variable").loc["ctrl", "recommended_use"] == "control_variable_reference"
+    assert result.set_index("variable").loc["ctrl", "variable_role"] == "residual_control"
 
 
 def test_topk_does_not_compress_global_rank():
     rows = [(f"x{index}", 1.0 - index * 0.1, 1) for index in range(5)]
     result = _run_ranked(rows, top_k=2, force_include_variables=["x4"])
 
-    assert result["driver_rank"].tolist() == [1, 2, 3]
+    assert result["driver_rank"].tolist() == [1, 2, 3, 4, 5]
+
+
+def test_recommended_candidates_exclude_references_and_keep_forced_reference():
+    result = _run_ranked(
+        [("ctrl", 0.9, 1), ("a", 0.8, 1), ("b", 0.7, 1)],
+        control_columns=["ctrl"],
+    )
+
+    candidates = build_recommended_candidates(result, 1)
+    forced = build_recommended_candidates(result, 1, ["ctrl"])
+
+    assert candidates["variable"].tolist() == ["a"]
+    assert forced["variable"].tolist() == ["ctrl", "a"]
+    assert forced.set_index("variable").loc["ctrl", "variable_role"] == "residual_control"
+    candidates.loc[:, "variable"] = "changed"
+    assert result["variable"].tolist() == ["ctrl", "a", "b"]
+
+
+def test_complete_ranking_and_candidate_pool_have_independent_fixed_sizes():
+    controls = [f"control_{index}" for index in range(8)]
+    ordinary = [f"candidate_{index}" for index in range(5)]
+    rows = [(name, 0.95 - index * 0.01, 1) for index, name in enumerate(controls + ordinary)]
+
+    complete = _run_ranked(rows, top_k=15, control_columns=controls)
+    candidates = build_recommended_candidates(complete, 15)
+    baseline = _run_ranked(rows, top_k=15)
+
+    assert len(complete) == 13
+    assert len(candidates) == 5
+    assert complete["driver_rank"].tolist() == list(range(1, 14))
+    assert set(complete.loc[complete["is_residual_control"], "variable"]) == set(controls)
+    assert set(candidates["variable"]) == set(ordinary)
+    assert complete.set_index("variable").loc[controls, "final_score"].tolist() == pytest.approx(
+        baseline.set_index("variable").loc[controls, "final_score"].tolist()
+    )
 
 
 def test_direction_semantics_survive_production_risk_pipeline():
@@ -258,7 +307,7 @@ def test_final_score_primary_sort_is_explicit():
     assert '"_initial_lag_quality"' in source
     assert 'sort_values("driver_rank"' not in source
     assert 'sort_values("driver_priority_score"' not in source
-    assert ".head(top_k)" in inspect.getsource(final_ranked_features)
+    assert ".head(top_k)" not in inspect.getsource(final_ranked_features)
 
 
 def _web_source() -> str:

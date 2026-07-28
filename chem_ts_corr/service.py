@@ -33,6 +33,7 @@ INNOVATION_COLUMNS = [
 @dataclass(frozen=True)
 class AnalysisTables:
     ranked_features: pd.DataFrame
+    recommended_candidates: pd.DataFrame
     lag_scores: pd.DataFrame
     granger_tests: pd.DataFrame
     importance: pd.DataFrame
@@ -86,6 +87,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     from chem_ts_corr.screening import (
         apply_ignore_roles,
         diagnostics,
+        build_recommended_candidates,
         final_ranked_features,
         load_roles,
         risk_flags,
@@ -153,22 +155,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         on="variable",
         how="left",
     )
-    excluded_controls = set()
-    if config.exclude_control_columns_from_candidates:
-        excluded_controls = set(config.residual_control_columns or []) | set(config.capacity_columns or [])
-    if raw_ranked.empty:
-        topk = []
-    else:
-        preliminary_score = raw_ranked["score"].clip(0, 1).copy()
-        innovation_verified = raw_ranked["innovation_status"].eq("innovation_verified")
-        preliminary_score.loc[innovation_verified] = np.sqrt(
-            raw_ranked.loc[innovation_verified, "score"].clip(0, 1)
-            * raw_ranked.loc[innovation_verified, "innovation_score"].clip(0, 1)
-        )
-        topk = raw_ranked.assign(_preliminary_score=preliminary_score).nlargest(
-            config.top_k, "_preliminary_score"
-        )["variable"].tolist()
-    _, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns), excluded_controls)
+    missing_forced = [value for value in (config.force_include_variables or []) if value not in scaled.columns]
     residual_controls = config.residual_control_columns or config.capacity_columns
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
     residual = pd.DataFrame(columns=["variable"])
@@ -198,16 +185,23 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         lag_peak,
         rolling,
         force_include_variables=config.force_include_variables,
-        top_k=config.top_k,
-        control_columns=list(excluded_controls),
+        control_columns=config.residual_control_columns,
+        capacity_columns=config.capacity_columns,
+        segment_column=config.segment_column,
+    )
+    recommended = build_recommended_candidates(
+        ranked,
+        config.top_k,
+        config.force_include_variables,
+        config.exclude_control_columns_from_candidates,
     )
     importance = pd.DataFrame()
     granger = pd.DataFrame()
     metrics: dict[str, float | str] = {}
 
-    metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
+    metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "effective_variables": float(len(ranked)), "recommended_candidate_count": float(len(recommended)), "control_reference_count": float(ranked[["is_residual_control", "is_capacity_reference", "is_segment_reference"]].any(axis=1).sum()), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
-    return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
+    return AnalysisTables(ranked, recommended, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
 
 
 def _innovation_evidence(

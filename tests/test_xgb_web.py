@@ -33,6 +33,7 @@ def _write_run(tmp_path: Path) -> tuple[Path, AnalysisConfig, pd.DataFrame, pd.D
     ranked = pd.DataFrame([{"variable": "x", "lag": 2}])
     final.to_csv(run_dir / "final_review_summary.csv", index=False)
     ranked.to_csv(run_dir / "ranked_features.csv", index=False)
+    ranked.to_csv(run_dir / "recommended_candidates.csv", index=False)
     return run_dir, config, final, ranked
 
 

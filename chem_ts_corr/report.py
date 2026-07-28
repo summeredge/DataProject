@@ -57,11 +57,16 @@ def write_outputs(
         risk_flags=risk_flags,
         screening_top_n=_metric_int(metrics, "top_k") or 50,
     )
+    candidate_source = (
+        recommended_candidates
+        if recommended_candidates is not None
+        else build_recommended_candidates(ranked_features)
+    )
 
     files = {
         "ranked_features.csv": ranked_features,
-        "recommended_candidates.csv": recommended_candidates if recommended_candidates is not None else build_recommended_candidates(ranked_features),
-        "causal_review_candidates.csv": build_causal_review_candidates(ranked_features),
+        "recommended_candidates.csv": candidate_source,
+        "causal_review_candidates.csv": build_causal_review_candidates(candidate_source),
         "lag_scores.csv": lag_scores,
         "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,

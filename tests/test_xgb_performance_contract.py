@@ -213,9 +213,9 @@ def test_web_prepares_xgb_data_once_without_raw_duplicate(monkeypatch, tmp_path:
     pd.DataFrame(
         [{"variable": "x", "final_recommendation": "priority_review", "screening_lag": 2}]
     ).to_csv(run_dir / "final_review_summary.csv", index=False)
-    pd.DataFrame([{"variable": "x", "lag": 2}]).to_csv(
-        run_dir / "ranked_features.csv", index=False
-    )
+    ranked = pd.DataFrame([{"variable": "x", "lag": 2}])
+    ranked.to_csv(run_dir / "ranked_features.csv", index=False)
+    ranked.to_csv(run_dir / "recommended_candidates.csv", index=False)
     calls = {"prepare": 0, "service": 0}
 
     def prepare(config):

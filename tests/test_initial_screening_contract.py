@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -189,6 +190,99 @@ def test_initial_api_filters_four_layer_fields(tmp_path: Path):
     assert set(payload["overview"]["top10"][0]) <= INITIAL_SCREENING_FIELDS
 
 
+def _run_complete_initial_output(tmp_path: Path, force_include: list[str] | None = None):
+    rows = 120
+    time = np.arange(rows, dtype=float)
+    controls = [f"control_{index}" for index in range(8)]
+    candidates = [f"candidate_{index}" for index in range(5)]
+    frame = pd.DataFrame(
+        {
+            "target": np.sin(time / 7),
+            **{name: np.sin((time + index + 1) / 7) for index, name in enumerate(candidates)},
+            **{name: np.cos((time + index + 1) / 7) for index, name in enumerate(controls)},
+        },
+        index=pd.date_range("2026-01-01", periods=rows, freq="min"),
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv",
+        time_column="time",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=3,
+        top_k=15,
+        residual_control_columns=controls,
+        force_include_variables=force_include or [],
+        enable_model=False,
+        skip_model_lift=True,
+        skip_rolling_corr=True,
+    )
+    tables = analyze_numeric_frame(frame, config)
+    write_outputs(
+        tmp_path,
+        config.target,
+        tables.ranked_features,
+        tables.lag_scores,
+        tables.granger_tests,
+        tables.importance,
+        tables.metrics,
+        diagnostics=tables.diagnostics,
+        risk_flags=tables.risk_flags,
+        lag_peak_quality=tables.lag_peak_quality,
+        recommended_candidates=tables.recommended_candidates,
+    )
+    return controls, candidates, _build_result_payload("run", tmp_path, config)
+
+
+def test_complete_initial_output_separates_candidates_through_payload(tmp_path: Path):
+    controls, candidates, payload = _run_complete_initial_output(tmp_path)
+    ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    recommended = pd.read_csv(tmp_path / "recommended_candidates.csv", encoding="utf-8-sig")
+    causal = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+
+    assert len(ranked) == len(payload["rankedFeatures"]) == 13
+    assert len(recommended) == len(causal) == len(payload["recommendedCandidates"]) == 5
+    assert set(controls) <= set(ranked["variable"])
+    assert not set(controls) & set(recommended["variable"])
+    assert not set(controls) & set(causal["variable"])
+    assert set(candidates) == set(recommended["variable"])
+    assert payload["overview"]["effective_variables"] == 13
+    assert payload["overview"]["recommended_candidate_count"] == 5
+    assert payload["overview"]["control_reference_count"] == 8
+    assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
+
+
+def test_forced_control_flows_to_causal_review_without_losing_role(tmp_path: Path):
+    controls, _, payload = _run_complete_initial_output(tmp_path, ["control_0"])
+    recommended = pd.read_csv(tmp_path / "recommended_candidates.csv", encoding="utf-8-sig")
+    causal = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    forced = recommended.set_index("variable").loc["control_0"]
+
+    assert len(payload["rankedFeatures"]) == 13
+    assert len(recommended) == len(causal) == len(payload["recommendedCandidates"]) == 6
+    assert forced["variable_role"] == "residual_control"
+    assert bool(forced["force_included"])
+    assert "control_0" in set(causal["variable"])
+    assert not set(controls[1:]) & set(recommended["variable"])
+
+
+def test_result_payload_does_not_truncate_complete_results_at_fifty(tmp_path: Path):
+    ranked = pd.DataFrame(
+        [
+            {"variable": f"x{index}", "final_score": 1 - index / 100, "variable_role": "candidate"}
+            for index in range(60)
+        ]
+    )
+    ranked.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    ranked.iloc[:3].to_csv(tmp_path / "recommended_candidates.csv", index=False, encoding="utf-8-sig")
+    (tmp_path / "summary.md").write_text("# 初步筛选摘要\n", encoding="utf-8")
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+
+    payload = _build_result_payload("run", tmp_path, config)
+
+    assert len(payload["rankedFeatures"]) == 60
+    assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
+
+
 def test_initial_web_contract_excludes_four_layer_fields():
     initial_blocks = [
         INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}\n", 1)[0],
@@ -201,6 +295,19 @@ def test_initial_web_contract_excludes_four_layer_fields():
     assert '"final_score"' in initial_blocks[0]
     assert '"pearson"' in initial_blocks[0]
     assert '"spearman"' in initial_blocks[0]
+
+
+def test_initial_web_shows_variable_role_and_complete_result_copy():
+    payload_source = inspect.getsource(_build_result_payload)
+
+    assert '"variable_role"' in INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+    assert 'variable_role: "变量角色"' in INDEX_HTML
+    for value in ["普通候选", "残差控制参考", "负荷参考", "工况分段参考"]:
+        assert value in INDEX_HTML
+    assert "完整初步分析结果" in INDEX_HTML
+    assert "默认只展示候选排序结果的核心列和前 50 行" not in INDEX_HTML
+    assert "display_ranked.head(50)" not in payload_source
+    assert "_initial_screening_frame(recommended).head(50)" not in payload_source
 
 
 def test_initial_tables_preserve_api_order_until_the_user_sorts():
@@ -302,6 +409,7 @@ def test_initial_service_does_not_execute_followup_analyses():
         "run_granger_tests(",
     ]:
         assert call not in source
+    assert "def _candidate_list(" not in source
 
 
 def test_initial_screening_source_has_no_four_layer_explanation_call():

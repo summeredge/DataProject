@@ -94,7 +94,7 @@ def test_overview_recommendations_preserve_backend_default_order():
     render = INDEX_HTML.split("function renderAnalysisResult(data)", 1)[1].split("function sleep", 1)[0]
     assert 'delete tableSortStates["overviewTop"];' in render
     assert 'tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };' not in render
-    assert 'overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction"' in INDEX_HTML
+    assert 'overviewTop: ["variable", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction"' in INDEX_HTML
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
     assert "driver_rank" not in overview_columns
     assert "evidence_confidence" not in overview_columns

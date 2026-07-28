@@ -74,15 +74,6 @@ def run_xgb_analysis(
     )
 
 
-def _candidate_list(top: list[str], forced: list[str] | None, columns: list[str], excluded: set[str] | None = None) -> tuple[list[str], list[str]]:
-    excluded = excluded or set()
-    top_filtered = [v for v in top if v not in excluded]
-    ordered = list(dict.fromkeys(top_filtered + (forced or [])))
-    valid = [v for v in ordered if v in columns]
-    warnings = [v for v in (forced or []) if v not in columns]
-    return valid, warnings
-
-
 def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_callback=None) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,

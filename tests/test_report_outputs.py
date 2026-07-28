@@ -109,3 +109,19 @@ def test_recommended_candidates_uses_candidate_grade_without_engineering_context
     )
 
     assert build_recommended_candidates(ranked)["variable"].tolist() == ["candidate_a", "candidate_b"]
+
+
+def test_causal_review_candidates_use_the_provided_recommended_pool(tmp_path: Path):
+    ranked = pd.DataFrame([
+        {"variable": "control", "final_score": 0.9, "candidate_grade": "A", "recommended_use": "control_variable_reference"},
+        {"variable": "candidate", "final_score": 0.8, "candidate_grade": "A", "recommended_use": "strong_screening_candidate"},
+    ])
+    recommended = ranked[ranked["variable"].eq("candidate")].copy()
+
+    write_outputs(
+        tmp_path, "target", ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {},
+        recommended_candidates=recommended,
+    )
+
+    causal = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    assert causal["variable"].tolist() == ["candidate"]

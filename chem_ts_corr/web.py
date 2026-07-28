@@ -656,8 +656,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "run_id": run_id,
         "analysisContext": {"preprocess_mode": config.preprocess_mode},
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary), recommended),
-        "rankedFeatures": _records(display_ranked.head(50)),
-        "recommendedCandidates": _records(_initial_screening_frame(recommended).head(50)),
+        "rankedFeatures": _records(display_ranked),
+        "recommendedCandidates": _records(_initial_screening_frame(recommended)),
         "riskFlags": _records(risky.head(50)),
         "lagScores": [],
         "residualScores": _records(residual.head(50)),
@@ -738,7 +738,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         extra_variables=extra_variables,
     )
     if not variables:
-        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
+        raise ValueError("recommended_candidates.csv 中没有可运行增强筛选的候选变量")
 
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     target_mask = _target_segment_mask(scaled)
@@ -920,8 +920,6 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         base_config,
         extra_variables=extra_variables,
     )
-    near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
-    variables = list(dict.fromkeys(variables + _near_miss_variables(near_miss, limit=10)))
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
@@ -930,7 +928,6 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         best_lags = {}
     else:
         best_lags = _best_lags_from_ranked(ranked)
-        best_lags = _merge_near_miss_lags(best_lags, near_miss)
     best_lags = _secondary_best_lags_for_missing_variables(
         scaled,
         secondary_config.target,
@@ -1089,7 +1086,14 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
             error_message="missing final_review_summary; run the third-level review first",
         )
 
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
+    if recommended.empty:
+        return _xgb_response_payload(
+            run_id,
+            output_dir,
+            status="invalid_input",
+            error_message="missing recommended_candidates; run the initial screening first",
+        )
     control_columns = (
         _list_field(form, "control_columns")
         or config.residual_control_columns
@@ -1106,7 +1110,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         data=data,
         target=config.target,
         final_review_summary=final_summary,
-        ranked_features=ranked,
+        ranked_features=recommended,
         control_columns=control_columns,
         whitelist=whitelist,
         top_n=top_n,
@@ -2552,8 +2556,8 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <section id="candidatesTab">
-          <h2>候选变量</h2>
-          <div class="help">默认只展示候选排序结果的核心列和前 50 行，完整结果请到下载页获取。</div>
+          <h2>完整初步分析结果</h2>
+          <div class="help">展示所有有效分析变量的初步统计结果。控制、负荷和工况参考变量不会从完整结果中删除；重点候选范围单独保存于 recommended_candidates.csv。</div>
           <h3>结果质量提示</h3>
           <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
           <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
@@ -4336,6 +4340,7 @@ const candidateCoreColumns = coreCandidateColumns;
 const INITIAL_SCREENING_DETAIL_COLUMNS = [
   "dominant_corr", "lag_quality", "lag_quality_status", "lag_boundary_flag", "n",
   "data_quality_score", "risk_level", "human_reason", "recommended_action", "force_included",
+  "is_residual_control", "is_capacity_reference", "is_segment_reference",
   "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status",
   "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2",
 ];
@@ -4465,7 +4470,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
+  return ["variable", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -5013,7 +5018,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
+  overviewTop: ["variable", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -5785,6 +5790,10 @@ function formatValue(value) {
       candidate_grade_C: "候选等级C",
       candidate_grade_D: "候选等级D",
       candidate_grade_E: "候选等级E",
+      candidate: "普通候选",
+      residual_control: "残差控制参考",
+      capacity_reference: "负荷参考",
+      segment_reference: "工况分段参考",
       A: "候选等级A",
       B: "候选等级B",
       C: "候选等级C",
@@ -5938,6 +5947,7 @@ function columnLabel(column) {
   if (addedLabels[column]) return addedLabels[column];
   const labels = {
     variable: "变量",
+    variable_role: "变量角色",
     trend_action: "趋势验证",
     final_score: "稳健综合得分",
     lag: "最佳滞后",

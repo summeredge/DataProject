@@ -15,7 +15,7 @@ def _base_frames():
     return ranked, empty, empty, empty, pd.DataFrame(columns=["variable", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]), empty, empty
 
 
-def test_control_column_excluded_from_top_by_default():
+def test_control_column_remains_in_complete_ranking():
     ranked, residual, stability, lift, risks, lag_peak, rolling = _base_frames()
     out = final_ranked_features(
         ranked, residual, stability, lift, risks, lag_peak, rolling,

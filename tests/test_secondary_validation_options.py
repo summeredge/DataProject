@@ -711,7 +711,7 @@ def test_model_response_recomputes_best_lags_when_secondary_resample_changes():
     assert "best_lags = {}" in function_body
     assert "else:" in function_body
     assert "best_lags = _best_lags_from_ranked(ranked)" in function_body
-    assert "best_lags = _merge_near_miss_lags(best_lags, near_miss)" in function_body
+    assert "_merge_near_miss_lags" not in function_body
     assert "recompute_limit=None if lag_search_changed else 20" in function_body
 
 

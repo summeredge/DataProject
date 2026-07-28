@@ -4468,7 +4468,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
+  return ["variable", "candidate_source", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -5945,6 +5945,7 @@ function columnLabel(column) {
   if (addedLabels[column]) return addedLabels[column];
   const labels = {
     variable: "变量",
+    candidate_source: "候选来源",
     variable_role: "变量角色",
     trend_action: "趋势验证",
     final_score: "稳健综合得分",

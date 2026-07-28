@@ -60,7 +60,11 @@ def write_outputs(
     candidate_source = (
         recommended_candidates
         if recommended_candidates is not None
-        else build_recommended_candidates(ranked_features)
+        else _build_recommended_candidates(
+            ranked_features,
+            _metric_int(metrics, "top_k"),
+            residual_corr_scores=residual_corr_scores,
+        )
     )
 
     files = {
@@ -259,4 +263,6 @@ def _format_cell(value: object, column: str = "") -> str:
 
 
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
-    return _build_recommended_candidates(ranked_features, top_k=None)
+    return _build_recommended_candidates(
+        ranked_features, top_k=None, residual_corr_scores=pd.DataFrame(columns=["variable"])
+    )

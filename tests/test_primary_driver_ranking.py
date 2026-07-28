@@ -217,7 +217,7 @@ def test_recommended_candidates_exclude_references_and_keep_forced_reference():
     forced = build_recommended_candidates(result, 1, ["ctrl"])
 
     assert candidates["variable"].tolist() == ["a"]
-    assert forced["variable"].tolist() == ["ctrl", "a"]
+    assert forced["variable"].tolist() == ["a", "ctrl"]
     assert forced.set_index("variable").loc["ctrl", "variable_role"] == "residual_control"
     candidates.loc[:, "variable"] = "changed"
     assert result["variable"].tolist() == ["ctrl", "a", "b"]

@@ -1387,21 +1387,100 @@ def build_recommended_candidates(
     top_k: int | None,
     force_include_variables: list[str] | None = None,
     exclude_control_columns: bool = True,
+    *,
+    residual_corr_scores: pd.DataFrame | None = None,
+    residual_top_k: int | None = None,
 ) -> pd.DataFrame:
-    """Build the downstream candidate pool from the complete initial ranking."""
+    """Build the downstream candidate pool from raw, residual, and forced channels."""
     if ranked_features.empty:
-        return ranked_features.copy(deep=True)
+        empty = ranked_features.copy(deep=True)
+        for column in ["selected_by_raw", "selected_by_residual", "candidate_source", "raw_candidate_rank", "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag"]:
+            if column not in empty.columns:
+                empty[column] = pd.Series(dtype=bool if column.startswith("selected_") or column.endswith("_flag") else float if column.endswith("_rank") else str)
+        return empty
     frame = ranked_features.copy(deep=True)
-    forced = {str(value) for value in (force_include_variables or [])}
-    variable = frame["variable"].astype(str)
+    frame["variable"] = frame["variable"].astype(str)
+    forced_order = list(dict.fromkeys(str(value) for value in (force_include_variables or [])))
+    forced = set(forced_order)
     reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
     references = frame.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1)
     eligible = ~references if exclude_control_columns else pd.Series(True, index=frame.index)
-    top = order_initial_candidates(frame.loc[eligible]).head(top_k) if top_k is not None else order_initial_candidates(frame.loc[eligible])
-    forced_rows = frame.loc[variable.isin(forced)]
-    return order_initial_candidates(
-        pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
-    ).reset_index(drop=True)
+    raw = order_initial_candidates(frame.loc[eligible])
+    raw = raw.head(top_k) if top_k is not None else raw
+    raw_rank = {name: index + 1 for index, name in enumerate(raw["variable"])}
+
+    residual_top_k = top_k if residual_top_k is None else residual_top_k
+    residual_rank: dict[str, int] = {}
+    residual_rows = pd.DataFrame(columns=["variable"])
+    required_residual_columns = {"variable", "residual_corr", "residual_lag", "residual_n", "residual_status"}
+    if (
+        residual_corr_scores is not None
+        and not residual_corr_scores.empty
+        and required_residual_columns.issubset(residual_corr_scores.columns)
+    ):
+        residual = residual_corr_scores.copy(deep=True)
+        residual["variable"] = residual["variable"].astype(str)
+        residual = residual[residual["variable"].isin(frame["variable"])]
+        if exclude_control_columns:
+            residual = residual[residual["variable"].isin(frame.loc[eligible, "variable"])]
+        residual["_residual_corr"] = pd.to_numeric(residual.get("residual_corr"), errors="coerce")
+        residual["_residual_lag"] = pd.to_numeric(residual.get("residual_lag"), errors="coerce")
+        residual["_residual_n"] = pd.to_numeric(residual.get("residual_n"), errors="coerce")
+        residual["_residual_quality"] = pd.to_numeric(residual.get("residual_lag_quality"), errors="coerce")
+        residual = residual[
+            residual.get("residual_status", pd.Series("", index=residual.index)).isin(["ok", "rank_deficient"])
+            & np.isfinite(residual["_residual_corr"])
+            & np.isfinite(residual["_residual_lag"])
+            & np.isfinite(residual["_residual_n"])
+            & residual["_residual_n"].gt(0)
+        ].copy()
+        residual["_status_priority"] = residual["residual_status"].map({"ok": 0, "rank_deficient": 1})
+        residual["_quality_sort"] = residual["_residual_quality"].fillna(-np.inf)
+        residual_rows = residual.sort_values(
+            ["_residual_corr", "_quality_sort", "_residual_n", "_status_priority", "variable"],
+            ascending=[False, False, False, True, True], kind="stable",
+        )
+        residual_rows = residual_rows.drop_duplicates(subset="variable", keep="first")
+        residual_rows = residual_rows.head(residual_top_k) if residual_top_k is not None else residual_rows
+        residual_rank = {name: index + 1 for index, name in enumerate(residual_rows["variable"])}
+
+    selected_variables = set(raw_rank) | set(residual_rank) | (forced & set(frame["variable"]))
+    pool = frame[frame["variable"].isin(selected_variables)].copy()
+    pool["selected_by_raw"] = pool["variable"].isin(raw_rank)
+    pool["selected_by_residual"] = pool["variable"].isin(residual_rank)
+    pool["raw_candidate_rank"] = pool["variable"].map(raw_rank)
+    pool["residual_candidate_rank"] = pool["variable"].map(residual_rank)
+    pool["force_included"] = pool["variable"].isin(forced)
+    pool["_reference"] = references.reindex(pool.index).fillna(False)
+    pool["candidate_source"] = np.select(
+        [
+            pool["_reference"],
+            pool["selected_by_raw"] & pool["selected_by_residual"],
+            pool["selected_by_raw"],
+            pool["selected_by_residual"],
+        ],
+        ["control_reference", "raw_and_residual", "raw_only", "residual_only"],
+        default="force_included",
+    )
+    raw_corr = pd.to_numeric(pool.get("raw_corr", pool.get("score", pd.Series(np.nan, index=pool.index))), errors="coerce")
+    residual_lookup = residual_rows.set_index("variable")["_residual_corr"] if not residual_rows.empty else pd.Series(dtype=float)
+    pool["common_capacity_candidate_flag"] = (
+        pool["selected_by_raw"]
+        & ~pool["selected_by_residual"]
+        & pool["variable"].isin(residual_lookup.index)
+        & raw_corr.ge(0.5)
+        & pool["variable"].map(residual_lookup).lt(raw_corr * 0.65)
+    )
+    source_priority = pool["candidate_source"].map({"raw_and_residual": 0, "raw_only": 1, "residual_only": 1, "force_included": 2, "control_reference": 3})
+    force_rank = {name: index + 1 for index, name in enumerate(forced_order)}
+    pool["_best_rank"] = pool[["raw_candidate_rank", "residual_candidate_rank"]].min(axis=1).fillna(np.inf)
+    pool["_force_rank"] = pool["variable"].map(force_rank).fillna(np.inf)
+    pool = pool.assign(_source_priority=source_priority).sort_values(
+        ["_source_priority", "_best_rank", "raw_candidate_rank", "residual_candidate_rank", "_force_rank", "variable"],
+        ascending=[True, True, True, True, True, True], kind="stable",
+    )
+    pool["candidate_pool_rank"] = np.arange(1, len(pool) + 1)
+    return pool.drop(columns=["_reference", "_best_rank", "_force_rank", "_source_priority"]).reset_index(drop=True)
 
 
 def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:

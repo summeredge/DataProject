@@ -72,13 +72,22 @@ def test_disabled_xgb_request_is_skipped_without_calling_service(
 def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    run_dir, _, final, ranked = _write_run(tmp_path)
+    run_dir, _, final, _ = _write_run(tmp_path)
+    ranked = pd.DataFrame([
+        {"variable": "control_high_score", "lag": 1},
+        {"variable": "candidate_a", "lag": 2},
+        {"variable": "candidate_b", "lag": 3},
+    ])
+    recommended = ranked.iloc[1:].copy(deep=True)
+    ranked.to_csv(run_dir / "ranked_features.csv", index=False)
+    recommended.to_csv(run_dir / "recommended_candidates.csv", index=False)
     data = pd.DataFrame(
         {"target": [1.0, 2.0], "control": [3.0, 4.0], "x": [5.0, 6.0]},
         index=pd.date_range("2025-01-01", periods=2, freq="h"),
     )
     before_final = final.copy(deep=True)
     before_ranked = ranked.copy(deep=True)
+    before_recommended = recommended.reset_index(drop=True)
     captured: dict[str, object] = {}
 
     def fake_service(**kwargs):
@@ -125,7 +134,10 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert captured["whitelist"] == ["manual_a", "manual_b"]
     assert captured["control_columns"] == ["control"]
     pd.testing.assert_frame_equal(captured["final_review_summary"], before_final)
-    pd.testing.assert_frame_equal(captured["ranked_features"], before_ranked)
+    pd.testing.assert_frame_equal(captured["ranked_features"], before_recommended)
+    assert captured["ranked_features"]["variable"].tolist() == ["candidate_a", "candidate_b"]
+    assert "control_high_score" not in set(captured["ranked_features"]["variable"])
+    pd.testing.assert_frame_equal(pd.read_csv(run_dir / "ranked_features.csv"), before_ranked)
     assert payload["xgbModelSummary"][0]["model_name"] == "M2"
     assert payload["xgbCandidateUplift"][0]["variable"] == "x"
     assert payload["xgbValidationSummary"]["candidate_count"] == 1
@@ -133,6 +145,24 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert "xgb_validation/xgb_model_summary.csv" in download_names
     assert "xgb_validation/xgb_candidate_uplift.csv" in download_names
     assert "xgb_validation/xgb_validation_summary.json" in download_names
+
+
+def test_missing_recommended_candidates_is_rejected_before_loading_or_service_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    run_dir, _, _, _ = _write_run(tmp_path)
+    (run_dir / "recommended_candidates.csv").unlink()
+    monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
+    _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
+    monkeypatch.setattr(
+        web, "_prepared_frame_for_validation", lambda config: pytest.fail("data must not be prepared")
+    )
+    monkeypatch.setattr(web, "run_xgb_analysis", lambda **kwargs: pytest.fail("service must not be called"))
+
+    payload = web._run_xgb_validation_response(object())
+
+    assert payload["status"] == "invalid_input"
+    assert "recommended_candidates" in payload["error_message"]
 
 
 def test_missing_final_review_is_rejected_before_loading_or_service_call(

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
+import subprocess
 
 import numpy as np
 import pandas as pd
@@ -190,7 +192,11 @@ def test_initial_api_filters_four_layer_fields(tmp_path: Path):
     assert set(payload["overview"]["top10"][0]) <= INITIAL_SCREENING_FIELDS
 
 
-def _run_complete_initial_output(tmp_path: Path, force_include: list[str] | None = None):
+def _run_complete_initial_output(
+    tmp_path: Path,
+    force_include: list[str] | None = None,
+    residual_controls: bool = True,
+):
     rows = 120
     time = np.arange(rows, dtype=float)
     controls = [f"control_{index}" for index in range(8)]
@@ -210,7 +216,7 @@ def _run_complete_initial_output(tmp_path: Path, force_include: list[str] | None
         output_dir=tmp_path,
         max_lag=3,
         top_k=15,
-        residual_control_columns=controls,
+        residual_control_columns=controls if residual_controls else [],
         force_include_variables=force_include or [],
         enable_model=False,
         skip_model_lift=True,
@@ -241,6 +247,11 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
 
     assert len(ranked) == len(payload["rankedFeatures"]) == 13
     assert len(recommended) == len(causal) == len(payload["recommendedCandidates"]) == 5
+    assert ranked["variable"].is_unique
+    assert recommended["variable"].is_unique
+    assert causal["variable"].is_unique
+    assert ranked["driver_rank"].tolist() == list(range(1, 14))
+    assert [row["variable"] for row in payload["rankedFeatures"]] == ranked["variable"].tolist()
     assert set(controls) <= set(ranked["variable"])
     assert not set(controls) & set(recommended["variable"])
     assert not set(controls) & set(causal["variable"])
@@ -249,6 +260,15 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
     assert payload["overview"]["recommended_candidate_count"] == 5
     assert payload["overview"]["control_reference_count"] == 8
     assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
+    assert set(ranked.set_index("variable").loc[controls, "variable_role"]) == {"residual_control"}
+
+    _run_complete_initial_output(tmp_path / "without_roles", residual_controls=False)
+    unmarked = pd.read_csv(tmp_path / "without_roles" / "ranked_features.csv", encoding="utf-8-sig")
+    pd.testing.assert_series_equal(
+        ranked.set_index("variable").loc[controls, "final_score"],
+        unmarked.set_index("variable").loc[controls, "final_score"],
+        check_names=False,
+    )
 
 
 def test_forced_control_flows_to_causal_review_without_losing_role(tmp_path: Path):
@@ -263,6 +283,7 @@ def test_forced_control_flows_to_causal_review_without_losing_role(tmp_path: Pat
     assert bool(forced["force_included"])
     assert "control_0" in set(causal["variable"])
     assert not set(controls[1:]) & set(recommended["variable"])
+    assert not set(controls[1:]) & set(causal["variable"])
 
 
 def test_result_payload_does_not_truncate_complete_results_at_fifty(tmp_path: Path):
@@ -300,7 +321,13 @@ def test_initial_web_contract_excludes_four_layer_fields():
 def test_initial_web_shows_variable_role_and_complete_result_copy():
     payload_source = inspect.getsource(_build_result_payload)
 
-    assert '"variable_role"' in INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+    core_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+    overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
+    detail_columns = INDEX_HTML.split("const INITIAL_SCREENING_DETAIL_COLUMNS", 1)[1].split("];", 1)[0]
+    assert core_columns.index('"variable_role"') > core_columns.index('"variable"')
+    assert '"variable_role"' in overview_columns
+    for field in ["is_residual_control", "is_capacity_reference", "is_segment_reference"]:
+        assert f'"{field}"' in detail_columns
     assert 'variable_role: "变量角色"' in INDEX_HTML
     for value in ["普通候选", "残差控制参考", "负荷参考", "工况分段参考"]:
         assert value in INDEX_HTML
@@ -310,21 +337,47 @@ def test_initial_web_shows_variable_role_and_complete_result_copy():
     assert "_initial_screening_frame(recommended).head(50)" not in payload_source
 
 
+def _javascript_function(name: str) -> str:
+    source = INDEX_HTML.split(f"function {name}", 1)[1]
+    return f"function {name}" + source.split("\n}\n", 1)[0] + "\n}"
+
+
 def test_initial_tables_preserve_api_order_until_the_user_sorts():
     render_source = INDEX_HTML.split("function renderAnalysisResult(data)", 1)[1].split("function sleep", 1)[0]
     compact_source = INDEX_HTML.split("function renderCompactDetailTable", 1)[1].split("function selectCompactDetailRow", 1)[0]
-    sorted_source = INDEX_HTML.split("function sortedRowsForTable", 1)[1].split("function compareValues", 1)[0]
-    click_source = INDEX_HTML.split("function updateTableSortState", 1)[1].split("function sortedRowsForTable", 1)[0]
-    api_order = ["b", "c", "a"]
-
-    assert api_order == ["b", "c", "a"]
     for target_id in ['"table"', '"overviewTop"']:
         assert f"delete tableSortStates[{target_id}]" in render_source
         assert f"tableSortStates[{target_id}] = {{ column: \"final_score\"" not in render_source
     assert 'targetId === candidateTable || targetId === "overviewTop"' in compact_source
     assert "ensureTableSortState(targetId, preserveInputOrder ? null : columns[0])" in compact_source
-    assert "if (!state || !state.column) return rows.slice();" in sorted_source
-    assert "state.column = column;" in click_source
+
+    rows = [
+        {"variable": "b", "final_score": 0.7},
+        {"variable": "c", "final_score": 0.9},
+        {"variable": "a", "final_score": 0.8},
+    ]
+    script = "\n".join([
+        "const tableSortStates = { table: undefined };",
+        _javascript_function("sortedRowsForTable"),
+        _javascript_function("compareValues"),
+        f"const rows = {json.dumps(rows)};",
+        "const original = rows.map((row) => row.variable);",
+        "const none = sortedRowsForTable('table', rows).map((row) => row.variable);",
+        "tableSortStates.table = { column: 'final_score', direction: 'asc' };",
+        "const asc = sortedRowsForTable('table', rows).map((row) => row.variable);",
+        "tableSortStates.table = { column: 'final_score', direction: 'desc' };",
+        "const desc = sortedRowsForTable('table', rows).map((row) => row.variable);",
+        "console.log(JSON.stringify({ original, none, asc, desc }));",
+    ])
+    result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+    actual = json.loads(result.stdout)
+
+    assert actual == {
+        "original": ["b", "c", "a"],
+        "none": ["b", "c", "a"],
+        "asc": ["b", "a", "c"],
+        "desc": ["c", "a", "b"],
+    }
 
 
 def test_initial_score_details_only_reference_whitelisted_fields():
@@ -409,7 +462,14 @@ def test_initial_service_does_not_execute_followup_analyses():
         "run_granger_tests(",
     ]:
         assert call not in source
-    assert "def _candidate_list(" not in source
+    service_source = Path("chem_ts_corr/service.py").read_text(encoding="utf-8")
+    report_source = Path("chem_ts_corr/report.py").read_text(encoding="utf-8")
+    payload_source = inspect.getsource(_build_result_payload)
+    assert "def _candidate_list(" not in service_source
+    assert "top_filtered = [v for v in top if v not in excluded]" not in service_source
+    assert "build_causal_review_candidates(ranked_features)" not in report_source
+    assert "display_ranked.head(50)" not in payload_source
+    assert "_initial_screening_frame(recommended).head(50)" not in payload_source
 
 
 def test_initial_screening_source_has_no_four_layer_explanation_call():

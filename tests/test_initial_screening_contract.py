@@ -15,6 +15,8 @@ from chem_ts_corr.web import INDEX_HTML, _build_result_payload
 
 
 FORBIDDEN_INITIAL_FIELDS = {
+    "evidence_strength",
+    "evidence_score",
     "evidence_completeness",
     "evidence_available_count",
     "evidence_coverage_status",
@@ -198,6 +200,36 @@ def test_initial_web_contract_excludes_four_layer_fields():
     assert '"final_score"' in initial_blocks[0]
     assert '"pearson"' in initial_blocks[0]
     assert '"spearman"' in initial_blocks[0]
+
+
+def test_initial_tables_preserve_api_order_until_the_user_sorts():
+    render_source = INDEX_HTML.split("function renderAnalysisResult(data)", 1)[1].split("function sleep", 1)[0]
+    compact_source = INDEX_HTML.split("function renderCompactDetailTable", 1)[1].split("function selectCompactDetailRow", 1)[0]
+    sorted_source = INDEX_HTML.split("function sortedRowsForTable", 1)[1].split("function compareValues", 1)[0]
+    click_source = INDEX_HTML.split("function updateTableSortState", 1)[1].split("function sortedRowsForTable", 1)[0]
+    api_order = ["b", "c", "a"]
+
+    assert api_order == ["b", "c", "a"]
+    for target_id in ['"table"', '"overviewTop"']:
+        assert f"delete tableSortStates[{target_id}]" in render_source
+        assert f"tableSortStates[{target_id}] = {{ column: \"final_score\"" not in render_source
+    assert 'targetId === candidateTable || targetId === "overviewTop"' in compact_source
+    assert "ensureTableSortState(targetId, preserveInputOrder ? null : columns[0])" in compact_source
+    assert "if (!state || !state.column) return rows.slice();" in sorted_source
+    assert "state.column = column;" in click_source
+
+
+def test_initial_score_details_only_reference_whitelisted_fields():
+    source = INDEX_HTML.split("function renderScreeningScoreDetails(row)", 1)[1].split("function lagProfileCacheKey", 1)[0]
+    detail_modal_source = INDEX_HTML.split("function renderGenericDetailModalBody", 1)[1].split("function timeRelationshipExplanation", 1)[0]
+
+    for forbidden in ["evidence_strength", "evidence_score", "证据强度", "证据覆盖度", "证据完整度"]:
+        assert forbidden not in source
+    for allowed in ["final_score", "data_quality_score", "risk_flags", "recommended_use", "recommended_action"]:
+        assert allowed in source
+    assert "final_score 是初步分析中实际可用统计证据经过风险处理后的综合筛选得分。" in source
+    assert "evidence_strength" not in detail_modal_source
+    assert "evidence_score" not in detail_modal_source
 
 
 def test_initial_detail_columns_are_whitelisted():

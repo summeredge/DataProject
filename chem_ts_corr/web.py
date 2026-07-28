@@ -2537,7 +2537,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>前 10 个推荐变量</h2>
-        <div class="help">稳健综合得分同时考虑原始与变化量关联、增量预测、时间/工况稳定性、滞后质量和数据质量；证据缺失会降低证据覆盖度与修正系数，不会放大其他分项。</div>
+        <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <section id="candidatesTab">
           <h2>候选变量</h2>
@@ -3267,9 +3267,9 @@ function renderAnalysisResult(data) {
   renderOverview(data.overview || {});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
   renderScreeningQualityHints(lastRows);
-  tableSortStates["table"] = { column: "final_score", direction: "desc" };
+  delete tableSortStates["table"];
   renderTable(lastRows);
-  tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };
+  delete tableSortStates["overviewTop"];
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -4466,7 +4466,8 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  ensureTableSortState(targetId, columns[0]);
+  const preserveInputOrder = targetId === candidateTable || targetId === "overviewTop";
+  ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
   table.className = "compact-result-table";
@@ -4523,7 +4524,7 @@ function renderGenericDetailModalBody(row, options = {}) {
   const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
   const isScreeningCandidate = "final_score" in (row || {});
   const groupedColumns = new Set(isScreeningCandidate ? [
-      "final_score", "evidence_strength", "evidence_score", "data_quality_score",
+      "final_score", "data_quality_score",
       "recommended_use", "recommended_action",
       "dominant_corr", "correlation_direction", ...CORRELATION_OVERVIEW_COLUMNS, ...CORRELATION_DETAIL_COLUMNS,
     ] : []);
@@ -4656,7 +4657,7 @@ function updateDirectionalityTimeDetails(lag, intervalMinutes) {
 
 function renderScreeningScoreDetails(row) {
   if (!("final_score" in (row || {}))) return "";
-  const scoreColumns = ["final_score", "evidence_strength", "evidence_score", "data_quality_score", "risk_flags", "recommended_use"];
+  const scoreColumns = ["final_score", "data_quality_score", "risk_flags", "recommended_use", "recommended_action"];
   const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
@@ -4674,8 +4675,7 @@ function renderScreeningScoreDetails(row) {
   return `
     <h4>初步筛选评分</h4>
     <div class="detail-grid">${renderFields(scoreColumns)}</div>
-    <p>证据强度：基于实际可用证据和允许权重组合计算。</p>
-    <p>稳健综合得分 = 当前初步分析实际可用统计证据经过明确风险处理后的结果。</p>
+    <p>final_score 是初步分析中实际可用统计证据经过风险处理后的综合筛选得分。</p>
     <h4>相关性证据</h4>
     <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
     <details class="correlation-evidence-details">
@@ -4703,7 +4703,7 @@ function renderScreeningScoreDetails(row) {
     <h4>滞后相关曲线</h4>
     <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
-    <p>证据修正系数当前仅反映数据质量。证据覆盖度用于说明哪些证据尚未获得，不参与综合得分和候选排名。</p>
+    <p>初步分析仅描述当前阶段的统计筛选结果，不对未执行的后续分析作解释。</p>
   `;
 }
 

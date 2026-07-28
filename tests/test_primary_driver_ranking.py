@@ -277,9 +277,9 @@ def test_web_primary_table_default_sort_is_final_score_descending():
     assert 'sort_values("driver_rank"' not in source
 
 
-def test_new_analysis_resets_final_score_primary_sort_before_rendering_rows():
+def test_new_analysis_clears_primary_table_sort_before_rendering_rows():
     body = _javascript_function(_web_source(), "renderAnalysisResult(data) {", "sleep")
-    reset_sort = 'tableSortStates["table"] = { column: "final_score", direction: "desc" };'
+    reset_sort = 'delete tableSortStates["table"];'
 
     assert reset_sort in body
     assert body.index(reset_sort) < body.index("renderTable(lastRows);")

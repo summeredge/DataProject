@@ -1040,13 +1040,30 @@ def _evidence_clearly_exceeds(
     )
 
 
+def _residual_condition_number_map(residual: pd.DataFrame) -> dict[str, float]:
+    if residual.empty or "variable" not in residual.columns:
+        return {}
+    field = (
+        "control_condition_number"
+        if "control_condition_number" in residual.columns
+        else "condition_number" if "condition_number" in residual.columns else None
+    )
+    if field is None:
+        return {}
+    values = residual.loc[:, ["variable", field]].copy()
+    values[field] = pd.to_numeric(values[field], errors="coerce")
+    values.loc[~np.isfinite(values[field]), field] = np.nan
+    values = values.drop_duplicates(subset="variable", keep="first").dropna(subset=[field])
+    return values.set_index("variable")[field].to_dict()
+
+
 def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, diag: pd.DataFrame, roles: dict[str, str], control_columns: list[str] | None, lag_peak_quality: pd.DataFrame | None = None, rolling_corr_scores: pd.DataFrame | None = None, model_lift_scores: pd.DataFrame | None = None, *, frame: pd.DataFrame | None = None, target: str | None = None) -> pd.DataFrame:
     cols = ["variable", "formula_like_flag", "strong_formula_leakage_flag", "common_capacity_driver_flag", "redundant_proxy_flag", "target_leads_variable_flag", "unstable_across_regimes_flag", "unstable_over_time_flag", "lag_boundary_flag", "low_model_lift_flag", "poor_data_quality_flag", "residual_collinearity_flag", "data_quality_score", "risk_flags", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason"]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
 
     residual_map = residual.set_index("variable")["residual_corr"].to_dict() if not residual.empty and "residual_corr" in residual.columns else {}
-    residual_cond_map = residual.set_index("variable")["condition_number"].to_dict() if not residual.empty and "condition_number" in residual.columns else {}
+    residual_cond_map = _residual_condition_number_map(residual)
     stability_map = stability.set_index("variable").to_dict("index") if not stability.empty else {}
     diag_map = diag.set_index("variable").to_dict("index") if not diag.empty else {}
     lag_map = lag_peak_quality.set_index("variable").to_dict("index") if lag_peak_quality is not None and not lag_peak_quality.empty else {}

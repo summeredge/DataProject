@@ -136,7 +136,7 @@ def test_missing_core_evidence_lowers_completeness_without_lowering_available_ev
     assert complete["evidence_score"] == pytest.approx(0.80)
 
 
-def test_regime_and_time_stability_are_combined_conservatively():
+def test_regime_and_time_stability_are_not_exposed_in_initial_output():
     row = _score(
         association=0.70,
         innovation=0.70,
@@ -146,4 +146,5 @@ def test_regime_and_time_stability_are_combined_conservatively():
         lag_quality=0.70,
     )
 
-    assert row["stability_score"] == pytest.approx(np.sqrt(0.90 * 0.40))
+    assert "stability_score" not in row.index
+    assert 0.0 <= row["final_score"] <= 1.0

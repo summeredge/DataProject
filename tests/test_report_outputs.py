@@ -57,7 +57,7 @@ def test_write_outputs_writes_expected_files(tmp_path: Path):
         assert (tmp_path / name).exists(), f"missing output: {name}"
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
-    assert "工程复核" in summary
+    assert "# 初步筛选摘要：target" in summary
 
 
     review = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")

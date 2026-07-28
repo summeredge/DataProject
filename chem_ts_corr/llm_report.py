@@ -54,7 +54,7 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
     conditional_by_var = _index_by_variable(conditional)
     final_by_var = _index_by_variable(final)
 
-    highly = [_compact(row, ["variable", "driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items", "four_layer_coverage_status", "four_layer_missing_items", "evidence_completeness", "data_quality_score", "evidence_confidence", "candidate_grade", "lag", "direction", "risk_flags", "risk_level", "recommended_use"]) for row in _rows(ranked, top_n)]
+    highly = [_compact(row, ["variable", "final_score", "evidence_completeness", "data_quality_score", "evidence_confidence", "candidate_grade", "lag", "direction", "risk_flags", "risk_level", "recommended_use"]) for row in _rows(ranked, top_n)]
     attention = [_compact(row, ["final_rank", "variable", "integrated_review_decision", "priority_label", "key_reason", "conflict_type", "conflict_reason", "lag_boundary_hint"]) for row in _rows(final, top_n)]
 
     names = list(dict.fromkeys(
@@ -145,7 +145,7 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - evidence_confidence 的中文含义为“证据修正系数”，当前仅由 data_quality_score 决定。evidence_completeness 和 evidence_coverage_status 只表示证据覆盖情况，不参与 evidence_score、final_score 或候选排名。
 - 缺失证据不是零分证据。未计算、不可用或数据不足的可选证据会从当前权重组合中省略并重新归一化；实际计算得到的零值才代表弱证据。
 - evidence_strength 是多个允许权重组合结果的中位数，不得解释为等权几何平均、概率或统计置信度。
-- evidence_coverage_status / evidence_missing_items 只表示评分组件覆盖；four_layer_coverage_status / four_layer_missing_items 表示四层证据解释覆盖。不得将“覆盖完整”解释为“全部证据支持”。
+- 评分组件覆盖字段只表示计算覆盖情况；不得将“覆盖完整”解释为“全部证据支持”。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。
 - .PV 可以作为过程变量或控制回路历史数据代表；即使属于 FIC/TIC/PIC/AIC 等 PID 回路，相关性、滞后、Granger、模型解释等分析仍可使用 .PV。

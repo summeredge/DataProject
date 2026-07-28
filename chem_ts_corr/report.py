@@ -117,36 +117,26 @@ def build_markdown_summary(
     risky = risk_flags[risk_flags.get("risk_count", 0) > 0] if not risk_flags.empty else pd.DataFrame()
     common_capacity = _risk_subset(risky, "common_capacity_driver_flag")
     strong = _recommended_subset(ranked_features, "strong_screening_candidate")
-    predictive = _recommended_subset(ranked_features, "prediction_candidate")
     not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "unstable_candidate", "poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
 
-    lines = [f"# 四层工业时序筛查摘要：{target}", "", "## 运行信息", ""]
+    lines = [f"# 初步筛选摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
 
-    lines.extend(["", "## 潜在驱动因素候选", ""])
+    lines.extend(["", "## 强初筛候选", ""])
     lines.extend(_table_lines(_core_columns(strong).head(15)))
-    lines.extend(["", "## 统计证据支持与排序", ""])
+    lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable","driver_rank","driver_priority_score","final_score","candidate_grade","evidence_completeness","evidence_coverage_status","evidence_missing_items","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","four_layer_coverage_status","four_layer_missing_items","evidence_support_items","evidence_against_items","evidence_conflict_items","candidate_summary","risk_flags"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable", "final_score", "association_score", "correlation_evidence_score", "innovation_score", "lag_quality", "data_quality_score", "evidence_score", "risk_flags", "recommended_use"] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
-            "evidence_coverage_status": "证据覆盖状态",
-            "evidence_missing_items": "缺失证据",
-            "four_layer_coverage_status": "四层解释覆盖状态",
-            "four_layer_missing_items": "四层解释缺失项",
-            "evidence_completeness": "证据覆盖度",
             "data_quality_score": "数据质量得分",
-            "evidence_confidence": "证据修正系数",
         }
     )
     lines.extend(_table_lines(decomposition))
-
-    lines.extend(["", "## 预测候选", ""])
-    lines.extend(_table_lines(_core_columns(predictive).head(15)))
 
     lines.extend(["", "## 疑似共同负荷驱动", ""])
     lines.extend(_table_lines(common_capacity.head(15)))
@@ -154,16 +144,7 @@ def build_markdown_summary(
     lines.extend(["", "## 不建议作为因果结论的变量", ""])
     lines.extend(_table_lines(_core_columns(not_causal).head(15)))
 
-    lines.extend(["", "## Granger 二级验证", ""])
-    lines.append("Granger 结果仅表示候选变量对目标的预测贡献，不作为因果结论。")
-    lines.extend(_table_lines(granger_tests.head(15)))
-
-    lines.extend(["", "## 第三层复核准备说明", ""])
-    lines.append("causal_review_candidates.csv 为规则化复核优先级清单（不引入 PCMCI/Transfer Entropy，仅用于三层复核排队）。")
-    review = build_causal_review_candidates(ranked_features)
-    lines.extend(_table_lines(review.head(15)))
-
-    lines.extend(["", "## 工程复核", ""])
+    lines.extend(["", "## 当前阶段建议", ""])
     advice: list[str] = []
     top10 = ranked_features.head(10) if not ranked_features.empty else pd.DataFrame()
     if not top10.empty and "lag_boundary_flag" in top10.columns:
@@ -193,16 +174,11 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- 稳健综合证据得分基于当前实际可用的关联、模型、稳定性和滞后质量证据计算；缺失证据从对应权重组合中省略并重新归一化，不按零分处理。",
-            "- evidence_strength 为多个允许权重组合所得分数的中位数，不是等权几何平均。",
-            "- 证据修正系数当前仅由数据质量得分决定；证据覆盖度仅用于展示缺失证据，不参与综合得分和候选排名。",
-            "- 评分组件覆盖和四层解释覆盖是两个不同口径：前者描述参与稳健综合得分的组件，后者描述 Layer 1～4、稳定性和数据质量状态是否均已获得。",
-            "- 风险标签只有在明确配置了扣减或分数上限时才改变 final_score；其他风险主要用于候选分类、等级限制和工程解释。",
-            "- residual_corr 是 target 和 candidate 分别剔除 CAPACITY 控制变量后的残差相关。",
-            "- regime_stability_final 综合工况覆盖度、方向一致性、强度一致性和滞后一致性。",
+            "- final_score 是初步统计筛选的稳健综合得分；缺失可选评分组件与真实零值分开处理，可用组件按其实际权重重新归一化。",
+            "- 当前摘要只解释初步分析已生成的相关性、滞后、数据质量和基础风险结果。",
+            "- 增强筛选、Granger、模型分析和综合复核须在对应页面单独运行后解读。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",
-            "- recommended_action 给出下一步处理建议，包括可作为预测候选、疑似共同负荷驱动、仅作相关性参考、建议人工工艺复核。",
-            "- 本报告输出的是筛查线索和预测候选，不直接给出工艺因果结论。",
+            "- 本报告输出的是初步筛查线索，不直接给出工艺因果或控制源结论。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -223,26 +199,15 @@ def _risk_subset(frame: pd.DataFrame, column: str) -> pd.DataFrame:
 def _core_columns(frame: pd.DataFrame) -> pd.DataFrame:
     columns = [
         "variable",
-        "driver_rank",
-        "driver_priority_score",
         "final_score",
-        "candidate_grade",
+        "pearson",
+        "spearman",
+        "method",
         "lag",
         "direction",
-        "layer1_association_status",
-        "layer2_temporal_status",
-        "layer3_independence_status",
-        "layer4_model_status",
-        "stability_status",
-        "data_quality_status",
-        "evidence_support_items",
-        "evidence_against_items",
-        "evidence_missing_items",
-        "four_layer_missing_items",
-        "four_layer_coverage_status",
-        "evidence_conflict_items",
         "risk_flags",
-        "candidate_summary",
+        "recommended_use",
+        "recommended_action",
     ]
     return frame[[col for col in columns if col in frame.columns]] if not frame.empty else frame
 
@@ -281,12 +246,13 @@ def _format_cell(value: object, column: str = "") -> str:
 
 def build_recommended_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
     if ranked_features.empty:
-        return pd.DataFrame(columns=["variable","driver_rank","driver_priority_score","candidate_grade","layer1_association_status","layer2_temporal_status","layer3_independence_status","layer4_model_status","stability_status","data_quality_status","evidence_support_items","evidence_against_items","evidence_missing_items","four_layer_missing_items","four_layer_coverage_status","evidence_conflict_items","risk_flags","candidate_summary","fallback_reason"])
-    ab = ranked_features[ranked_features.get("candidate_grade", pd.Series(index=ranked_features.index, dtype=str)).isin(["A", "B"])].copy()
+        return pd.DataFrame(columns=["variable", "final_score", "candidate_grade", "recommended_use", "fallback_reason"])
+    ordered = ranked_features.sort_values("final_score", ascending=False, kind="stable") if "final_score" in ranked_features.columns else ranked_features.copy()
+    ab = ordered[ordered.get("candidate_grade", pd.Series(index=ordered.index, dtype=str)).isin(["A", "B"])].copy()
     if not ab.empty:
         if "fallback_reason" not in ab.columns:
             ab["fallback_reason"] = ""
         return ab
-    top = ranked_features.head(10).copy()
+    top = ordered.head(10).copy()
     top["fallback_reason"] = "no_A_or_B_candidates"
     return top

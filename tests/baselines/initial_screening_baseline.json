@@ -1,0 +1,2805 @@
+{
+  "true_lagged_driver": {
+    "scenario": "true_lagged_driver",
+    "seed": 101,
+    "samples": 360,
+    "parameters": {
+      "scenario": "true_lagged_driver",
+      "seed": 101,
+      "n": 360,
+      "noise": 0.15,
+      "lag": 4
+    },
+    "variable_types": {
+      "noise": [
+        "noise"
+      ],
+      "true_driver": [
+        "x_driver"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_driver",
+      "noise"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_driver",
+        "final_score": 0.9440081389928132,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 4,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.9035720382603433,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.9440081389928132,
+        "innovation_score": 0.9888149483124491,
+        "pearson_q": 2.109754374884259e-295,
+        "spearman_q": 8.523168058095424e-284,
+        "corr_q_value": 2.109754374884259e-295
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.16940478914860943,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 1,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.21560015339940988,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.16940478914860943,
+        "innovation_score": 0.12777265089755419,
+        "pearson_q": 0.3317210145367228,
+        "spearman_q": 0.3317210145367228,
+        "corr_q_value": 0.3317210145367228
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_driver": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 1
+    },
+    "stability_metrics": {
+      "top_k_overlap_mean": 1.0,
+      "top_k_overlap_min": 1.0,
+      "true_driver_rank_mean": 1.0,
+      "true_driver_rank_std": 0.0,
+      "true_driver_rank_max": 1,
+      "true_driver_rank_range": 0,
+      "top_1_hit_rate": 1.0,
+      "top_3_recall_mean": 1.0,
+      "spearman_rank_stability": 0.9999999999999999,
+      "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
+      "missing_candidate_rank": 3,
+      "candidate_missing_counts": [
+        {
+          "label": "seed_plus_1",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "noise_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "samples_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        }
+      ],
+      "perturbations": [
+        {
+          "label": "base",
+          "parameters": {
+            "seed": 101,
+            "noise": 0.15,
+            "n": 360
+          },
+          "top_k": [
+            "x_driver",
+            "noise"
+          ],
+          "ranks": {
+            "x_driver": 1,
+            "noise": 2
+          },
+          "true_driver_grades": {
+            "x_driver": "A"
+          }
+        },
+        {
+          "label": "seed_plus_1",
+          "parameters": {
+            "seed": 102,
+            "noise": 0.15,
+            "n": 360
+          },
+          "top_k": [
+            "x_driver",
+            "noise"
+          ],
+          "ranks": {
+            "x_driver": 1,
+            "noise": 2
+          },
+          "true_driver_grades": {
+            "x_driver": "A"
+          }
+        },
+        {
+          "label": "noise_plus_10pct",
+          "parameters": {
+            "seed": 101,
+            "noise": 0.165,
+            "n": 360
+          },
+          "top_k": [
+            "x_driver",
+            "noise"
+          ],
+          "ranks": {
+            "x_driver": 1,
+            "noise": 2
+          },
+          "true_driver_grades": {
+            "x_driver": "A"
+          }
+        },
+        {
+          "label": "samples_plus_10pct",
+          "parameters": {
+            "seed": 101,
+            "noise": 0.15,
+            "n": 396
+          },
+          "top_k": [
+            "x_driver",
+            "noise"
+          ],
+          "ranks": {
+            "x_driver": 1,
+            "noise": 2
+          },
+          "true_driver_grades": {
+            "x_driver": "A"
+          }
+        }
+      ]
+    },
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "x_driver_top_3",
+      "x_driver_lag",
+      "x_driver_direction",
+      "stable_true_driver_rank",
+      "stable_top_1_hit",
+      "stable_top_3_recall",
+      "stable_true_presence",
+      "stable_candidate_presence",
+      "stable_top_k_overlap",
+      "stable_spearman"
+    ]
+  },
+  "downstream_response": {
+    "scenario": "downstream_response",
+    "seed": 102,
+    "samples": 360,
+    "parameters": {
+      "scenario": "downstream_response",
+      "seed": 102,
+      "n": 360,
+      "noise": 0.12,
+      "lag": 3
+    },
+    "variable_types": {
+      "downstream": [
+        "x_downstream"
+      ],
+      "noise": [
+        "noise"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_downstream",
+      "noise"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_downstream",
+        "final_score": 0.9393621602109699,
+        "candidate_grade": "C",
+        "recommended_use": "state_indicator",
+        "lag": -3,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8907502000804982,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.9393621602109699,
+        "innovation_score": 0.9925082401358484,
+        "pearson_q": 0.0,
+        "spearman_q": 7.10094942133635e-310,
+        "corr_q_value": 0.0
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.060797248290160505,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 6,
+        "direction": "变量领先目标",
+        "risk_flags": "lag_boundary",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.0,
+        "lag_boundary_flag": true,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.060797248290160505,
+        "innovation_score": 0.11926171010532657,
+        "pearson_q": 0.30968032885195285,
+        "spearman_q": 0.30968032885195285,
+        "corr_q_value": 0.30968032885195285
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 0.0,
+      "top_5_recall": 0.0,
+      "true_driver_average_rank": null,
+      "downstream_average_rank": 1.0,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_downstream": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 1
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "downstream_flag",
+      "downstream_class",
+      "downstream_grade_cap"
+    ]
+  },
+  "common_driver": {
+    "scenario": "common_driver",
+    "seed": 103,
+    "samples": 420,
+    "parameters": {
+      "scenario": "common_driver",
+      "seed": 103,
+      "n": 420,
+      "noise": 0.12,
+      "lag": 3,
+      "residual_control_columns": [
+        "z_driver"
+      ]
+    },
+    "variable_types": {
+      "true_driver": [
+        "z_driver"
+      ],
+      "common_driver_proxy": [
+        "x_common"
+      ]
+    },
+    "reference_map": {
+      "x_common": "z_driver"
+    },
+    "top_k": 5,
+    "top_k_results": [
+      "z_driver",
+      "x_common"
+    ],
+    "key_evidence": [
+      {
+        "variable": "z_driver",
+        "final_score": 0.9359577621702688,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8837271335770702,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.9359577621702688,
+        "innovation_score": 0.9916717462090078,
+        "pearson_q": 0.0,
+        "spearman_q": 0.0,
+        "corr_q_value": 0.0
+      },
+      {
+        "variable": "x_common",
+        "final_score": 0.9255762408640096,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8739772095250713,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.9255762408640096,
+        "innovation_score": 0.9802083860116771,
+        "pearson_q": 2.1682979882810241e-302,
+        "spearman_q": 3.068770893656231e-297,
+        "corr_q_value": 2.1682979882810241e-302
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": 2.0,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": 0.0,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [
+        {
+          "variable": "x_common",
+          "reference": "z_driver",
+          "variable_rank": 2,
+          "reference_rank": 1,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 0.010381521306259245,
+          "risk_flags": "",
+          "suppressed": false
+        }
+      ],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "z_driver": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 1.0,
+      "noise_top_5_rate": 0.0,
+      "significant_q_count": 2
+    },
+    "stability_metrics": {},
+    "passed": false,
+    "failure_reason": "common_driver_suppression_rate is below 1.0",
+    "failed_expectations": [
+      "common_driver_suppression_rate is below 1.0"
+    ],
+    "passed_expectations": [
+      "both_candidates_visible",
+      "common_driver_candidate",
+      "true_driver_precedes_proxy"
+    ]
+  },
+  "collinear_proxy": {
+    "scenario": "collinear_proxy",
+    "seed": 104,
+    "samples": 360,
+    "parameters": {
+      "scenario": "collinear_proxy",
+      "seed": 104,
+      "n": 360,
+      "noise": 0.1,
+      "lag": 2
+    },
+    "variable_types": {
+      "true_driver": [
+        "x1_driver"
+      ],
+      "proxy": [
+        "x2_proxy"
+      ]
+    },
+    "reference_map": {
+      "x2_proxy": "x1_driver"
+    },
+    "top_k": 5,
+    "top_k_results": [
+      "x1_driver",
+      "x2_proxy"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x1_driver",
+        "final_score": 0.9116996041287218,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8322503981917058,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.9116996041287218,
+        "innovation_score": 0.9954873813542563,
+        "pearson_q": 0.0,
+        "spearman_q": 0.0,
+        "corr_q_value": 0.0
+      },
+      {
+        "variable": "x2_proxy",
+        "final_score": 0.911600542650342,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8325481813559318,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.911600542650342,
+        "innovation_score": 0.9949517894120586,
+        "pearson_q": 0.0,
+        "spearman_q": 0.0,
+        "corr_q_value": 0.0
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": 2.0,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
+      "common_driver_details": [],
+      "proxy_separation_details": [
+        {
+          "variable": "x2_proxy",
+          "reference": "x1_driver",
+          "variable_rank": 2,
+          "reference_rank": 1,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 9.906147837979162e-05,
+          "risk_flags": "redundant_proxy",
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
+          "separated": false
+        }
+      ],
+      "lag_identification_error": {
+        "x1_driver": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 1.0,
+      "noise_top_5_rate": 0.0,
+      "significant_q_count": 2
+    },
+    "stability_metrics": {
+      "top_k_overlap_mean": 1.0,
+      "top_k_overlap_min": 1.0,
+      "true_driver_rank_mean": 1.25,
+      "true_driver_rank_std": 0.4330127018922193,
+      "true_driver_rank_max": 2,
+      "true_driver_rank_range": 1,
+      "top_1_hit_rate": 0.75,
+      "top_3_recall_mean": 1.0,
+      "spearman_rank_stability": 0.3333333333333333,
+      "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
+      "missing_candidate_rank": 3,
+      "candidate_missing_counts": [
+        {
+          "label": "seed_plus_1",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "noise_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "samples_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        }
+      ],
+      "perturbations": [
+        {
+          "label": "base",
+          "parameters": {
+            "seed": 104,
+            "noise": 0.1,
+            "n": 360
+          },
+          "top_k": [
+            "x1_driver",
+            "x2_proxy"
+          ],
+          "ranks": {
+            "x1_driver": 1,
+            "x2_proxy": 2
+          },
+          "true_driver_grades": {
+            "x1_driver": "A"
+          }
+        },
+        {
+          "label": "seed_plus_1",
+          "parameters": {
+            "seed": 105,
+            "noise": 0.1,
+            "n": 360
+          },
+          "top_k": [
+            "x2_proxy",
+            "x1_driver"
+          ],
+          "ranks": {
+            "x2_proxy": 1,
+            "x1_driver": 2
+          },
+          "true_driver_grades": {
+            "x1_driver": "A"
+          }
+        },
+        {
+          "label": "noise_plus_10pct",
+          "parameters": {
+            "seed": 104,
+            "noise": 0.11000000000000001,
+            "n": 360
+          },
+          "top_k": [
+            "x1_driver",
+            "x2_proxy"
+          ],
+          "ranks": {
+            "x1_driver": 1,
+            "x2_proxy": 2
+          },
+          "true_driver_grades": {
+            "x1_driver": "A"
+          }
+        },
+        {
+          "label": "samples_plus_10pct",
+          "parameters": {
+            "seed": 104,
+            "noise": 0.1,
+            "n": 396
+          },
+          "top_k": [
+            "x1_driver",
+            "x2_proxy"
+          ],
+          "ranks": {
+            "x1_driver": 1,
+            "x2_proxy": 2
+          },
+          "true_driver_grades": {
+            "x1_driver": "A"
+          }
+        }
+      ]
+    },
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "redundancy_group_detected",
+      "proxy_group_unresolved",
+      "proxy_identification_rate",
+      "conservative_group_class",
+      "stable_proxy_candidate_presence",
+      "stable_proxy_top_k_overlap",
+      "stable_proxy_spearman"
+    ]
+  },
+  "nonlinear_stable_driver": {
+    "scenario": "nonlinear_stable_driver",
+    "seed": 105,
+    "samples": 400,
+    "parameters": {
+      "scenario": "nonlinear_stable_driver",
+      "seed": 105,
+      "n": 400,
+      "noise": 0.08,
+      "lag": 2,
+      "skip_model_lift": false
+    },
+    "variable_types": {
+      "true_driver": [
+        "x_nonlinear"
+      ],
+      "noise": [
+        "noise_00",
+        "noise_01",
+        "noise_02",
+        "noise_03",
+        "noise_04",
+        "noise_05",
+        "noise_06",
+        "noise_07"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "noise_01",
+      "x_nonlinear",
+      "noise_04",
+      "noise_06",
+      "noise_02"
+    ],
+    "key_evidence": [
+      {
+        "variable": "noise_01",
+        "final_score": 0.25691507629498167,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.4226272209751325,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.25691507629498167,
+        "innovation_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "x_nonlinear",
+        "final_score": 0.18730330592521657,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.25087566351804885,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.18730330592521657,
+        "innovation_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_04",
+        "final_score": 0.14960454725229858,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.19665793650616234,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.14960454725229858,
+        "innovation_score": 0.12058383667056756,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_06",
+        "final_score": 0.12382693995851736,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 5,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.18420044547268682,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.12382693995851736,
+        "innovation_score": 0.049156119129950895,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_02",
+        "final_score": 0.10083655695139701,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.09871538273703014,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.10083655695139701,
+        "innovation_score": null,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_03",
+        "final_score": 0.059986024287849354,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.03182998961520637,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.059986024287849354,
+        "innovation_score": 0.08259487662381008,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_00",
+        "final_score": 0.059829787485698276,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 1,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.03733436019972298,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.059829787485698276,
+        "innovation_score": 0.08674620617338315,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_07",
+        "final_score": 0.05731576756240635,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -5,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.006957452194892393,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.05731576756240635,
+        "innovation_score": 0.11896476616722466,
+        "pearson_q": 0.8824694068013634,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      },
+      {
+        "variable": "noise_05",
+        "final_score": 0.04377742309379393,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -3,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.024736387168433287,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.997836259329798,
+        "evidence_score": 0.04377742309379393,
+        "innovation_score": 0.08245713198045566,
+        "pearson_q": 0.895594371393314,
+        "spearman_q": 0.8824694068013634,
+        "corr_q_value": 0.8824694068013634
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 2.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_nonlinear": 1
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 0.5,
+      "significant_q_count": 0
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "nonlinear_candidate_present",
+      "nonlinear_followup_not_executed"
+    ]
+  },
+  "regime_sign_reversal": {
+    "scenario": "regime_sign_reversal",
+    "seed": 106,
+    "samples": 420,
+    "parameters": {
+      "scenario": "regime_sign_reversal",
+      "seed": 106,
+      "n": 420,
+      "noise": 0.08,
+      "lag": 2,
+      "regimes": 2,
+      "segment_column": "load"
+    },
+    "variable_types": {
+      "true_driver": [
+        "x_reversal"
+      ],
+      "regime": [
+        "load"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_reversal",
+      "load"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_reversal",
+        "final_score": 0.20772431439043282,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.2897257163041755,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.20772431439043282,
+        "innovation_score": 0.12275262378069449,
+        "pearson_q": 0.3919548697925357,
+        "spearman_q": 0.5114640676772834,
+        "corr_q_value": 0.3919548697925357
+      },
+      {
+        "variable": "load",
+        "final_score": 0.040879658343050816,
+        "candidate_grade": "E",
+        "recommended_use": "poor_quality_variable",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "poor_data_quality",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.04946582811797726,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.6484197773255048,
+        "evidence_score": 0.040879658343050816,
+        "innovation_score": 0.08024105584375092,
+        "pearson_q": 0.5114640676772834,
+        "spearman_q": 0.5114640676772834,
+        "corr_q_value": 0.5114640676772834
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_reversal": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 0.0,
+      "significant_q_count": 0
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "regime_candidate_present",
+      "regime_followup_not_executed"
+    ]
+  },
+  "outlier_driven_correlation": {
+    "scenario": "outlier_driven_correlation",
+    "seed": 107,
+    "samples": 360,
+    "parameters": {
+      "scenario": "outlier_driven_correlation",
+      "seed": 107,
+      "n": 360,
+      "noise": 0.1,
+      "outlier_count": 16,
+      "outlier_indices": [
+        15,
+        37,
+        59,
+        81,
+        103,
+        125,
+        147,
+        169,
+        191,
+        213,
+        235,
+        257,
+        279,
+        301,
+        323,
+        345
+      ],
+      "clean_expected_correlation_max": 0.15
+    },
+    "variable_types": {
+      "outlier_proxy": [
+        "x_outlier"
+      ],
+      "noise": [
+        "noise"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_outlier",
+      "noise"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_outlier",
+        "final_score": 0.44,
+        "candidate_grade": "D",
+        "recommended_use": "poor_quality_variable",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "poor_data_quality",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8774340210134279,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.6787594209203297,
+        "evidence_score": 0.5914479325087437,
+        "innovation_score": 0.8716005368231138,
+        "pearson_q": 1.9790015412195878e-104,
+        "spearman_q": 0.49015494324849473,
+        "corr_q_value": 1.9790015412195878e-104
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.06433135901122167,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -6,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;lag_boundary",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.0,
+        "lag_boundary_flag": true,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.06433135901122167,
+        "innovation_score": null,
+        "pearson_q": 0.9515244314409504,
+        "spearman_q": 0.39455079020693745,
+        "corr_q_value": 0.39455079020693745
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 0.0,
+      "top_5_recall": 0.0,
+      "true_driver_average_rank": null,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {},
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 1
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "outlier_robustness_signal",
+      "outlier_grade_cap"
+    ]
+  },
+  "lag_boundary_artifact": {
+    "scenario": "lag_boundary_artifact",
+    "seed": 108,
+    "samples": 360,
+    "parameters": {
+      "scenario": "lag_boundary_artifact",
+      "seed": 108,
+      "n": 360,
+      "noise": 0.1,
+      "lag": 6,
+      "max_lag": 6
+    },
+    "variable_types": {
+      "boundary_artifact": [
+        "x_boundary"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_boundary"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_boundary",
+        "final_score": 0.8131218978910841,
+        "candidate_grade": "C",
+        "recommended_use": "manual_review_required",
+        "lag": 6,
+        "direction": "变量领先目标",
+        "risk_flags": "lag_boundary",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.6360718942841359,
+        "lag_boundary_flag": true,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.8131218978910841,
+        "innovation_score": 0.9940918575554111,
+        "pearson_q": 0.0,
+        "spearman_q": 0.0,
+        "corr_q_value": 0.0
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_boundary": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 0.0,
+      "significant_q_count": 1
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "lag_boundary_flag",
+      "lag_boundary_grade_cap"
+    ]
+  },
+  "noise_only": {
+    "scenario": "noise_only",
+    "seed": 109,
+    "samples": 360,
+    "parameters": {
+      "scenario": "noise_only",
+      "seed": 109,
+      "n": 360,
+      "noise": 1.0,
+      "variable_count": 30
+    },
+    "variable_types": {
+      "noise": [
+        "noise_00",
+        "noise_01",
+        "noise_02",
+        "noise_03",
+        "noise_04",
+        "noise_05",
+        "noise_06",
+        "noise_07",
+        "noise_08",
+        "noise_09",
+        "noise_10",
+        "noise_11",
+        "noise_12",
+        "noise_13",
+        "noise_14",
+        "noise_15",
+        "noise_16",
+        "noise_17",
+        "noise_18",
+        "noise_19",
+        "noise_20",
+        "noise_21",
+        "noise_22",
+        "noise_23",
+        "noise_24",
+        "noise_25",
+        "noise_26",
+        "noise_27",
+        "noise_28",
+        "noise_29"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "noise_05",
+      "noise_28",
+      "noise_23",
+      "noise_14",
+      "noise_19"
+    ],
+    "key_evidence": [
+      {
+        "variable": "noise_05",
+        "final_score": 0.3845149736389173,
+        "candidate_grade": "D",
+        "recommended_use": "manual_review_required",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.627291871983063,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.3845149736389173,
+        "innovation_score": 0.11151290809218264,
+        "pearson_q": 0.1978369374086781,
+        "spearman_q": 0.2655478000216572,
+        "corr_q_value": 0.1978369374086781
+      },
+      {
+        "variable": "noise_28",
+        "final_score": 0.34427883093069306,
+        "candidate_grade": "D",
+        "recommended_use": "manual_review_required",
+        "lag": 5,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.5435128297773528,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.34427883093069306,
+        "innovation_score": 0.1529465070057354,
+        "pearson_q": 0.7500143151685648,
+        "spearman_q": 0.7500143151685648,
+        "corr_q_value": 0.7500143151685648
+      },
+      {
+        "variable": "noise_23",
+        "final_score": 0.2899616889205237,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.4110919238743683,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.2899616889205237,
+        "innovation_score": 0.19238507027944565,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.6796189354799328,
+        "corr_q_value": 0.6796189354799328
+      },
+      {
+        "variable": "noise_14",
+        "final_score": 0.2620677192837155,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 1,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.38070331891299786,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.2620677192837155,
+        "innovation_score": 0.16225780394789685,
+        "pearson_q": 0.7500143151685648,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.7500143151685648
+      },
+      {
+        "variable": "noise_19",
+        "final_score": 0.26071637411049864,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -4,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.4163535765495421,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.26071637411049864,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_09",
+        "final_score": 0.2601195655746573,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.4231316480297814,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.2601195655746573,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_15",
+        "final_score": 0.2535639079181918,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.368758742586357,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.2535639079181918,
+        "innovation_score": 0.17830137328074236,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_02",
+        "final_score": 0.24188040743055028,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.33677850608524684,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.24188040743055028,
+        "innovation_score": 0.16453379896031842,
+        "pearson_q": 0.7500143151685648,
+        "spearman_q": 0.7500143151685648,
+        "corr_q_value": 0.7500143151685648
+      },
+      {
+        "variable": "noise_21",
+        "final_score": 0.22816169787486834,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.35350921500303467,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.22816169787486834,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.922038891345491,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_24",
+        "final_score": 0.20870239939039303,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -4,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.3308047290917911,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.20870239939039303,
+        "innovation_score": null,
+        "pearson_q": 0.922038891345491,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_04",
+        "final_score": 0.2074125262915682,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.2727005166051632,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.2074125262915682,
+        "innovation_score": null,
+        "pearson_q": 0.7354838068149102,
+        "spearman_q": 0.7500143151685648,
+        "corr_q_value": 0.7354838068149102
+      },
+      {
+        "variable": "noise_17",
+        "final_score": 0.20123679871631966,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.25078891656461716,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.20123679871631966,
+        "innovation_score": 0.15931313490667012,
+        "pearson_q": 0.7136935396094547,
+        "spearman_q": 0.8229435735658115,
+        "corr_q_value": 0.7136935396094547
+      },
+      {
+        "variable": "noise_00",
+        "final_score": 0.1940882674767634,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.22523359932543952,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.1940882674767634,
+        "innovation_score": 0.17836967915734553,
+        "pearson_q": 0.6796189354799328,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.6796189354799328
+      },
+      {
+        "variable": "noise_27",
+        "final_score": 0.18215813817819945,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.2786918164247637,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.18215813817819945,
+        "innovation_score": 0.05955054516922284,
+        "pearson_q": 0.8229435735658115,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8229435735658115
+      },
+      {
+        "variable": "noise_13",
+        "final_score": 0.18136529211123195,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.26304519101827006,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.18136529211123195,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_22",
+        "final_score": 0.15872208230482696,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 6,
+        "direction": "变量领先目标",
+        "risk_flags": "lag_boundary",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.11093747584740299,
+        "lag_boundary_flag": true,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.15872208230482696,
+        "innovation_score": 0.2336557012835167,
+        "pearson_q": 0.1978369374086781,
+        "spearman_q": 0.7500143151685648,
+        "corr_q_value": 0.1978369374086781
+      },
+      {
+        "variable": "noise_06",
+        "final_score": 0.15288824268066684,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.2230278587792347,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.15288824268066684,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.922038891345491,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_12",
+        "final_score": 0.12203492443626411,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.14167544082986247,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.12203492443626411,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_11",
+        "final_score": 0.12042128807447129,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 2,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.1328700298842803,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.12042128807447129,
+        "innovation_score": 0.10611261841638546,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_08",
+        "final_score": 0.11910104265315767,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.1437933704953673,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.11910104265315767,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_03",
+        "final_score": 0.11296982751259324,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.11817032910600375,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.11296982751259324,
+        "innovation_score": 0.11623208067986471,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_16",
+        "final_score": 0.10786620093445247,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -4,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.12218741185813622,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.10786620093445247,
+        "innovation_score": 0.0945705848114779,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_29",
+        "final_score": 0.0989261976598622,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 1,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.10378450878780435,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.0989261976598622,
+        "innovation_score": null,
+        "pearson_q": 0.922038891345491,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_25",
+        "final_score": 0.09711953457158017,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.12011811846209743,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.09711953457158017,
+        "innovation_score": 0.062416459599055875,
+        "pearson_q": 0.922038891345491,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_10",
+        "final_score": 0.0946836833986788,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 1,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.07784051008525097,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.0946836833986788,
+        "innovation_score": 0.10811215642241663,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_01",
+        "final_score": 0.07369141149447438,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -5,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.043007152071040895,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.07369141149447438,
+        "innovation_score": 0.10204066943980888,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_26",
+        "final_score": 0.05698102077188633,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.017058430192426446,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.05698102077188633,
+        "innovation_score": null,
+        "pearson_q": 0.8988002275898083,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_20",
+        "final_score": 0.0498257357405156,
+        "candidate_grade": "E",
+        "recommended_use": "manual_review_required",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.03037028597280699,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.0498257357405156,
+        "innovation_score": 0.055124408428335964,
+        "pearson_q": 0.922038891345491,
+        "spearman_q": 0.8988002275898083,
+        "corr_q_value": 0.8988002275898083
+      },
+      {
+        "variable": "noise_07",
+        "final_score": 0.042915880789786295,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.012540143199428744,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.042915880789786295,
+        "innovation_score": 0.06744201641001982,
+        "pearson_q": 0.9102824799947251,
+        "spearman_q": 0.922038891345491,
+        "corr_q_value": 0.9102824799947251
+      },
+      {
+        "variable": "noise_18",
+        "final_score": 0.040943506789846956,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -6,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable;lag_boundary",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.0,
+        "lag_boundary_flag": true,
+        "data_quality_score": 0.9975961328836203,
+        "evidence_score": 0.040943506789846956,
+        "innovation_score": 0.08306041616490277,
+        "pearson_q": 0.905265861879004,
+        "spearman_q": 0.922038891345491,
+        "corr_q_value": 0.905265861879004
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 0.0,
+      "top_5_recall": 0.0,
+      "true_driver_average_rank": null,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {},
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 0.16666666666666666,
+      "significant_q_count": 0
+    },
+    "stability_metrics": {
+      "top_k_overlap_mean": 0.4537037037037037,
+      "top_k_overlap_min": 0.1111111111111111,
+      "true_driver_rank_mean": null,
+      "true_driver_rank_std": null,
+      "true_driver_rank_max": null,
+      "true_driver_rank_range": null,
+      "top_1_hit_rate": 0.0,
+      "top_3_recall_mean": 0.0,
+      "spearman_rank_stability": 0.38731924360400444,
+      "grade_consistency": 1.0,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": null,
+      "missing_candidate_rank": 31,
+      "candidate_missing_counts": [
+        {
+          "label": "seed_plus_1",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "noise_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "samples_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        }
+      ],
+      "perturbations": [
+        {
+          "label": "base",
+          "parameters": {
+            "seed": 109,
+            "noise": 1.0,
+            "n": 360
+          },
+          "top_k": [
+            "noise_05",
+            "noise_28",
+            "noise_23",
+            "noise_14",
+            "noise_19"
+          ],
+          "ranks": {
+            "noise_05": 1,
+            "noise_28": 2,
+            "noise_23": 3,
+            "noise_14": 4,
+            "noise_19": 5,
+            "noise_09": 6,
+            "noise_15": 7,
+            "noise_02": 8,
+            "noise_21": 9,
+            "noise_24": 10,
+            "noise_04": 11,
+            "noise_17": 12,
+            "noise_00": 13,
+            "noise_27": 14,
+            "noise_13": 15,
+            "noise_22": 16,
+            "noise_06": 17,
+            "noise_12": 18,
+            "noise_11": 19,
+            "noise_08": 20,
+            "noise_03": 21,
+            "noise_16": 22,
+            "noise_29": 23,
+            "noise_25": 24,
+            "noise_10": 25,
+            "noise_01": 26,
+            "noise_26": 27,
+            "noise_20": 28,
+            "noise_07": 29,
+            "noise_18": 30
+          },
+          "true_driver_grades": {}
+        },
+        {
+          "label": "seed_plus_1",
+          "parameters": {
+            "seed": 110,
+            "noise": 1.0,
+            "n": 360
+          },
+          "top_k": [
+            "noise_05",
+            "noise_20",
+            "noise_15",
+            "noise_26",
+            "noise_27"
+          ],
+          "ranks": {
+            "noise_05": 1,
+            "noise_20": 2,
+            "noise_15": 3,
+            "noise_26": 4,
+            "noise_27": 5,
+            "noise_12": 6,
+            "noise_02": 7,
+            "noise_23": 8,
+            "noise_07": 9,
+            "noise_10": 10,
+            "noise_24": 11,
+            "noise_06": 12,
+            "noise_17": 13,
+            "noise_00": 14,
+            "noise_09": 15,
+            "noise_21": 16,
+            "noise_01": 17,
+            "noise_18": 18,
+            "noise_03": 19,
+            "noise_29": 20,
+            "noise_11": 21,
+            "noise_22": 22,
+            "noise_08": 23,
+            "noise_19": 24,
+            "noise_14": 25,
+            "noise_16": 26,
+            "noise_28": 27,
+            "noise_13": 28,
+            "noise_25": 29,
+            "noise_04": 30
+          },
+          "true_driver_grades": {}
+        },
+        {
+          "label": "noise_plus_10pct",
+          "parameters": {
+            "seed": 109,
+            "noise": 1.1,
+            "n": 360
+          },
+          "top_k": [
+            "noise_05",
+            "noise_28",
+            "noise_23",
+            "noise_14",
+            "noise_19"
+          ],
+          "ranks": {
+            "noise_05": 1,
+            "noise_28": 2,
+            "noise_23": 3,
+            "noise_14": 4,
+            "noise_19": 5,
+            "noise_09": 6,
+            "noise_15": 7,
+            "noise_02": 8,
+            "noise_21": 9,
+            "noise_24": 10,
+            "noise_04": 11,
+            "noise_17": 12,
+            "noise_00": 13,
+            "noise_27": 14,
+            "noise_13": 15,
+            "noise_22": 16,
+            "noise_06": 17,
+            "noise_12": 18,
+            "noise_11": 19,
+            "noise_08": 20,
+            "noise_03": 21,
+            "noise_16": 22,
+            "noise_29": 23,
+            "noise_25": 24,
+            "noise_10": 25,
+            "noise_01": 26,
+            "noise_26": 27,
+            "noise_20": 28,
+            "noise_07": 29,
+            "noise_18": 30
+          },
+          "true_driver_grades": {}
+        },
+        {
+          "label": "samples_plus_10pct",
+          "parameters": {
+            "seed": 109,
+            "noise": 1.0,
+            "n": 396
+          },
+          "top_k": [
+            "noise_02",
+            "noise_05",
+            "noise_01",
+            "noise_19",
+            "noise_04"
+          ],
+          "ranks": {
+            "noise_02": 1,
+            "noise_05": 2,
+            "noise_01": 3,
+            "noise_19": 4,
+            "noise_04": 5,
+            "noise_03": 6,
+            "noise_27": 7,
+            "noise_00": 8,
+            "noise_28": 9,
+            "noise_13": 10,
+            "noise_29": 11,
+            "noise_24": 12,
+            "noise_11": 13,
+            "noise_08": 14,
+            "noise_16": 15,
+            "noise_07": 16,
+            "noise_20": 17,
+            "noise_10": 18,
+            "noise_09": 19,
+            "noise_15": 20,
+            "noise_18": 21,
+            "noise_23": 22,
+            "noise_25": 23,
+            "noise_22": 24,
+            "noise_17": 25,
+            "noise_06": 26,
+            "noise_21": 27,
+            "noise_14": 28,
+            "noise_12": 29,
+            "noise_26": 30
+          },
+          "true_driver_grades": {}
+        }
+      ],
+      "multi_seed_false_positives": {
+        "seeds": [
+          109,
+          110,
+          111,
+          112,
+          113
+        ],
+        "high_grade_false_positive_rate": 0.0,
+        "false_positive_run_count": 0,
+        "maximum_false_positive_grade": "D",
+        "runs": [
+          {
+            "seed": 109,
+            "samples": 360,
+            "noise": 1.0,
+            "variable_count": 30,
+            "top_k": [
+              "noise_05",
+              "noise_28",
+              "noise_23",
+              "noise_14",
+              "noise_19"
+            ],
+            "high_grade_false_positive_rate": 0.0,
+            "noise_top_5_rate": 0.16666666666666666,
+            "significant_q_count": 0,
+            "high_grade_variables": []
+          },
+          {
+            "seed": 110,
+            "samples": 360,
+            "noise": 1.0,
+            "variable_count": 30,
+            "top_k": [
+              "noise_05",
+              "noise_20",
+              "noise_15",
+              "noise_26",
+              "noise_27"
+            ],
+            "high_grade_false_positive_rate": 0.0,
+            "noise_top_5_rate": 0.16666666666666666,
+            "significant_q_count": 0,
+            "high_grade_variables": []
+          },
+          {
+            "seed": 111,
+            "samples": 360,
+            "noise": 1.0,
+            "variable_count": 30,
+            "top_k": [
+              "noise_14",
+              "noise_25",
+              "noise_28",
+              "noise_13",
+              "noise_07"
+            ],
+            "high_grade_false_positive_rate": 0.0,
+            "noise_top_5_rate": 0.16666666666666666,
+            "significant_q_count": 0,
+            "high_grade_variables": []
+          },
+          {
+            "seed": 112,
+            "samples": 360,
+            "noise": 1.0,
+            "variable_count": 30,
+            "top_k": [
+              "noise_27",
+              "noise_04",
+              "noise_10",
+              "noise_00",
+              "noise_29"
+            ],
+            "high_grade_false_positive_rate": 0.0,
+            "noise_top_5_rate": 0.16666666666666666,
+            "significant_q_count": 0,
+            "high_grade_variables": []
+          },
+          {
+            "seed": 113,
+            "samples": 360,
+            "noise": 1.0,
+            "variable_count": 30,
+            "top_k": [
+              "noise_15",
+              "noise_16",
+              "noise_17",
+              "noise_10",
+              "noise_05"
+            ],
+            "high_grade_false_positive_rate": 0.0,
+            "noise_top_5_rate": 0.16666666666666666,
+            "significant_q_count": 0,
+            "high_grade_variables": []
+          }
+        ]
+      }
+    },
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "noise_grade_control",
+      "noise_fdr_control",
+      "noise_top_1_hit",
+      "noise_false_positive_rate",
+      "noise_false_positive_runs",
+      "noise_maximum_grade"
+    ]
+  },
+  "mixed_evidence": {
+    "scenario": "mixed_evidence",
+    "seed": 110,
+    "samples": 480,
+    "parameters": {
+      "scenario": "mixed_evidence",
+      "seed": 110,
+      "n": 480,
+      "noise": 0.12,
+      "residual_control_columns": [
+        "z_driver"
+      ],
+      "skip_model_lift": false
+    },
+    "variable_types": {
+      "true_driver": [
+        "x_driver",
+        "z_driver"
+      ],
+      "proxy": [
+        "x_proxy"
+      ],
+      "common_driver_proxy": [
+        "x_common"
+      ],
+      "downstream": [
+        "x_downstream"
+      ],
+      "noise": [
+        "noise"
+      ]
+    },
+    "reference_map": {
+      "x_common": "z_driver",
+      "x_proxy": "x_driver"
+    },
+    "top_k": 5,
+    "top_k_results": [
+      "x_downstream",
+      "z_driver",
+      "x_common",
+      "x_proxy",
+      "x_driver"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_downstream",
+        "final_score": 0.9409561799376542,
+        "candidate_grade": "C",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8889984770930264,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.9409561799376542,
+        "innovation_score": 0.9963322102207675,
+        "pearson_q": 0.0,
+        "spearman_q": 0.0,
+        "corr_q_value": 0.0
+      },
+      {
+        "variable": "z_driver",
+        "final_score": 0.8041020770588063,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.907673490156623,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.8041020770588063,
+        "innovation_score": 0.7074873384268083,
+        "pearson_q": 7.04554755111137e-70,
+        "spearman_q": 1.4653336776084935e-61,
+        "corr_q_value": 7.04554755111137e-70
+      },
+      {
+        "variable": "x_common",
+        "final_score": 0.8013917414805224,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 0,
+        "direction": "同步变化",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.9013270873082251,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.8013917414805224,
+        "innovation_score": 0.7095866339320158,
+        "pearson_q": 3.629879944141097e-70,
+        "spearman_q": 1.2114107863966757e-61,
+        "corr_q_value": 3.629879944141097e-70
+      },
+      {
+        "variable": "x_proxy",
+        "final_score": 0.762728982769568,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 4,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8162990835256414,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.762728982769568,
+        "innovation_score": 0.7147116758195935,
+        "pearson_q": 3.1103135527091173e-72,
+        "spearman_q": 6.10911458148868e-67,
+        "corr_q_value": 3.1103135527091173e-72
+      },
+      {
+        "variable": "x_driver",
+        "final_score": 0.7612650595555226,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 4,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8135101642308044,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.7612650595555226,
+        "innovation_score": 0.7151868035917446,
+        "pearson_q": 3.895832370010608e-72,
+        "spearman_q": 1.084158305196142e-66,
+        "corr_q_value": 3.895832370010608e-72
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.22288515328981348,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.3247532894411381,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9981965573777615,
+        "evidence_score": 0.22288515328981348,
+        "innovation_score": 0.11488618499424716,
+        "pearson_q": 0.05608531803008355,
+        "spearman_q": 0.2606402378148074,
+        "corr_q_value": 0.05608531803008355
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 0.5,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 3.5,
+      "downstream_average_rank": 1.0,
+      "common_driver_average_rank": 3.0,
+      "proxy_average_rank": 4.0,
+      "common_driver_suppression_rate": 0.0,
+      "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
+      "common_driver_details": [
+        {
+          "variable": "x_common",
+          "reference": "z_driver",
+          "variable_rank": 3,
+          "reference_rank": 2,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 0.002710335578283929,
+          "risk_flags": "",
+          "suppressed": false
+        }
+      ],
+      "proxy_separation_details": [
+        {
+          "variable": "x_proxy",
+          "reference": "x_driver",
+          "variable_rank": 4,
+          "reference_rank": 5,
+          "rank_gap": -1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": -0.0014639232140454261,
+          "risk_flags": "redundant_proxy",
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
+          "separated": false
+        }
+      ],
+      "lag_identification_error": {
+        "x_driver": 0,
+        "z_driver": 0,
+        "x_downstream": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.5,
+      "noise_top_5_rate": 0.0,
+      "significant_q_count": 5
+    },
+    "stability_metrics": {
+      "top_k_overlap_mean": 1.0,
+      "top_k_overlap_min": 1.0,
+      "true_driver_rank_mean": 3.625,
+      "true_driver_rank_std": 1.2183492931011204,
+      "true_driver_rank_max": 5,
+      "true_driver_rank_range": 3,
+      "top_1_hit_rate": 0.0,
+      "top_3_recall_mean": 0.5,
+      "spearman_rank_stability": 0.942857142857143,
+      "grade_consistency": 0.8333333333333334,
+      "candidate_presence_rate": 1.0,
+      "true_driver_presence_rate": 1.0,
+      "missing_candidate_rank": 7,
+      "candidate_missing_counts": [
+        {
+          "label": "seed_plus_1",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "noise_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        },
+        {
+          "label": "samples_plus_10pct",
+          "missing_from_variant": [],
+          "new_in_variant": []
+        }
+      ],
+      "perturbations": [
+        {
+          "label": "base",
+          "parameters": {
+            "seed": 110,
+            "noise": 0.12,
+            "n": 480
+          },
+          "top_k": [
+            "x_downstream",
+            "z_driver",
+            "x_common",
+            "x_proxy",
+            "x_driver"
+          ],
+          "ranks": {
+            "x_downstream": 1,
+            "z_driver": 2,
+            "x_common": 3,
+            "x_proxy": 4,
+            "x_driver": 5,
+            "noise": 6
+          },
+          "true_driver_grades": {
+            "z_driver": "A",
+            "x_driver": "A"
+          }
+        },
+        {
+          "label": "seed_plus_1",
+          "parameters": {
+            "seed": 111,
+            "noise": 0.12,
+            "n": 480
+          },
+          "top_k": [
+            "x_downstream",
+            "x_common",
+            "z_driver",
+            "x_driver",
+            "x_proxy"
+          ],
+          "ranks": {
+            "x_downstream": 1,
+            "x_common": 2,
+            "z_driver": 3,
+            "x_driver": 4,
+            "x_proxy": 5,
+            "noise": 6
+          },
+          "true_driver_grades": {
+            "z_driver": "A",
+            "x_driver": "B"
+          }
+        },
+        {
+          "label": "noise_plus_10pct",
+          "parameters": {
+            "seed": 110,
+            "noise": 0.132,
+            "n": 480
+          },
+          "top_k": [
+            "x_downstream",
+            "z_driver",
+            "x_common",
+            "x_proxy",
+            "x_driver"
+          ],
+          "ranks": {
+            "x_downstream": 1,
+            "z_driver": 2,
+            "x_common": 3,
+            "x_proxy": 4,
+            "x_driver": 5,
+            "noise": 6
+          },
+          "true_driver_grades": {
+            "z_driver": "A",
+            "x_driver": "A"
+          }
+        },
+        {
+          "label": "samples_plus_10pct",
+          "parameters": {
+            "seed": 110,
+            "noise": 0.12,
+            "n": 528
+          },
+          "top_k": [
+            "x_downstream",
+            "x_common",
+            "z_driver",
+            "x_proxy",
+            "x_driver"
+          ],
+          "ranks": {
+            "x_downstream": 1,
+            "x_common": 2,
+            "z_driver": 3,
+            "x_proxy": 4,
+            "x_driver": 5,
+            "noise": 6
+          },
+          "true_driver_grades": {
+            "z_driver": "A",
+            "x_driver": "A"
+          }
+        }
+      ]
+    },
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "x_driver_present",
+      "z_driver_present",
+      "x_proxy_present",
+      "x_common_present",
+      "x_downstream_present",
+      "noise_present",
+      "true_drivers_present",
+      "downstream_direction",
+      "downstream_grade_cap",
+      "common_driver_candidate",
+      "proxy_redundancy_unresolved",
+      "proxy_identification_rate",
+      "noise_low",
+      "model_followup_not_executed",
+      "stable_mixed_recall",
+      "stable_mixed_true_presence",
+      "stable_mixed_candidate_presence",
+      "stable_mixed_top_k_overlap",
+      "stable_mixed_spearman"
+    ]
+  },
+  "model_incremental_validation": {
+    "scenario": "model_incremental_validation",
+    "seed": 111,
+    "samples": 420,
+    "parameters": {
+      "scenario": "model_incremental_validation",
+      "seed": 111,
+      "n": 420,
+      "noise": 0.12,
+      "lag": 3,
+      "skip_model_lift": false
+    },
+    "variable_types": {
+      "true_driver": [
+        "x_incremental"
+      ],
+      "proxy": [
+        "x_proxy"
+      ],
+      "noise": [
+        "noise"
+      ]
+    },
+    "reference_map": {
+      "x_proxy": "x_incremental"
+    },
+    "top_k": 5,
+    "top_k_results": [
+      "x_incremental",
+      "x_proxy",
+      "noise"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_incremental",
+        "final_score": 0.8940824870449141,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8937107500104394,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.8940824870449141,
+        "innovation_score": 0.8728543948900195,
+        "pearson_q": 8.581618764149815e-105,
+        "spearman_q": 7.62491828681006e-174,
+        "corr_q_value": 7.62491828681006e-174
+      },
+      {
+        "variable": "x_proxy",
+        "final_score": 0.8937579138796146,
+        "candidate_grade": "A",
+        "recommended_use": "strong_screening_candidate",
+        "lag": 3,
+        "direction": "变量领先目标",
+        "risk_flags": "redundant_proxy",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.8929961787884847,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.8937579138796146,
+        "innovation_score": 0.8730779232036059,
+        "pearson_q": 8.581618764149815e-105,
+        "spearman_q": 7.62491828681006e-174,
+        "corr_q_value": 7.62491828681006e-174
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.08004548398990861,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -1,
+        "direction": "变量滞后目标",
+        "risk_flags": "target_leads_variable",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.08462478457238998,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9979391883568344,
+        "evidence_score": 0.08004548398990861,
+        "innovation_score": null,
+        "pearson_q": 0.796296903343115,
+        "spearman_q": 0.5568004185759345,
+        "corr_q_value": 0.5568004185759345
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": 2.0,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": 0.0,
+      "proxy_identification_rate": 0.0,
+      "redundancy_group_detection_rate": 1.0,
+      "common_driver_details": [],
+      "proxy_separation_details": [
+        {
+          "variable": "x_proxy",
+          "reference": "x_incremental",
+          "variable_rank": 2,
+          "reference_rank": 1,
+          "rank_gap": 1,
+          "variable_grade": "A",
+          "reference_grade": "A",
+          "score_gap": 0.0003245731652995465,
+          "risk_flags": "redundant_proxy",
+          "reference_risk_flags": "redundant_proxy",
+          "group_detected": true,
+          "resolution_status": "unresolved_group",
+          "separated": false
+        }
+      ],
+      "lag_identification_error": {
+        "x_incremental": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.5,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 2
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "model_followup_not_executed",
+      "incremental_proxy_resolution_recorded"
+    ]
+  }
+}

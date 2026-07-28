@@ -46,7 +46,7 @@ def test_final_ranked_features_missing_residual_uses_association_only():
         rolling_corr_scores=empty,
         top_k=10,
     )
-    assert pd.isna(result.loc[0, "independent_signal_score"])
     assert result.loc[0, "correlation_evidence_score"] == pytest.approx(0.5)
     assert result.loc[0, "correlation_evidence_status"] == "association_only"
-    assert result.loc[0, "residual_status"] == "not_computed"
+    assert "independent_signal_score" not in result.columns
+    assert "residual_status" not in result.columns

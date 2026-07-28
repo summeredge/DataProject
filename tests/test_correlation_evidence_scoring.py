@@ -114,7 +114,6 @@ def test_verified_residual_uses_equal_weight_family_formula():
     expected = (0.9 * 0.9 * 0.3) ** (1 / 3)
 
     assert row["association_score"] == pytest.approx(0.9)
-    assert row["independent_signal_score"] == pytest.approx(0.3)
     assert row["correlation_evidence_score"] == pytest.approx(expected)
     assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
 
@@ -123,7 +122,6 @@ def test_missing_residual_uses_association_only():
     row = _evaluate([_ranked("x", 0.85)]).iloc[0]
 
     assert row["association_score"] == pytest.approx(0.85)
-    assert pd.isna(row["independent_signal_score"])
     assert row["correlation_evidence_score"] == pytest.approx(0.85)
     assert row["correlation_evidence_status"] == "innovation_verified"
 
@@ -134,7 +132,6 @@ def test_zero_residual_is_valid_independent_signal():
         residual=_frame({"variable": "x", "residual_corr": 0.0}),
     ).iloc[0]
 
-    assert row["independent_signal_score"] == 0.0
     assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
     assert row["correlation_evidence_score"] == 0.0
 
@@ -272,8 +269,7 @@ def test_force_include_keeps_adjusted_low_rank_variable():
 def test_output_uses_formal_correlation_evidence_fields():
     result = _evaluate([_ranked("x", 0.8)])
     required = {
-        "variable", "raw_corr", "association_score", "residual_corr",
-        "independent_signal_score", "residual_status",
+        "variable", "raw_corr", "association_score",
         "correlation_evidence_score", "correlation_evidence_status", "evidence_score",
         "risk_penalty", "risk_score_cap", "final_score", "candidate_grade",
         "recommended_use", "candidate_class", "association_rank", "driver_rank",
@@ -307,7 +303,6 @@ def test_all_inputs_are_not_modified():
 def test_empty_or_nan_residual_is_association_only(residual: pd.DataFrame):
     row = _evaluate([_ranked("x", 0.8)], residual=residual).iloc[0]
 
-    assert pd.isna(row["independent_signal_score"])
     assert row["correlation_evidence_status"] == "innovation_verified"
     assert row["correlation_evidence_score"] == pytest.approx(0.8)
 
@@ -321,7 +316,6 @@ def test_all_scores_stay_in_range():
     )
 
     assert result["association_score"].between(0, 1).all()
-    assert result["independent_signal_score"].dropna().between(0, 1).all()
     assert result["correlation_evidence_score"].between(0, 1).all()
     assert result["evidence_score"].between(0, 1).all()
     assert result["final_score"].between(0, 1).all()

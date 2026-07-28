@@ -24,6 +24,10 @@ class AnalysisConfig:
     capacity_columns: list[str] | None = None
     residual_control_columns: list[str] | None = None
     force_include_variables: list[str] | None = None
+    # Historical configuration fields are accepted for compatibility only.
+    # They are intentionally not read by the current preliminary screening.
+    manual_closed_loop_variables: list[str] = field(default_factory=list)
+    manual_non_closed_loop_variables: list[str] = field(default_factory=list)
     excluded_columns: list[str] = field(default_factory=list)
     exclude_control_columns_from_candidates: bool = True
     roles_path: Path | None = None

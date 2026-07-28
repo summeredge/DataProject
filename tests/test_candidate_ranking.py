@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    CLASS_PRIORITY_FACTORS,
     _data_quality_score,
     _redundant_proxy_variables,
     classify_candidate,
@@ -64,14 +63,14 @@ def test_association_rank_ignores_risk_adjustment():
     assert result.loc["b", "association_rank"] == 2
 
 
-def test_driver_rank_can_reverse_association_order():
+def test_driver_rank_follows_final_score_order():
     result = _evaluate(
         [_row("a", 0.9), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
     ).set_index("variable")
 
-    assert result.loc["b", "driver_rank"] == 1
-    assert result.loc["a", "driver_rank"] == 2
+    assert result.loc["a", "driver_rank"] == 1
+    assert result.loc["b", "driver_rank"] == 2
 
 
 @pytest.mark.parametrize(
@@ -142,26 +141,22 @@ def test_upstream_class_is_reachable_through_production_risk_pipeline():
     assert result.loc[0, "candidate_class"] == "upstream_driver_candidate"
 
 
-@pytest.mark.parametrize("candidate_class", list(CLASS_PRIORITY_FACTORS))
-def test_driver_priority_score_uses_class_factor(candidate_class: str):
-    risk_by_class = {
-        "downstream_response": "target_leads_variable",
-        "capacity_driven": "common_capacity_driver",
-        "formula_or_derived": "strong_formula_leakage",
-        "poor_quality": "poor_data_quality",
-    }
-    lag = 1 if candidate_class == "upstream_driver_candidate" else 0 if candidate_class == "synchronous_association" else -1
-    result = _evaluate(
-        [_row("x", 0.9, lag)],
-        {"x": risk_by_class.get(candidate_class, "")},
-    ).iloc[0]
-
-    assert result["candidate_class"] == candidate_class
-    expected = result["final_score"] * CLASS_PRIORITY_FACTORS[candidate_class]
-    assert result["driver_priority_factor"] == pytest.approx(
-        CLASS_PRIORITY_FACTORS[candidate_class]
+def test_compatibility_priority_fields_do_not_change_initial_results():
+    rows = [_row("a", 0.9), _row("b", 0.8)]
+    plain = _evaluate(rows, {"a": "", "b": ""})
+    risky = _evaluate(
+        rows,
+        {"a": "target_leads_variable;common_capacity_driver", "b": ""},
     )
-    assert result["driver_priority_score"] == pytest.approx(expected)
+
+    assert plain["variable"].tolist() == risky["variable"].tolist() == ["a", "b"]
+    pd.testing.assert_series_equal(
+        plain["final_score"], risky["final_score"], check_names=False
+    )
+    assert (risky["driver_priority_factor"] == 1.0).all()
+    pd.testing.assert_series_equal(
+        risky["driver_priority_score"], risky["final_score"], check_names=False
+    )
 
 
 def test_temporal_conflict_caps_grade_without_erasing_association_score():
@@ -193,14 +188,14 @@ def test_output_contains_legacy_and_shadow_fields_in_order():
     assert result.columns[final_index + 1 : final_index + 6].tolist() == shadow
 
 
-def test_main_output_order_and_topk_use_driver_rank():
+def test_main_output_order_and_topk_use_final_score():
     result = _evaluate(
         [_row("a", 0.9), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
         top_k=1,
     )
 
-    assert result["variable"].tolist() == ["b"]
+    assert result["variable"].tolist() == ["a"]
     assert result.loc[0, "driver_rank"] == 1
 
 
@@ -273,4 +268,4 @@ def test_shadow_output_static_guardrails():
     assert 'sort_values("driver_rank")' not in source
     assert 'sort_values("driver_priority_score")' not in source
     assert "PRIMARY_RANK_COLUMN" in source
-    assert "ascending=True" in source
+    assert 'sort_values("final_score", ascending=False' in source

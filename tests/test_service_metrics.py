@@ -71,7 +71,7 @@ def test_primary_segment_mask_keeps_cross_segment_lag_source(tmp_path):
     assert tables.metrics["rows_after_preprocess"] == 120.0
 
 
-def test_analyze_numeric_frame_reports_progress_and_skip_flags(tmp_path):
+def test_analyze_numeric_frame_reports_initial_stage_progress(tmp_path):
     n = 80
     frame = pd.DataFrame(
         {
@@ -98,98 +98,36 @@ def test_analyze_numeric_frame_reports_progress_and_skip_flags(tmp_path):
 
     assert "预处理中" in progress_messages
     assert "正在计算滞后相关" in progress_messages
-    assert "已跳过模型提升评分" in progress_messages
-    assert "已跳过滚动稳定性评分" in progress_messages
     assert "正在生成候选排序" in progress_messages
-    assert set(tables.model_lift_scores["status"]) == {"skipped: user disabled model lift scoring"}
-    assert set(tables.rolling_corr_scores["valid_window_count"]) == {0}
-    assert tables.metrics["skip_model_lift"] == "True"
-    assert tables.metrics["skip_rolling_corr"] == "True"
+    assert tables.model_lift_scores.empty
+    assert tables.rolling_corr_scores.empty
+    assert "skip_model_lift" not in tables.metrics
+    assert "skip_rolling_corr" not in tables.metrics
 
 
-def test_analyze_numeric_frame_passes_primary_lag_evidence_to_rolling(tmp_path, monkeypatch):
+def test_initial_stage_does_not_execute_followup_analyses(tmp_path, monkeypatch):
     from chem_ts_corr import screening
 
     n = 100
     frame = pd.DataFrame(
-        {
-            "target": np.sin(np.arange(n) / 5),
-            "x1": np.cos(np.arange(n) / 5),
-            "x2": np.arange(n, dtype=float),
-        },
+        {"target": np.sin(np.arange(n) / 5), "x1": np.cos(np.arange(n) / 5)},
         index=pd.date_range("2025-01-01", periods=n, freq="min"),
     )
     config = AnalysisConfig(
-        input_path=tmp_path / "unused.csv",
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=4,
-        top_k=2,
-        enable_model=False,
-        skip_model_lift=True,
+        input_path=tmp_path / "unused.csv", time_column="timestamp", target="target",
+        output_dir=tmp_path, max_lag=4, top_k=2,
     )
-    captured = {}
-    original_prepare = screening.prepare_best_lag_evidence
-    original_residual = screening.residual_corr_scores
-    original_regime = screening.regime_scores
-    original_rolling = screening.rolling_corr_scores
+    calls: list[str] = []
+    for name in ["prepare_best_lag_evidence", "residual_corr_scores", "regime_scores", "rolling_corr_scores", "model_lift_scores"]:
+        monkeypatch.setattr(screening, name, lambda *args, _name=name, **kwargs: calls.append(_name))
 
-    def capture_prepare(frame, *args, ranked_source_frame=None, **kwargs):
-        captured["frame"] = frame
-        captured["ranked_source_frame"] = ranked_source_frame
-        return original_prepare(
-            frame,
-            *args,
-            ranked_source_frame=ranked_source_frame,
-            **kwargs,
-        )
+    tables = analyze_numeric_frame(frame, config)
 
-    def capture_rolling(*args, best_lag_evidence=None, **kwargs):
-        captured["evidence"] = best_lag_evidence
-        return original_rolling(
-            *args,
-            best_lag_evidence=best_lag_evidence,
-            **kwargs,
-        )
-
-    def capture_residual(*args, best_lags=None, **kwargs):
-        captured["residual_best_lags"] = best_lags
-        return original_residual(*args, best_lags=best_lags, **kwargs)
-
-    def capture_regime(*args, best_lags=None, **kwargs):
-        captured["regime_best_lags"] = best_lags
-        return original_regime(*args, best_lags=best_lags, **kwargs)
-
-    monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_prepare)
-    monkeypatch.setattr(screening, "residual_corr_scores", capture_residual)
-    monkeypatch.setattr(screening, "regime_scores", capture_regime)
-    monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
-    monkeypatch.setattr(
-        screening,
-        "compute_lag_scores",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("rolling path must reuse the primary lag search")
-        ),
-    )
-
-    analyze_numeric_frame(frame, config)
-
-    assert captured["evidence"]
-    expected_best_lags = {
-        variable: item["best_lag"] for variable, item in captured["evidence"].items()
-    }
-    assert captured["residual_best_lags"] == expected_best_lags
-    assert captured["regime_best_lags"] == expected_best_lags
-    assert captured["frame"] is captured["ranked_source_frame"]
-    assert set(captured["evidence"]) == {"x1", "x2"}
-    assert {item["source"] for item in captured["evidence"].values()} == {"ranked"}
-    assert all("best_score" in item for item in captured["evidence"].values())
-    assert all(
-        item["pair_alignment_key"]
-        == screening.pair_alignment_key(captured["frame"][["target", variable]].dropna())
-        for variable, item in captured["evidence"].items()
-    )
+    assert calls == []
+    assert tables.model_lift_scores.empty
+    assert tables.rolling_corr_scores.empty
+    assert "model_status" not in tables.metrics
+    assert "granger_status" not in tables.metrics
 
 
 def test_innovation_peak_in_opposite_direction_is_not_verified(monkeypatch):
@@ -277,62 +215,30 @@ def test_innovation_difference_does_not_cross_physical_gap(monkeypatch):
     assert after_gap not in captured["index"]
 
 
-def test_preselection_keeps_high_raw_association_when_innovation_conflicts(tmp_path, monkeypatch):
-    from chem_ts_corr import screening
-
+def test_initial_screening_keeps_innovation_evidence_in_score(tmp_path, monkeypatch):
     n = 100
-    rng = np.random.default_rng(42)
     target = np.sin(np.arange(n) / 5)
     frame = pd.DataFrame(
-        {
-            "target": target,
-            "conflict": target,
-            "verified": rng.normal(size=n),
-        },
+        {"target": target, "conflict": target, "verified": np.random.default_rng(42).normal(size=n)},
         index=pd.date_range("2025-01-01", periods=n, freq="min"),
     )
     config = AnalysisConfig(
-        input_path=tmp_path / "unused.csv",
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=4,
-        top_k=1,
-        enable_model=False,
-        skip_rolling_corr=True,
+        input_path=tmp_path / "unused.csv", time_column="timestamp", target="target",
+        output_dir=tmp_path, max_lag=4, top_k=1,
     )
-    captured: dict[str, list[str]] = {}
+    calls: list[str] = []
+    original_innovation = service._innovation_evidence
 
-    def fake_innovation(frame, target, max_lag, raw_ranked, preprocess_mode, **kwargs):
-        rows = []
-        for _, row in raw_ranked.iterrows():
-            conflict = row["variable"] == "conflict"
-            rows.append(
-                {
-                    "variable": row["variable"],
-                    "innovation_score": np.nan if conflict else row["score"],
-                    "innovation_lag": row["lag"],
-                    "innovation_direction": row["direction"],
-                    "innovation_sign": 1,
-                    "innovation_status": (
-                        "innovation_lag_conflict" if conflict else "innovation_verified"
-                    ),
-                }
-            )
-        return pd.DataFrame(rows, columns=service.INNOVATION_COLUMNS)
+    def capture_innovation(*args, **kwargs):
+        calls.append("innovation")
+        return original_innovation(*args, **kwargs)
 
-    def capture_lift(frame, target, candidate_variables, max_lag, **kwargs):
-        captured["candidate_variables"] = list(candidate_variables)
-        return pd.DataFrame(
-            [{"variable": variable, "status": "non_predictive_lag"} for variable in candidate_variables]
-        )
+    monkeypatch.setattr(service, "_innovation_evidence", capture_innovation)
+    tables = analyze_numeric_frame(frame, config)
 
-    monkeypatch.setattr(service, "_innovation_evidence", fake_innovation)
-    monkeypatch.setattr(screening, "model_lift_scores", capture_lift)
-
-    analyze_numeric_frame(frame, config)
-
-    assert captured["candidate_variables"] == ["conflict"]
+    assert calls == ["innovation"]
+    assert not tables.ranked_features.empty
+    assert "innovation_score" in tables.ranked_features.columns
 
 
 @pytest.mark.parametrize(

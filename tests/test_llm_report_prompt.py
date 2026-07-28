@@ -22,7 +22,7 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     _write_csv(
         run_dir / "ranked_features.csv",
         [
-            {"variable": "FIC001.SV", "driver_rank": 1, "driver_priority_score": 0.91, "final_score": 0.91, "candidate_class": "upstream_driver_candidate", "driver_priority_factor": 1.0, "evidence_coverage_status": "部分完整", "evidence_missing_items": "稳定性验证", "four_layer_coverage_status": "部分完整", "four_layer_missing_items": "Layer 3 独立性未获得", "evidence_completeness": 0.875, "data_quality_score": 0.999, "evidence_confidence": 0.935, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none", "score_method": "industrial_robust_v3"},
+            {"variable": "FIC001.SV", "final_score": 0.91, "evidence_completeness": 0.875, "data_quality_score": 0.999, "evidence_confidence": 0.935, "candidate_grade": "A", "lag": 6, "direction": "variable_leads_target", "recommended_use": "prediction_candidate", "risk_flags": "", "risk_level": "none", "score_method": "industrial_robust_v3"},
             {"variable": "PI002.PV", "final_score": 0.73, "candidate_grade": "B", "lag": -2, "direction": "target_leads_variable", "recommended_use": "manual_review", "risk_flags": "target_leads_variable", "risk_level": "medium"},
         ],
     )
@@ -59,10 +59,8 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     assert package["meta"]["target"] == "Y.PV"
     assert package["overview"]["score_method"] == "industrial_robust_v3"
     assert package["highly_correlated_variables"][0]["variable"] == "FIC001.SV"
-    assert package["highly_correlated_variables"][0]["evidence_coverage_status"] == "部分完整"
-    assert package["highly_correlated_variables"][0]["evidence_missing_items"] == "稳定性验证"
-    assert package["highly_correlated_variables"][0]["four_layer_coverage_status"] == "部分完整"
-    assert package["highly_correlated_variables"][0]["four_layer_missing_items"] == "Layer 3 独立性未获得"
+    assert "four_layer_coverage_status" not in package["highly_correlated_variables"][0]
+    assert "four_layer_missing_items" not in package["highly_correlated_variables"][0]
     assert package["highly_correlated_variables"][0]["evidence_confidence"] == 0.935
     assert package["attention_variables"][0]["variable"] == "FIC001.SV"
     assert package["predictive_causal_evidence"][0]["variable"] == "FIC001.SV"

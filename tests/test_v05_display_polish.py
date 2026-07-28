@@ -90,9 +90,9 @@ def test_table_width_uses_content_fit_with_page_maximum():
     assert "width:100%;table-layout:fixed" not in compact
 
 
-def test_overview_recommendations_default_to_driver_rank_ascending():
-    assert 'tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };' in INDEX_HTML
-    assert 'overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction"' in INDEX_HTML
+def test_overview_recommendations_default_to_final_score_descending():
+    assert 'tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };' in INDEX_HTML
+    assert 'overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction"' in INDEX_HTML
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
-    assert "final_score" not in overview_columns
+    assert "driver_rank" not in overview_columns
     assert "evidence_confidence" not in overview_columns

@@ -239,12 +239,14 @@ def test_result_payload_exposes_run_preprocess_context_without_changing_csv_sche
     assert pd.read_csv(ranked_path).columns.tolist() == ranked.columns.tolist()
 
 
-def test_web_candidate_tables_show_four_layer_explanation_columns():
+def test_web_candidate_tables_show_initial_screening_columns():
     candidate_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     overview_columns = INDEX_HTML.split("overviewTop:", 1)[1].split("],", 1)[0]
 
-    for field in ["candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "candidate_summary"]:
+    for field in ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"]:
         assert f'"{field}"' in candidate_columns
+    for field in ["driver_rank", "driver_priority_score", "candidate_class", "layer1_association_status", "four_layer_coverage_status", "candidate_summary"]:
+        assert f'"{field}"' not in candidate_columns
     for field in [
         "corr_q_value",
         "n",
@@ -260,34 +262,18 @@ def test_web_candidate_tables_show_four_layer_explanation_columns():
         assert f'"{field}"' in overview_columns
 
 
-def test_candidate_table_orders_four_layer_explanations_after_ranking():
+def test_candidate_table_orders_final_score_before_correlation_details():
     core_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
     labels = INDEX_HTML.split("function columnLabel(column)", 1)[1].split(
         "function resetUI", 1
     )[0]
 
-    expected_order = [
-        "variable",
-        "driver_rank",
-        "driver_priority_score",
-        "candidate_grade",
-        "layer1_association_status",
-        "layer2_temporal_status",
-        "layer3_independence_status",
-        "layer4_model_status",
-        "stability_status",
-        "data_quality_status",
-        "four_layer_coverage_status",
-        "four_layer_missing_items",
-        "evidence_support_items",
-        "evidence_against_items",
-        "risk_flags",
-        "candidate_summary",
-    ]
+    expected_order = ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"]
     positions = [core_columns.index(f'"{field}"') for field in expected_order]
     assert positions == sorted(positions)
-    assert 'layer1_association_status: "Layer 1 关联状态"' in labels
-    assert 'candidate_summary: "候选解释"' in labels
+    assert 'final_score: "稳健综合得分"' in labels
+    assert 'layer1_association_status: "Layer 1 关联状态"' not in labels
+    assert 'candidate_summary: "候选解释"' not in labels
 
 
 def test_candidate_detail_has_structured_correlation_evidence_and_labels():

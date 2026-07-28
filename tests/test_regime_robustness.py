@@ -221,14 +221,14 @@ def test_sign_reversal_triggers_unstable_regime_risk():
 def test_final_output_does_not_fill_missing_regime_with_half(stability: pd.DataFrame, expected_status: str):
     row = _final(stability)
 
-    assert pd.isna(row["regime_stability_final"])
-    assert row["regime_status"] == expected_status
+    assert "regime_stability_final" not in row.index
+    assert "regime_status" not in row.index
 
 
 def test_missing_regime_does_not_replace_time_stability_or_trigger_v1_renormalization():
     row = _final(pd.DataFrame(), lag_quality=0.6)
 
-    assert row["stability_score"] == pytest.approx(0.8)
+    assert "stability_score" not in row.index
     assert row["evidence_completeness"] == 1.0
 
 
@@ -238,8 +238,9 @@ def test_partial_regime_evidence_enters_total_score():
     )
     row = _final(stability)
 
-    assert row["regime_status"] == "partial_coverage"
-    assert row["stability_score"] == pytest.approx(np.sqrt(0.8 * (2 / 3)))
+    assert "regime_status" not in row.index
+    assert "stability_score" not in row.index
+    assert 0.0 <= row["final_score"] <= 1.0
 
 
 def test_v1_regime_component_weight_is_absent():

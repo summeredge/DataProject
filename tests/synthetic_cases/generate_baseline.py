@@ -18,7 +18,7 @@ from .evaluate import (
 from .four_layer_cases import CASES, SyntheticCase
 
 
-BASELINE_PATH = Path("tests/baselines/four_layer_ranking_baseline.json")
+BASELINE_PATH = Path("tests/baselines/initial_screening_baseline.json")
 STABILITY_SCENARIOS = {
     "true_lagged_driver",
     "noise_only",

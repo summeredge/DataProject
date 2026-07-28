@@ -102,6 +102,39 @@ SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
+INITIAL_SCREENING_HIDDEN_COLUMNS = {
+    "candidate_class",
+    "driver_priority_factor",
+    "driver_priority_score",
+    "driver_rank",
+    "layer1_association_status",
+    "layer2_temporal_status",
+    "layer3_independence_status",
+    "layer4_model_status",
+    "four_layer_coverage_status",
+    "four_layer_missing_items",
+    "evidence_support_items",
+    "evidence_against_items",
+    "evidence_conflict_items",
+    "candidate_summary",
+    "regime_stability_final",
+    "regime_consistency_score",
+    "regime_coverage",
+    "regime_strength_consistency",
+    "regime_sign_consistency",
+    "regime_lag_consistency",
+    "regime_count",
+    "regime_status",
+    "rolling_stability",
+    "rolling_status",
+    "stability_score",
+    "stability_status",
+    "model_lift_score",
+    "model_lift_status",
+    "prediction_score",
+    "evidence_coverage_status",
+    "evidence_missing_items",
+}
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
@@ -626,7 +659,7 @@ def _non_negative_seconds(value: object) -> float:
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    display_ranked = _with_correlation_display_fields(ranked)
+    display_ranked = _with_correlation_display_fields(_initial_screening_frame(ranked))
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
     residual = _safe_read_result_csv(output_dir / "residual_corr_scores.csv")
     regime = _safe_read_result_csv(output_dir / "regime_scores.csv")
@@ -1815,8 +1848,8 @@ def _overview_payload(
     high_risk = int((risk.get("risk_count", pd.Series(dtype=float)) > 0).sum()) if not risk.empty else 0
     review = int((ranked.get("recommended_use", pd.Series(dtype=str)).astype(str) == "prediction_candidate").sum()) if not ranked.empty else 0
     overview_ranked = (
-        ranked.sort_values("driver_rank", ascending=True, kind="stable")
-        if "driver_rank" in ranked.columns
+        ranked.sort_values("final_score", ascending=False, kind="stable")
+        if "final_score" in ranked.columns
         else ranked
     )
     return {
@@ -1945,6 +1978,10 @@ def _with_correlation_display_fields(ranked: pd.DataFrame) -> pd.DataFrame:
         _correlation_direction
     )
     return display
+
+
+def _initial_screening_frame(ranked: pd.DataFrame) -> pd.DataFrame:
+    return ranked.drop(columns=sorted(INITIAL_SCREENING_HIDDEN_COLUMNS), errors="ignore").copy()
 
 
 def _correlation_direction(value: object) -> str:
@@ -2796,7 +2833,7 @@ let lastXgbValidationSummary = {};
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
-let tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
 const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
 const llmPromptEndpoint = "/api/llm_prompt";
@@ -3257,9 +3294,9 @@ function renderAnalysisResult(data) {
   renderOverview(data.overview || {});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
   renderScreeningQualityHints(lastRows);
-  tableSortStates["table"] = { column: "driver_rank", direction: "asc" };
+  tableSortStates["table"] = { column: "final_score", direction: "desc" };
   renderTable(lastRows);
-  tableSortStates["overviewTop"] = { column: "driver_rank", direction: "asc" };
+  tableSortStates["overviewTop"] = { column: "final_score", direction: "desc" };
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
@@ -4437,7 +4474,7 @@ function renderCandidateTable(rows) {
 }
 
 function coreCandidateColumns() {
-  return ["variable", "driver_rank", "driver_priority_score", "candidate_grade", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "risk_flags", "candidate_summary"];
+  return ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4505,11 +4542,10 @@ function buildDetailModalBody(row, options = {}) {
 function renderGenericDetailModalBody(row, options = {}) {
   const getValue = options.valueGetter || ((item, column) => item[column]);
   const columns = typeof options.detailColumns === "function" ? options.detailColumns(row) : (options.detailColumns || Object.keys(row || {}));
-  const isScreeningCandidate = "driver_priority_score" in (row || {}) && "final_score" in (row || {});
+  const isScreeningCandidate = "final_score" in (row || {});
   const groupedColumns = new Set(isScreeningCandidate ? [
-      "driver_rank", "driver_priority_score", "final_score", "candidate_class",
-      "driver_priority_factor", "evidence_coverage_status", "evidence_missing_items",
-      "evidence_completeness", "data_quality_score", "evidence_confidence",
+      "final_score", "evidence_strength", "evidence_score", "data_quality_score",
+      "recommended_use", "recommended_action",
       "dominant_corr", "correlation_direction", ...CORRELATION_OVERVIEW_COLUMNS, ...CORRELATION_DETAIL_COLUMNS,
     ] : []);
   const rawFieldColumnsWithoutRiskFlags = columns.filter((column) => column !== "risk_flags" && !groupedColumns.has(column));
@@ -4640,17 +4676,14 @@ function updateDirectionalityTimeDetails(lag, intervalMinutes) {
 }
 
 function renderScreeningScoreDetails(row) {
-  if (!("driver_priority_score" in (row || {})) || !("final_score" in (row || {}))) return "";
-  const rankingColumns = ["driver_rank", "driver_priority_score", "final_score", "candidate_class", "driver_priority_factor"];
-  const componentCoverageColumns = ["evidence_completeness", "evidence_coverage_status", "evidence_missing_items"];
-  const evidenceColumns = ["layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "stability_status", "data_quality_status", "four_layer_coverage_status", "four_layer_missing_items", "evidence_support_items", "evidence_against_items", "evidence_conflict_items", "risk_flags", "candidate_summary"];
+  if (!("final_score" in (row || {}))) return "";
+  const scoreColumns = ["final_score", "evidence_strength", "evidence_score", "data_quality_score", "risk_flags", "recommended_use"];
   const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
       <span>${escapeHtml(displayCellValue(column, row[column]))}</span>
     </div>
   `).join("");
-  const factor = numericValue(row.driver_priority_factor);
   const preprocessMode = currentAnalysisContext.preprocess_mode;
   const timeRelationship = lagDirectionText(row.lag);
   const correlationDirection = row.correlation_direction || "未计算";
@@ -4659,22 +4692,11 @@ function renderScreeningScoreDetails(row) {
     ? "当前分析变化方向"
     : "变化量相关方向";
   const innovationExplanation = innovationDirectionExplanation(row.innovation_status, preprocessMode);
-  const equalScoreNote = factor === 1 && row.candidate_class === "upstream_driver_candidate"
-    ? "<p>当前候选属于上游驱动候选，优先系数为 1.00，因此两个得分相同。</p>"
-    : "";
   return `
-    <h4>排序结果</h4>
-    <div class="detail-grid">${renderFields(rankingColumns)}</div>
+    <h4>初步筛选评分</h4>
+    <div class="detail-grid">${renderFields(scoreColumns)}</div>
     <p>证据强度：基于实际可用证据和允许权重组合计算。</p>
-    <p>证据得分 = 证据强度 × 数据质量修正系数。</p>
-    <p>稳健综合得分 = 证据得分经过明确风险扣减或分数上限后的结果。</p>
-    <p>驱动优先得分 = 稳健综合得分 × 候选类别优先系数。</p>
-    ${equalScoreNote}
-    <h4>评分组件覆盖</h4>
-    <div class="detail-grid">${renderFields(componentCoverageColumns)}</div>
-    <p>该部分只表示综合评分所使用组件的覆盖情况，不参与得分和排名。</p>
-    <h4>四层证据解释</h4>
-    <div class="detail-grid">${renderFields(evidenceColumns)}</div>
+    <p>稳健综合得分 = 当前初步分析实际可用统计证据经过明确风险处理后的结果。</p>
     <h4>相关性证据</h4>
     <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
     <details class="correlation-evidence-details">
@@ -4998,7 +5020,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "driver_rank", "driver_priority_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "candidate_class", "risk_flags", "recommended_use"],
+  overviewTop: ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -5304,7 +5326,7 @@ function openDetailModal(row, options = {}) {
   el("detailModalBody").innerHTML = buildDetailModalBody(row, options);
   modal.hidden = false;
   modal.classList.add("open");
-  if ("driver_priority_score" in (row || {}) && "final_score" in (row || {})) {
+  if ("final_score" in (row || {})) {
     loadLagProfile(row);
   }
   el("detailModalClose").focus();
@@ -5564,7 +5586,7 @@ function cellTitle(column, value) {
 }
 
 const THREE_DECIMAL_SCORE_COLUMNS = new Set([
-  "driver_priority_score", "final_score", "driver_priority_factor",
+  "final_score",
   "evidence_completeness", "evidence_confidence", "data_quality_score",
   "evidence_strength", "evidence_score", "evidence_score_low", "evidence_score_high",
 ]);
@@ -5915,9 +5937,6 @@ function formatValue(value) {
 
 function columnLabel(column) {
   const addedLabels = {
-    driver_rank: "驱动排名",
-    driver_priority_score: "驱动优先得分",
-    driver_priority_factor: "驱动优先系数",
     innovation_lag: "变化量滞后",
     innovation_direction: "变化量方向",
     innovation_sign: "变化量符号",
@@ -5928,7 +5947,6 @@ function columnLabel(column) {
     variable: "变量",
     trend_action: "趋势验证",
     final_score: "稳健综合得分",
-    candidate_class: "候选类别",
     lag: "最佳滞后",
     direction: "时间关系",
     correlation_direction: "相关方向",
@@ -5946,19 +5964,9 @@ function columnLabel(column) {
     evidence_completeness: "证据覆盖度",
     evidence_confidence: "证据修正系数",
     evidence_coverage_status: "证据覆盖状态",
-    four_layer_coverage_status: "四层解释覆盖状态",
-    four_layer_missing_items: "四层解释缺失项",
-    layer1_association_status: "Layer 1 关联状态",
-    layer2_temporal_status: "Layer 2 时间状态",
-    layer3_independence_status: "Layer 3 独立性状态",
-    layer4_model_status: "Layer 4 模型状态",
     stability_status: "稳定性状态",
     data_quality_status: "数据质量状态",
-    evidence_support_items: "主要支持证据",
-    evidence_against_items: "主要反对证据",
     evidence_missing_items: "缺失证据",
-    evidence_conflict_items: "证据冲突",
-    candidate_summary: "候选解释",
     evidence_score_low: "证据得分下界",
     evidence_score_high: "证据得分上界",
     score_method: "评分方法",
@@ -6166,7 +6174,7 @@ function reset() {
   trendLatestTime = "";
   trendAutoWindowActive = false;
   lastScatterMatrixPayload = null;
-  tableSortStates = { table: { column: "driver_rank", direction: "asc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
+  tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";

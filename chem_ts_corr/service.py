@@ -6,11 +6,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from chem_ts_corr.causality import run_granger_tests
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
-from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.preprocess import (
     difference_by_contiguous_segment,
     operating_segment_mask,
@@ -90,12 +88,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         diagnostics,
         final_ranked_features,
         load_roles,
-        model_lift_scores,
-        prepare_best_lag_evidence,
-        regime_scores,
-        residual_corr_scores,
         risk_flags,
-        rolling_corr_scores,
     )
 
     _progress(progress_callback, "预处理中")
@@ -175,63 +168,18 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         topk = raw_ranked.assign(_preliminary_score=preliminary_score).nlargest(
             config.top_k, "_preliminary_score"
         )["variable"].tolist()
-    candidate_variables, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns), excluded_controls)
-    best_lags = _best_lag_map(raw_ranked)
+    _, missing_forced = _candidate_list(topk, config.force_include_variables, list(scaled.columns), excluded_controls)
     residual_controls = config.residual_control_columns or config.capacity_columns
-
-    _progress(progress_callback, "正在计算残差相关")
-    residual = residual_corr_scores(
-        scaled,
-        config.target,
-        residual_controls,
-        config.max_lag,
-        best_lags=best_lags,
-        target_mask=analysis_target_mask,
-    )
-    _progress(progress_callback, "正在计算工况稳定性")
-    regime, stability = regime_scores(
-        scaled,
-        config.target,
-        config.segment_column,
-        config.max_lag,
-        best_lags=best_lags,
-        target_mask=analysis_target_mask,
-    )
-    regime_output = regime.merge(stability, on="variable", how="left") if not regime.empty else stability
     lag_peak = build_lag_peak_quality(lag_scores, config.max_lag)
-    if config.skip_model_lift:
-        _progress(progress_callback, "已跳过模型提升评分")
-        lift = _skipped_model_lift_scores(candidate_variables)
-    else:
-        _progress(progress_callback, "正在计算模型提升评分")
-        lift = model_lift_scores(scaled, config.target, candidate_variables, config.max_lag, best_lags=best_lags, target_mask=analysis_target_mask)
-    if config.skip_rolling_corr:
-        _progress(progress_callback, "已跳过滚动稳定性评分")
-        rolling = _skipped_rolling_corr_scores(candidate_variables)
-    else:
-        _progress(progress_callback, "正在计算滚动稳定性")
-        best_lag_evidence, _ = prepare_best_lag_evidence(
-            scaled,
-            config.target,
-            candidate_variables,
-            config.max_lag,
-            ranked=raw_ranked,
-            ranked_source_frame=scaled,
-            target_mask=analysis_target_mask,
-        )
-        rolling = rolling_corr_scores(
-            scaled,
-            config.target,
-            candidate_variables,
-            config.max_lag,
-            best_lag_evidence=best_lag_evidence,
-            target_mask=analysis_target_mask,
-        )
+    residual = pd.DataFrame(columns=["variable"])
+    regime_output = pd.DataFrame(columns=["variable"])
+    lift = pd.DataFrame(columns=["variable"])
+    rolling = pd.DataFrame(columns=["variable"])
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(
         raw_ranked,
         residual,
-        stability,
+        regime_output,
         diag,
         roles,
         residual_controls,
@@ -244,7 +192,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
     ranked = final_ranked_features(
         raw_ranked,
         residual,
-        stability,
+        regime_output,
         lift,
         risks,
         lag_peak,
@@ -253,27 +201,13 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         top_k=config.top_k,
         control_columns=list(excluded_controls),
     )
-    candidate_variables = ranked["variable"].tolist() if "variable" in ranked.columns else []
+    importance = pd.DataFrame()
+    granger = pd.DataFrame()
+    metrics: dict[str, float | str] = {}
 
-    if config.enable_model:
-        importance, metrics = fit_explainable_model(scaled, config.target, config.max_lag, candidate_variables, config.max_model_features, config.random_state, best_lags=best_lags, target_mask=analysis_target_mask)
-    else:
-        importance, metrics = pd.DataFrame(), {"model_status": "skipped: enable model analysis"}
-
-    if config.enable_granger:
-        granger = run_granger_tests(scaled, config.target, variables=candidate_variables[: config.top_k], maxlag=config.resolved_granger_maxlag(), target_mask=analysis_target_mask)
-    else:
-        granger = pd.DataFrame([{"status": "skipped: enable Granger analysis", "variable": "", "min_p_value": None}])
-
-    metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "skip_model_lift": str(config.skip_model_lift), "skip_rolling_corr": str(config.skip_rolling_corr), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
+    metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
     return AnalysisTables(ranked, lag_scores, granger, importance, diag, residual, regime_output, risks, lift, lag_peak, rolling, metrics)
-
-
-def _best_lag_map(ranked: pd.DataFrame) -> dict[str, int]:
-    if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
-        return {}
-    return {str(row["variable"]): int(row["lag"]) for _, row in ranked[["variable", "lag"]].dropna().iterrows()}
 
 
 def _innovation_evidence(

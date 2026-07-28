@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.common import to_float
-from chem_ts_corr.evidence_explanations import add_evidence_explanations
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.feature_alignment import fit_linear_model, predict_linear_model
@@ -103,8 +102,8 @@ REGIME_STABILITY_COLUMNS = [
     "regime_evidence_status",
     "regime_sign_reversal_flag",
 ]
-PRIMARY_RANK_COLUMN = "driver_rank"
-PRIMARY_SCORE_COLUMN = "driver_priority_score"
+PRIMARY_RANK_COLUMN = "final_score"
+PRIMARY_SCORE_COLUMN = "final_score"
 
 
 class BestLagEvidence(TypedDict):
@@ -1077,7 +1076,21 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
 
 def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataFrame, model_lift: pd.DataFrame, risks: pd.DataFrame, lag_peak_quality: pd.DataFrame, rolling_corr_scores: pd.DataFrame, force_include_variables: list[str] | None = None, top_k: int | None = None, control_columns: list[str] | None = None) -> pd.DataFrame:
-    cols = ["variable", "lag", "direction", "pearson", "spearman", "method", "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score", "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status", "residual_corr", "independent_signal_score", "residual_status", "correlation_evidence_score", "correlation_evidence_status", "layer1_association_status", "layer2_temporal_status", "layer3_independence_status", "layer4_model_status", "regime_stability_final", "regime_consistency_score", "regime_coverage", "regime_strength_consistency", "regime_sign_consistency", "regime_lag_consistency", "regime_count", "regime_sign_reversal_flag", "regime_status", "rolling_stability", "rolling_status", "stability_score", "stability_status", "lag_quality", "lag_quality_status", "lag_boundary_flag", "model_lift_score", "model_lift_status", "prediction_score", "data_quality_score", "data_quality_status", "evidence_strength", "evidence_available_count", "evidence_completeness", "evidence_confidence", "evidence_coverage_status", "evidence_support_items", "evidence_against_items", "evidence_missing_items", "four_layer_missing_items", "four_layer_coverage_status", "evidence_conflict_items", "candidate_summary", "evidence_score_low", "evidence_score_high", "score_method", "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason", "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap", "risk_cap_reason", "final_score", "association_rank", "candidate_class", "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade", "recommended_use", "recommended_action", "force_included", "engineering_context"]
+    cols = [
+        "variable", "lag", "direction", "pearson", "spearman", "method",
+        "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value",
+        "pearson_r2", "spearman_r2", "n", "raw_corr", "association_score",
+        "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
+        "innovation_status", "correlation_evidence_score", "correlation_evidence_status",
+        "lag_quality", "lag_quality_status", "lag_boundary_flag", "data_quality_score",
+        "evidence_strength", "evidence_available_count", "evidence_completeness",
+        "evidence_confidence", "evidence_score_low", "evidence_score_high", "score_method",
+        "risk_count", "strong_risk_count", "weak_risk_count", "risk_level", "human_reason",
+        "risk_flags", "evidence_score", "risk_penalty_rate", "risk_penalty", "risk_score_cap",
+        "risk_cap_reason", "final_score", "association_rank", "candidate_class",
+        "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade",
+        "recommended_use", "recommended_action", "force_included", "engineering_context",
+    ]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
@@ -1200,52 +1213,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         default="证据不足",
     )
 
-    flags = final.get("risk_flags", pd.Series("", index=final.index)).fillna("")
-    has_flag = lambda name: flags.str.contains(rf"(?:^|;){name}(?:;|$)", regex=True)
-    corr_q = pd.to_numeric(
-        final.get("corr_q_value", pd.Series(np.nan, index=final.index)), errors="coerce"
-    )
-    final["layer1_association_status"] = np.select(
-        [corr_q.le(0.05), corr_q.notna()],
-        ["supported", "not_supported"],
-        default="not_available",
-    )
-    lag_values = pd.to_numeric(final.get("lag"), errors="coerce")
-    final["layer2_temporal_status"] = np.select(
-        [has_flag("target_leads_variable"), has_flag("lag_boundary"), lag_values.gt(0), lag_values.eq(0)],
-        ["conflicting", "partially_supported", "supported", "partially_supported"],
-        default="not_available",
-    )
-    final["layer3_independence_status"] = np.select(
-        [
-            has_flag("common_capacity_driver") | has_flag("residual_collinearity") | has_flag("redundant_proxy"),
-            final["independent_signal_score"].notna(),
-        ],
-        ["not_supported", "supported"],
-        default="not_available",
-    )
-    model_ok = final["model_lift_status"].astype(str).str.startswith("ok")
-    model_insufficient = final["model_lift_status"].astype(str).str.contains("insufficient", case=False)
-    final["layer4_model_status"] = np.select(
-        [model_ok & final["prediction_score"].gt(0.05), model_ok, model_insufficient],
-        ["supported", "not_supported", "insufficient_data"],
-        default="not_available",
-    )
-    final["stability_status"] = np.select(
-        [
-            final.get("regime_sign_reversal_flag", pd.Series(False, index=final.index)).eq(True),
-            final["stability_score"].notna() & final["stability_score"].lt(0.35),
-            final["stability_score"].notna(),
-        ],
-        ["conflicting", "not_supported", "supported"],
-        default="not_available",
-    )
-    final["data_quality_status"] = np.where(has_flag("poor_data_quality"), "not_supported", "supported")
-    conflict_tokens = ["target_leads_variable", "lag_boundary", "common_capacity_driver", "redundant_proxy", "unstable_across_regimes", "poor_data_quality", "strong_formula_leakage"]
-    final["evidence_conflict_items"] = flags.apply(
-        lambda value: ";".join(token for token in conflict_tokens if token in _risk_token_set(value))
-    )
-
     components = pd.DataFrame(
         {
             "association": final["correlation_evidence_score"],
@@ -1281,11 +1248,10 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         method="first", ascending=False
     ).astype(int)
     final["candidate_class"] = final.apply(classify_candidate, axis=1)
-    # Engineering review priority is derived only from the existing statistical candidate class;
-    # it is not a control-source, causal, or closed-loop score.
-    final["driver_priority_factor"] = (
-        final["candidate_class"].map(CLASS_PRIORITY_FACTORS).fillna(0.80)
-    )
+    # These columns are retained only for readers of historical CSV files. They
+    # are aliases of the statistical score and never affect screening behavior.
+    final["driver_priority_factor"] = 1.0
+    final["driver_priority_score"] = final["final_score"]
     final = _finalize_driver_ranking(
         final,
         force_include_variables=force_include_variables,
@@ -1293,12 +1259,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         control_columns=control_columns,
         primary_rank_column=PRIMARY_RANK_COLUMN,
     )
-    final = final.sort_values(PRIMARY_RANK_COLUMN, ascending=True, kind="stable")
+    final = final.sort_values("final_score", ascending=False, kind="stable")
     if top_k is not None and not final["force_included"].any():
         final = final.head(top_k)
-    # PR-8D: explanations are calculated after ranking and are never score inputs.
-    final = add_evidence_explanations(final)
-
     for c in cols:
         if c not in final.columns:
             final[c] = np.nan
@@ -1313,8 +1276,8 @@ def _finalize_driver_ranking(
     primary_rank_column: str = PRIMARY_RANK_COLUMN,
 ) -> pd.DataFrame:
     final = final.copy()
-    final["driver_priority_score"] = (final["final_score"] * final["driver_priority_factor"]).clip(0, 1)
-    final["driver_rank"] = final["driver_priority_score"].rank(method="first", ascending=False).astype(int)
+    final["driver_priority_score"] = final["final_score"]
+    final["driver_rank"] = final["final_score"].rank(method="first", ascending=False).astype(int)
     forced = set(force_include_variables or [])
     final["force_included"] = final["variable"].astype(str).isin(forced)
     final["candidate_grade"] = final.apply(_grade_candidate, axis=1)
@@ -1327,10 +1290,10 @@ def _finalize_driver_ranking(
         rank_base = final
         if control_set:
             rank_base = rank_base[~rank_base["variable"].astype(str).isin(control_set)]
-        top = rank_base.sort_values(primary_rank_column, ascending=True, kind="stable").head(top_k)
+        top = rank_base.sort_values("final_score", ascending=False, kind="stable").head(top_k)
         forced_rows = final[final["force_included"]]
         final = pd.concat([top, forced_rows], ignore_index=True).drop_duplicates(subset=["variable"], keep="first")
-    return final.sort_values(primary_rank_column, ascending=True, kind="stable")
+    return final.sort_values("final_score", ascending=False, kind="stable")
 
 
 def _grade_candidate(row: pd.Series) -> str:

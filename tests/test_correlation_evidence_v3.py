@@ -114,9 +114,8 @@ def test_regime_reversal_flag_is_exported_for_final_stability_explanation():
     )
 
     assert "regime_sign_reversal_flag" in stability.columns
-    assert "regime_sign_reversal_flag" in final.columns
-    assert bool(final.loc[0, "regime_sign_reversal_flag"])
-    assert final.loc[0, "stability_status"] == "conflicting"
+    assert "regime_sign_reversal_flag" not in final.columns
+    assert "stability_status" not in final.columns
 
 
 def test_regime_reversal_flag_is_written_to_ranked_explanation_and_regime_detail_csv(tmp_path: Path):
@@ -161,7 +160,4 @@ def test_regime_reversal_flag_is_written_to_ranked_explanation_and_regime_detail
         if csv_path.name == "regime_scores.csv":
             assert header and "regime_sign_reversal_flag" in header[0]
         else:
-            if csv_path.name in {"ranked_features.csv", "recommended_candidates.csv"}:
-                assert header and "regime_sign_reversal_flag" in header[0]
-            else:
-                assert not header or "regime_sign_reversal_flag" not in header[0]
+            assert not header or "regime_sign_reversal_flag" not in header[0]

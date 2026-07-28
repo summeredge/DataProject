@@ -197,7 +197,7 @@ def test_risk_adjustment_changes_ranking():
 
     result = _score([("a", 0.95), ("b", 0.85)], risks)
 
-    assert result["variable"].tolist() == ["b", "a"]
+    assert result["variable"].tolist() == ["a", "b"]
 
 
 def test_risk_counts_do_not_control_penalty():

@@ -42,6 +42,9 @@ CLASS_PRIORITY_FACTORS = {
     "uncertain_candidate": 0.80,
 }
 INDUSTRIAL_SCORE_COMPONENTS = ("association", "prediction", "stability", "lag_quality")
+RAW_CANDIDATE_MIN_SCORE = 0.30
+RESIDUAL_CANDIDATE_MIN_CORR = 0.30
+RESIDUAL_CANDIDATE_MIN_N = 30
 
 
 def _industrial_score_weight_profiles() -> tuple[dict[str, float], ...]:
@@ -1405,13 +1408,16 @@ def build_recommended_candidates(
     reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
     references = frame.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1)
     eligible = ~references if exclude_control_columns else pd.Series(True, index=frame.index)
-    raw = order_initial_candidates(frame.loc[eligible])
+    raw_score = pd.to_numeric(frame.get("final_score", frame.get("score", pd.Series(np.nan, index=frame.index))), errors="coerce")
+    raw = order_initial_candidates(frame.loc[eligible & np.isfinite(raw_score) & raw_score.ge(RAW_CANDIDATE_MIN_SCORE)])
     raw = raw.head(top_k) if top_k is not None else raw
     raw_rank = {name: index + 1 for index, name in enumerate(raw["variable"])}
 
     residual_top_k = top_k if residual_top_k is None else residual_top_k
     residual_rank: dict[str, int] = {}
-    residual_rows = pd.DataFrame(columns=["variable"])
+    valid_residual_rows = pd.DataFrame(columns=["variable"])
+    eligible_residual_rows = pd.DataFrame(columns=["variable"])
+    selected_residual_rows = pd.DataFrame(columns=["variable"])
     required_residual_columns = {"variable", "residual_corr", "residual_lag", "residual_n", "residual_status"}
     if (
         residual_corr_scores is not None
@@ -1436,13 +1442,17 @@ def build_recommended_candidates(
         ].copy()
         residual["_status_priority"] = residual["residual_status"].map({"ok": 0, "rank_deficient": 1})
         residual["_quality_sort"] = residual["_residual_quality"].fillna(-np.inf)
-        valid_residual_rows = residual.sort_values(
+        valid_residual_rows = residual.drop_duplicates(subset="variable", keep="first")
+        eligible_residual_rows = valid_residual_rows[
+            valid_residual_rows["_residual_corr"].ge(RESIDUAL_CANDIDATE_MIN_CORR)
+            & valid_residual_rows["_residual_n"].ge(RESIDUAL_CANDIDATE_MIN_N)
+            & np.isfinite(valid_residual_rows["_residual_quality"])
+        ].sort_values(
             ["_residual_corr", "_quality_sort", "_residual_n", "_status_priority", "variable"],
             ascending=[False, False, False, True, True], kind="stable",
         )
-        valid_residual_rows = valid_residual_rows.drop_duplicates(subset="variable", keep="first")
-        residual_rows = valid_residual_rows.head(residual_top_k) if residual_top_k is not None else valid_residual_rows
-        residual_rank = {name: index + 1 for index, name in enumerate(residual_rows["variable"])}
+        selected_residual_rows = eligible_residual_rows.head(residual_top_k) if residual_top_k is not None else eligible_residual_rows
+        residual_rank = {name: index + 1 for index, name in enumerate(selected_residual_rows["variable"])}
 
     selected_variables = set(raw_rank) | set(residual_rank) | (forced & set(frame["variable"]))
     pool = frame[frame["variable"].isin(selected_variables)].copy()
@@ -1463,7 +1473,7 @@ def build_recommended_candidates(
         default="force_included",
     )
     raw_corr = pd.to_numeric(pool.get("raw_corr", pool.get("score", pd.Series(np.nan, index=pool.index))), errors="coerce")
-    residual_lookup = valid_residual_rows.set_index("variable")["_residual_corr"] if "valid_residual_rows" in locals() and not valid_residual_rows.empty else pd.Series(dtype=float)
+    residual_lookup = valid_residual_rows.set_index("variable")["_residual_corr"] if not valid_residual_rows.empty else pd.Series(dtype=float)
     pool["common_capacity_candidate_flag"] = (
         pool["selected_by_raw"]
         & ~pool["selected_by_residual"]

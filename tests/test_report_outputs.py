@@ -125,3 +125,40 @@ def test_causal_review_candidates_use_the_provided_recommended_pool(tmp_path: Pa
 
     causal = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
     assert causal["variable"].tolist() == ["candidate"]
+
+
+def test_write_outputs_preserves_candidate_source_fields_in_recommended_and_causal_csv(tmp_path: Path):
+    source_fields = {
+        "candidate_source": "residual_only",
+        "selected_by_raw": False,
+        "selected_by_residual": True,
+        "raw_candidate_rank": pd.NA,
+        "residual_candidate_rank": 1,
+        "candidate_pool_rank": 1,
+        "common_capacity_candidate_flag": False,
+        "force_included": False,
+    }
+    ranked = pd.DataFrame([{
+        "variable": "candidate",
+        "final_score": .2,
+        "candidate_grade": "C",
+        "recommended_use": "manual_review_required",
+    }])
+    recommended = pd.DataFrame([{"variable": "candidate", "final_score": .2, **source_fields}])
+
+    write_outputs(
+        tmp_path, "target", ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {},
+        recommended_candidates=recommended,
+    )
+
+    written_recommended = pd.read_csv(tmp_path / "recommended_candidates.csv", encoding="utf-8-sig")
+    causal = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    for field, expected in source_fields.items():
+        recommended_value = written_recommended.loc[0, field]
+        causal_value = causal.loc[0, field]
+        if pd.isna(expected):
+            assert pd.isna(recommended_value)
+            assert pd.isna(causal_value)
+        else:
+            assert recommended_value == expected
+            assert causal_value == expected

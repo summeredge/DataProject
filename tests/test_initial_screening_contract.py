@@ -14,7 +14,7 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.report import build_recommended_candidates, build_markdown_summary, write_outputs
 from chem_ts_corr.screening import final_ranked_features
 from chem_ts_corr.service import analyze_numeric_frame
-from chem_ts_corr.web import INDEX_HTML, _build_result_payload
+from chem_ts_corr.web import INDEX_HTML, _build_result_payload, _order_recommended_candidates
 
 
 FORBIDDEN_INITIAL_FIELDS = {
@@ -64,6 +64,11 @@ FOLLOWUP_OUTPUTS = {
     "regime_scores.csv", "model_lift_scores.csv", "rolling_corr_scores.csv",
     "enhanced_validation_summary.csv", "conditional_granger_scores.csv",
     "causal_review_report.csv", "causal_review_evidence.csv", "final_review_summary.csv",
+}
+
+PR3_CANDIDATE_FIELDS = {
+    "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
+    "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
 }
 
 
@@ -234,6 +239,7 @@ def _run_complete_initial_output(
         diagnostics=tables.diagnostics,
         risk_flags=tables.risk_flags,
         lag_peak_quality=tables.lag_peak_quality,
+        residual_corr_scores=tables.residual_corr_scores,
         recommended_candidates=tables.recommended_candidates,
     )
     return controls, candidates, _build_result_payload("run", tmp_path, config)
@@ -261,6 +267,20 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
     assert payload["overview"]["control_reference_count"] == 8
     assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
     assert set(ranked.set_index("variable").loc[controls, "variable_role"]) == {"residual_control"}
+    assert not (PR3_CANDIDATE_FIELDS & set(ranked.columns))
+    assert all(not (PR3_CANDIDATE_FIELDS & set(row)) for row in payload["rankedFeatures"])
+    assert all(not (PR3_CANDIDATE_FIELDS & set(row)) for row in payload["overview"]["top10"])
+    assert PR3_CANDIDATE_FIELDS <= set(recommended.columns)
+    assert all(PR3_CANDIDATE_FIELDS <= set(row) for row in payload["recommendedCandidates"])
+    assert recommended["candidate_pool_rank"].tolist() == list(range(1, len(recommended) + 1))
+    assert [row["variable"] for row in payload["recommendedCandidates"]] == recommended["variable"].tolist()
+    source_values = {"raw_only", "residual_only", "raw_and_residual", "force_included", "control_reference"}
+    assert set(recommended["candidate_source"]) <= source_values
+    assert {row["candidate_source"] for row in payload["recommendedCandidates"]} <= source_values
+    assert PR3_CANDIDATE_FIELDS <= set(causal.columns)
+    recommended_sources = recommended.set_index("variable")[sorted(PR3_CANDIDATE_FIELDS)]
+    causal_sources = causal.set_index("variable").loc[recommended_sources.index, sorted(PR3_CANDIDATE_FIELDS)]
+    pd.testing.assert_frame_equal(recommended_sources, causal_sources, check_dtype=False)
 
     _run_complete_initial_output(tmp_path / "without_roles", residual_controls=False)
     unmarked = pd.read_csv(tmp_path / "without_roles" / "ranked_features.csv", encoding="utf-8-sig")
@@ -304,6 +324,23 @@ def test_result_payload_does_not_truncate_complete_results_at_fifty(tmp_path: Pa
     assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
 
 
+def test_historical_recommended_csv_without_pool_rank_preserves_file_order(tmp_path: Path):
+    ranked = pd.DataFrame([
+        {"variable": "a", "final_score": .9},
+        {"variable": "b", "final_score": .8},
+        {"variable": "c", "final_score": .7},
+    ])
+    recommended = ranked.iloc[[2, 0, 1]].assign(candidate_source="raw_only")
+    ranked.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    recommended.to_csv(tmp_path / "recommended_candidates.csv", index=False, encoding="utf-8-sig")
+    (tmp_path / "summary.md").write_text("# 初步筛选摘要\n", encoding="utf-8")
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+
+    payload = _build_result_payload("run", tmp_path, config)
+
+    assert [row["variable"] for row in payload["recommendedCandidates"]] == ["c", "a", "b"]
+
+
 def test_initial_web_contract_excludes_four_layer_fields():
     initial_blocks = [
         INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}\n", 1)[0],
@@ -335,6 +372,22 @@ def test_initial_web_shows_variable_role_and_complete_result_copy():
     assert "默认只展示候选排序结果的核心列和前 50 行" not in INDEX_HTML
     assert "display_ranked.head(50)" not in payload_source
     assert "_initial_screening_frame(recommended).head(50)" not in payload_source
+
+
+def test_recommended_web_contract_uses_pool_rank_and_maps_all_candidate_sources():
+    payload_source = inspect.getsource(_build_result_payload)
+    order_source = inspect.getsource(_order_recommended_candidates)
+    display_source = INDEX_HTML.split("function displayCellValue", 1)[1].split("function openTrendForCandidate", 1)[0]
+
+    assert "_order_recommended_candidates(" in payload_source
+    assert "order_initial_candidates" not in order_source
+    assert "candidate_pool_rank" in order_source
+    assert 'candidate_source: "候选来源"' in INDEX_HTML
+    assert "return labels[value] || value" in display_source
+    for source in ["raw_only", "residual_only", "raw_and_residual", "force_included", "control_reference"]:
+        assert source in display_source
+    for label in ["原始通道", "残差通道", "原始与残差双通道", "人工强制包含", "控制/负荷参考"]:
+        assert label in display_source
 
 
 def _javascript_function(name: str) -> str:

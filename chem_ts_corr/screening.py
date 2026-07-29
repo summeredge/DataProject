@@ -1442,15 +1442,15 @@ def build_recommended_candidates(
         ].copy()
         residual["_status_priority"] = residual["residual_status"].map({"ok": 0, "rank_deficient": 1})
         residual["_quality_sort"] = residual["_residual_quality"].fillna(-np.inf)
-        valid_residual_rows = residual.drop_duplicates(subset="variable", keep="first")
+        valid_residual_rows = residual.sort_values(
+            ["_residual_corr", "_quality_sort", "_residual_n", "_status_priority", "variable"],
+            ascending=[False, False, False, True, True], kind="stable",
+        ).drop_duplicates(subset="variable", keep="first")
         eligible_residual_rows = valid_residual_rows[
             valid_residual_rows["_residual_corr"].ge(RESIDUAL_CANDIDATE_MIN_CORR)
             & valid_residual_rows["_residual_n"].ge(RESIDUAL_CANDIDATE_MIN_N)
             & np.isfinite(valid_residual_rows["_residual_quality"])
-        ].sort_values(
-            ["_residual_corr", "_quality_sort", "_residual_n", "_status_priority", "variable"],
-            ascending=[False, False, False, True, True], kind="stable",
-        )
+        ]
         selected_residual_rows = eligible_residual_rows.head(residual_top_k) if residual_top_k is not None else eligible_residual_rows
         residual_rank = {name: index + 1 for index, name in enumerate(selected_residual_rows["variable"])}
 

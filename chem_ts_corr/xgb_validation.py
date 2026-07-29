@@ -87,6 +87,10 @@ XGB_CANDIDATE_COLUMNS = (
     "risk_flags",
     "recommended_use",
     "variable_role",
+    "candidate_priority_rank",
+    "candidate_priority_score",
+    "candidate_priority_tier",
+    "candidate_pool_rank",
 )
 
 
@@ -221,11 +225,28 @@ def build_xgb_candidate_pool(
     selected_rows: list[dict[str, object]] = []
     if rows:
         candidates = pd.DataFrame(rows)
-        rank_sort = pd.to_numeric(candidates["final_rank"], errors="coerce")
-        candidates["_rank_missing"] = rank_sort.isna()
-        candidates["_rank_sort"] = rank_sort
+        candidates["_candidate_priority_sort"] = pd.to_numeric(
+            candidates["candidate_priority_rank"], errors="coerce"
+        )
+        candidates["_final_rank_sort"] = pd.to_numeric(
+            candidates["final_rank"], errors="coerce"
+        )
+        candidates["_candidate_pool_sort"] = pd.to_numeric(
+            candidates["candidate_pool_rank"], errors="coerce"
+        )
+        all_ranks_missing = candidates[
+            ["_candidate_priority_sort", "_final_rank_sort", "_candidate_pool_sort"]
+        ].isna().all(axis=1)
+        candidates["_fallback_source_order"] = candidates["_source_order"].where(
+            all_ranks_missing
+        )
         eligible = candidates[candidates["auto_eligible"]].sort_values(
-            ["_rank_missing", "_rank_sort", "_source_order"], kind="mergesort"
+            [
+                "_candidate_priority_sort", "_final_rank_sort", "_candidate_pool_sort",
+                "_fallback_source_order", "variable",
+            ],
+            na_position="last",
+            kind="mergesort",
         )
         selected = eligible.head(resolved_top_n).copy()
         selected["selection_source"] = "final_review"
@@ -1131,6 +1152,18 @@ def _candidate_metadata(
         "recommended_use": _coalesce(source.get("recommended_use"), ranked.get("recommended_use")),
         "variable_role": _coalesce(
             ranked.get("variable_role"), ranked.get("role"), source.get("variable_role")
+        ),
+        "candidate_priority_rank": _coalesce(
+            ranked.get("candidate_priority_rank"), source.get("candidate_priority_rank")
+        ),
+        "candidate_priority_score": _coalesce(
+            ranked.get("candidate_priority_score"), source.get("candidate_priority_score")
+        ),
+        "candidate_priority_tier": _coalesce(
+            ranked.get("candidate_priority_tier"), source.get("candidate_priority_tier")
+        ),
+        "candidate_pool_rank": _coalesce(
+            ranked.get("candidate_pool_rank"), source.get("candidate_pool_rank")
         ),
     }
 

@@ -165,6 +165,14 @@ def test_missing_recommended_candidates_is_rejected_before_loading_or_service_ca
     assert "recommended_candidates" in payload["error_message"]
 
 
+def test_xgb_web_uses_recommended_candidates_as_priority_source():
+    source = inspect.getsource(web._run_xgb_validation_response)
+
+    assert '_safe_read_result_csv(output_dir / "recommended_candidates.csv")' in source
+    assert "ranked_features=recommended" in source
+    assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' not in source
+
+
 def test_missing_final_review_is_rejected_before_loading_or_service_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

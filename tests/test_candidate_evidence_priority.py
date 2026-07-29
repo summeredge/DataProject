@@ -188,6 +188,46 @@ def test_priority_output_is_deterministic_with_duplicate_and_shuffled_residual_r
         pd.testing.assert_frame_equal(expected, actual)
 
 
+def test_duplicate_recommended_rows_choose_the_dual_channel_canonical_record():
+    candidates = pd.DataFrame([
+        {**_candidate("x", "raw_only", final_score=.8, pool_rank=1, raw=True), "raw_candidate_rank": 2, "residual_candidate_rank": pd.NA, "common_capacity_candidate_flag": True},
+        {**_candidate("x", "residual_only", final_score=.8, pool_rank=1, residual=True), "raw_candidate_rank": pd.NA, "residual_candidate_rank": 2},
+        {**_candidate("x", "raw_and_residual", final_score=.8, pool_rank=1, raw=True, residual=True, forced=True), "raw_candidate_rank": 3, "residual_candidate_rank": 3},
+        {**_candidate("x", "force_included", final_score=.8, pool_rank=1, forced=True), "raw_candidate_rank": pd.NA, "residual_candidate_rank": pd.NA},
+    ])
+    residual = pd.DataFrame([_residual("x", .8, quality=.6)])
+    expected = prioritize_recommended_candidates(candidates, residual)
+    row = expected.iloc[0]
+
+    assert row["candidate_source"] == "raw_and_residual"
+    assert bool(row["selected_by_raw"])
+    assert bool(row["selected_by_residual"])
+    assert not bool(row["common_capacity_candidate_flag"])
+    assert bool(row["force_included"])
+    assert row["candidate_priority_tier"] == 0
+    assert row["candidate_priority_score"] == pytest.approx(.60 * .8 + .40 * .7)
+    assert row["candidate_priority_rank"] == 1
+
+    for seed in range(8):
+        actual = prioritize_recommended_candidates(
+            candidates.sample(frac=1, random_state=seed), residual
+        )
+        pd.testing.assert_frame_equal(expected, actual)
+
+
+def test_duplicate_dual_channel_record_without_common_load_risk_is_preferred():
+    candidates = pd.DataFrame([
+        {**_candidate("x", "raw_and_residual", final_score=.8, raw=True, residual=True, common_load=True), "raw_candidate_rank": 1, "residual_candidate_rank": 1},
+        {**_candidate("x", "raw_and_residual", final_score=.8, raw=True, residual=True, common_load=False), "raw_candidate_rank": 1, "residual_candidate_rank": 1},
+    ])
+
+    row = prioritize_recommended_candidates(
+        candidates, pd.DataFrame([_residual("x", .8)])
+    ).iloc[0]
+
+    assert not bool(row["common_capacity_candidate_flag"])
+
+
 def test_priority_source_contract_preserves_missing_values_and_initial_scores():
     source = inspect.getsource(screening.prioritize_recommended_candidates)
 
@@ -196,6 +236,11 @@ def test_priority_source_contract_preserves_missing_values_and_initial_scores():
     assert 'frame["final_score"] = frame["candidate_priority_score"]' not in source
     assert 'frame["driver_rank"] = frame["candidate_priority_rank"]' not in source
     for field in screening.CANDIDATE_PRIORITY_COLUMNS:
+        assert field in source
+    for field in [
+        "selected_by_raw", "selected_by_residual", "common_capacity_candidate_flag",
+        "force_included", "raw_candidate_rank", "residual_candidate_rank", "candidate_source",
+    ]:
         assert field in source
 
 

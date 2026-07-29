@@ -1519,13 +1519,40 @@ def prioritize_recommended_candidates(
     frame = recommended_candidates.loc[:, base_columns].copy(deep=True)
     frame["variable"] = frame["variable"].astype(str)
     frame["_candidate_pool_sort"] = pd.to_numeric(frame.get("candidate_pool_rank"), errors="coerce")
-    frame["_candidate_final_sort"] = pd.to_numeric(frame.get("final_score"), errors="coerce")
-    frame["_candidate_source_sort"] = frame.get(
+    frame["_candidate_raw_sort"] = _candidate_bool_series(frame, "selected_by_raw")
+    frame["_candidate_residual_sort"] = _candidate_bool_series(frame, "selected_by_residual")
+    frame["_candidate_dual_sort"] = frame["_candidate_raw_sort"] & frame["_candidate_residual_sort"]
+    frame["_candidate_common_load_sort"] = _candidate_bool_series(
+        frame, "common_capacity_candidate_flag"
+    )
+    frame["_candidate_force_sort"] = _candidate_bool_series(frame, "force_included")
+    frame["_candidate_source_priority"] = frame.get(
         "candidate_source", pd.Series("", index=frame.index)
-    ).astype(str)
+    ).map(
+        {
+            "raw_and_residual": 0,
+            "raw_only": 1,
+            "residual_only": 2,
+            "force_included": 3,
+            "control_reference": 4,
+        }
+    ).fillna(5)
+    frame["_candidate_raw_rank_sort"] = pd.to_numeric(
+        frame.get("raw_candidate_rank"), errors="coerce"
+    )
+    frame["_candidate_residual_rank_sort"] = pd.to_numeric(
+        frame.get("residual_candidate_rank"), errors="coerce"
+    )
+    frame["_candidate_final_sort"] = pd.to_numeric(frame.get("final_score"), errors="coerce")
     frame = frame.sort_values(
-        ["_candidate_pool_sort", "_candidate_final_sort", "_candidate_source_sort", "variable"],
-        ascending=[True, False, True, True],
+        [
+            "_candidate_pool_sort", "_candidate_dual_sort", "_candidate_raw_sort",
+            "_candidate_residual_sort", "_candidate_common_load_sort",
+            "_candidate_source_priority", "_candidate_raw_rank_sort",
+            "_candidate_residual_rank_sort", "_candidate_final_sort",
+            "_candidate_force_sort", "variable",
+        ],
+        ascending=[True, False, False, False, True, True, True, True, False, False, True],
         na_position="last",
         kind="stable",
     ).drop_duplicates(subset="variable", keep="first")
@@ -1582,12 +1609,10 @@ def prioritize_recommended_candidates(
         ).drop_duplicates(subset="variable", keep="first")[residual_columns]
 
     frame = frame.merge(residual_best, on="variable", how="left", sort=False)
-    selected_by_raw = frame.get("selected_by_raw", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
-    selected_by_residual = frame.get("selected_by_residual", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
-    common_load_risk = frame.get(
-        "common_capacity_candidate_flag", pd.Series(False, index=frame.index)
-    ).fillna(False).astype(bool)
-    force_included = frame.get("force_included", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    selected_by_raw = frame["_candidate_raw_sort"]
+    selected_by_residual = frame["_candidate_residual_sort"]
+    common_load_risk = frame["_candidate_common_load_sort"]
+    force_included = frame["_candidate_force_sort"]
     control_reference = frame.get(
         "candidate_source", pd.Series("", index=frame.index)
     ).astype(str).eq("control_reference")
@@ -1674,6 +1699,21 @@ def prioritize_recommended_candidates(
     ).reset_index(drop=True)
     frame["candidate_priority_rank"] = np.arange(1, len(frame) + 1)
     return frame.loc[:, [*base_columns, *CANDIDATE_PRIORITY_COLUMNS]]
+
+
+def _candidate_bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    values = frame.get(column, pd.Series(False, index=frame.index))
+
+    def normalize(value: object) -> bool:
+        if pd.isna(value):
+            return False
+        if isinstance(value, (bool, np.bool_)):
+            return bool(value)
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return bool(value)
+        return str(value).strip().lower() in {"1", "true", "yes"}
+
+    return values.map(normalize).astype(bool)
 
 
 def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:

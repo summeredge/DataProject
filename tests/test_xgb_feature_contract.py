@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -451,6 +452,123 @@ def test_candidate_metadata_precedence_and_output_contract():
     assert result.loc[0, "screening_lag"] == 7
     assert result.loc[0, "variable_role"] == "MV"
     assert result.loc[0, "risk_flags"] == "lag_boundary"
+
+
+def test_candidate_priority_rank_precedes_final_review_rank():
+    summary = _summary([
+        {"variable": "A", "final_rank": 5},
+        {"variable": "B", "final_rank": 1},
+    ])
+    ranked = _ranked([
+        {"variable": "A", "candidate_priority_rank": 1, "candidate_pool_rank": 2},
+        {"variable": "B", "candidate_priority_rank": 2, "candidate_pool_rank": 1},
+    ])
+
+    result = build_xgb_candidate_pool(summary, ranked, target="y", top_n=1)
+
+    assert result["variable"].tolist() == ["A"]
+
+
+def test_candidate_priority_order_is_transmitted_with_metadata():
+    summary = _summary([
+        {"variable": "c", "final_rank": 1},
+        {"variable": "b", "final_rank": 2},
+        {"variable": "a", "final_rank": 3},
+    ])
+    ranked = _ranked([
+        {"variable": "a", "candidate_priority_rank": 1, "candidate_priority_score": .9, "candidate_priority_tier": 0, "candidate_pool_rank": 3},
+        {"variable": "b", "candidate_priority_rank": 2, "candidate_priority_score": .8, "candidate_priority_tier": 1, "candidate_pool_rank": 2},
+        {"variable": "c", "candidate_priority_rank": 3, "candidate_priority_score": .7, "candidate_priority_tier": 1, "candidate_pool_rank": 1},
+    ])
+
+    result = build_xgb_candidate_pool(summary, ranked, target="y", top_n=3)
+
+    assert result["variable"].tolist() == ["a", "b", "c"]
+    assert result["candidate_priority_rank"].tolist() == [1, 2, 3]
+    assert result["candidate_priority_score"].tolist() == [.9, .8, .7]
+    assert result["candidate_priority_tier"].tolist() == [0, 1, 1]
+    assert result["candidate_pool_rank"].tolist() == [3, 2, 1]
+    assert tuple(result.columns[-4:]) == (
+        "candidate_priority_rank", "candidate_priority_score",
+        "candidate_priority_tier", "candidate_pool_rank",
+    )
+
+
+def test_candidate_order_falls_back_to_final_rank_then_pool_rank_then_source_order():
+    final_rank_result = build_xgb_candidate_pool(
+        _summary([{"variable": "a", "final_rank": 2}, {"variable": "b", "final_rank": 1}]),
+        target="y",
+        top_n=2,
+    )
+    assert final_rank_result["variable"].tolist() == ["b", "a"]
+
+    summary_without_ranks = pd.DataFrame([
+        {"variable": "a", "final_recommendation": "priority_review", "screening_lag": 3},
+        {"variable": "b", "final_recommendation": "priority_review", "screening_lag": 3},
+    ])
+    pool_rank_result = build_xgb_candidate_pool(
+        summary_without_ranks,
+        _ranked([
+            {"variable": "a", "candidate_pool_rank": 2},
+            {"variable": "b", "candidate_pool_rank": 1},
+        ]),
+        target="y",
+        top_n=2,
+    )
+    assert pool_rank_result["variable"].tolist() == ["b", "a"]
+
+    source_order_summary = pd.DataFrame([
+        {"variable": "z", "final_recommendation": "priority_review", "screening_lag": 3},
+        {"variable": "a", "final_recommendation": "priority_review", "screening_lag": 3},
+    ])
+    source_order_result = build_xgb_candidate_pool(source_order_summary, target="y", top_n=2)
+    assert source_order_result["variable"].tolist() == ["z", "a"]
+
+
+def test_missing_candidate_priority_rank_sorts_after_valid_priority_rank():
+    summary = _summary([{"variable": "missing", "final_rank": 1}, {"variable": "valid", "final_rank": 9}])
+    ranked = _ranked([
+        {"variable": "missing", "candidate_priority_rank": np.nan},
+        {"variable": "valid", "candidate_priority_rank": 2},
+    ])
+
+    result = build_xgb_candidate_pool(summary, ranked, target="y", top_n=2)
+
+    assert result["variable"].tolist() == ["valid", "missing"]
+
+
+def test_whitelist_appends_after_priority_order_without_duplicate_candidates():
+    summary = _summary([
+        {"variable": "auto_a", "final_rank": 2},
+        {"variable": "auto_b", "final_rank": 1},
+        {"variable": "manual", "final_recommendation": "manual_review_only"},
+    ])
+    ranked = _ranked([
+        {"variable": "auto_a", "candidate_priority_rank": 1},
+        {"variable": "auto_b", "candidate_priority_rank": 2},
+        {"variable": "manual", "candidate_priority_rank": 3},
+    ])
+
+    result = build_xgb_candidate_pool(
+        summary, ranked, target="y", top_n=2, whitelist=["auto_b", "manual"]
+    )
+
+    assert result["variable"].tolist() == ["auto_a", "auto_b", "manual"]
+    assert result["selection_source"].tolist() == [
+        "final_review", "final_review+whitelist", "whitelist",
+    ]
+    assert result["variable"].is_unique
+
+
+def test_xgb_candidate_priority_sort_source_contract():
+    source = inspect.getsource(build_xgb_candidate_pool)
+
+    for field in ["candidate_priority_rank", "final_rank", "candidate_pool_rank", "variable"]:
+        assert field in source
+    for forbidden in ["fillna(0)", "fillna(0.0)", "nan_to_num"]:
+        assert forbidden not in source
+    assert 'candidates["_rank_missing"]' not in source
+    assert 'candidates["_rank_sort"]' not in source
 
 
 def test_candidate_pool_does_not_modify_inputs():

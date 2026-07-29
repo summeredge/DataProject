@@ -117,6 +117,8 @@ RECOMMENDED_CANDIDATE_COLUMNS = (
     *INITIAL_SCREENING_COLUMNS,
     "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
     "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
+    "residual_signal_score", "residual_evidence_status", "load_adjusted_relation_status",
+    "candidate_priority_tier", "candidate_priority_score", "candidate_priority_rank",
 )
 
 
@@ -1273,9 +1275,10 @@ def _secondary_variables_from_ranked(
     )
     if ranked.empty or "variable" not in ranked.columns:
         return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
-    top = ranked["variable"].astype(str).tolist()
+    ordered = _order_recommended_candidates(ranked)
+    top = ordered["variable"].astype(str).tolist()
     if "force_included" in ranked.columns:
-        forced = ranked[ranked["force_included"].astype(bool)]["variable"].astype(str).tolist()
+        forced = ordered[ordered["force_included"].astype(bool)]["variable"].astype(str).tolist()
     else:
         forced = [v for v in (config.force_include_variables or []) if v]
     extra = [v for v in (extra_variables or []) if v]
@@ -1981,12 +1984,19 @@ def _recommended_candidate_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _order_recommended_candidates(frame: pd.DataFrame) -> pd.DataFrame:
-    if "candidate_pool_rank" not in frame.columns:
+    rank_column = (
+        "candidate_priority_rank"
+        if "candidate_priority_rank" in frame.columns
+        else "candidate_pool_rank"
+        if "candidate_pool_rank" in frame.columns
+        else None
+    )
+    if rank_column is None:
         return frame
     ordered = frame.copy()
-    ordered["_candidate_pool_rank"] = pd.to_numeric(ordered["candidate_pool_rank"], errors="coerce")
+    ordered["_candidate_order_rank"] = pd.to_numeric(ordered[rank_column], errors="coerce")
     ordered["_candidate_variable"] = ordered.get("variable", pd.Series("", index=ordered.index)).astype(str)
-    return ordered.sort_values(["_candidate_pool_rank", "_candidate_variable"], na_position="last", kind="stable").drop(columns=["_candidate_pool_rank", "_candidate_variable"])
+    return ordered.sort_values(["_candidate_order_rank", "_candidate_variable"], na_position="last", kind="stable").drop(columns=["_candidate_order_rank", "_candidate_variable"])
 
 
 def _correlation_direction(value: object) -> str:
@@ -2572,6 +2582,9 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <section id="candidatesTab">
+          <h2>重点候选池</h2>
+          <div class="help">残差证据用于候选筛选和优先级排序，不代表因果关系或独立驱动结论。</div>
+          <div id="recommendedCandidateTable" class="empty">完成主筛查后显示重点候选。</div>
           <h2>完整初步分析结果</h2>
           <div class="help">展示所有有效分析变量的初步统计结果。控制、负荷和工况参考变量不会从完整结果中删除；重点候选范围单独保存于 recommended_candidates.csv。</div>
           <h3>结果质量提示</h3>
@@ -2821,6 +2834,7 @@ let currentAnalysisContext = {};
 let recognizedColumns = [];
 let recognizedNumericColumns = [];
 let lastRows = [];
+let lastRecommendedRows = [];
 let lastGrangerRows = [];
 let lastImportanceRows = [];
 let lastModelVariableRows = [];
@@ -3280,6 +3294,7 @@ function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   currentAnalysisContext = data.analysisContext || {};
   lastRows = data.rankedFeatures || [];
+  lastRecommendedRows = data.recommendedCandidates || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
   lastModelVariableRows = [];
@@ -3301,6 +3316,8 @@ function renderAnalysisResult(data) {
   renderScreeningQualityHints(lastRows);
   delete tableSortStates["table"];
   renderTable(lastRows);
+  delete tableSortStates[recommendedCandidateTable];
+  renderRecommendedCandidateTable(lastRecommendedRows);
   delete tableSortStates["overviewTop"];
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
@@ -4352,6 +4369,7 @@ function stddev(values) {
 }
 
 const candidateTable = "table";
+const recommendedCandidateTable = "recommendedCandidateTable";
 const candidateCoreColumns = coreCandidateColumns;
 const INITIAL_SCREENING_DETAIL_COLUMNS = [
   "dominant_corr", "lag_quality", "lag_quality_status", "lag_boundary_flag", "n",
@@ -4485,8 +4503,23 @@ function renderCandidateTable(rows) {
   });
 }
 
+function renderRecommendedCandidateTable(rows) {
+  renderCompactDetailTable({
+    targetId: recommendedCandidateTable,
+    rows,
+    coreColumns: recommendedCandidateColumns(),
+    detailColumns: candidateDetailColumns,
+    emptyText: "没有可展示的重点候选。",
+    modalTitle: (row) => `候选详情：${displayCellValue("variable", row.variable)}`,
+  });
+}
+
 function coreCandidateColumns() {
   return ["variable", "candidate_source", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
+}
+
+function recommendedCandidateColumns() {
+  return ["variable", "candidate_priority_rank", "candidate_source", "load_adjusted_relation_status", "candidate_priority_score", "residual_signal_score", "residual_evidence_status", "common_capacity_candidate_flag", "final_score"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4499,7 +4532,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  const preserveInputOrder = targetId === candidateTable || targetId === "overviewTop";
+  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === "overviewTop";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
@@ -5376,6 +5409,14 @@ function displayCellValue(column, value) {
     const labels = {raw_only: "原始通道", residual_only: "残差通道", raw_and_residual: "原始与残差双通道", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
     return labels[value] || value;
   }
+  if (column === "residual_evidence_status") {
+    const labels = {strong: "残差证据强", weak: "残差证据弱", insufficient: "残差证据不足", missing: "无残差证据", control_reference: "控制/负荷参考"};
+    return labels[value] || value;
+  }
+  if (column === "load_adjusted_relation_status") {
+    const labels = {dual_channel_supported: "原始与残差双通道支持", residual_only_supported: "残差通道支持", raw_only_supported: "原始通道支持", raw_only_common_load_risk: "原始强但负荷调整后明显减弱", raw_only_residual_weak: "原始通道支持，残差证据较弱", raw_only_residual_missing: "原始通道支持，残差证据不足", force_included_only: "人工强制包含", control_reference: "控制/负荷参考"};
+    return labels[value] || value;
+  }
   const formatted = column === "risk_flags" ? formatRiskFlags(value) : formatCellValue(column, value);
   return formatted === "" || formatted === null || formatted === undefined ? "-" : String(formatted);
 }
@@ -5968,6 +6009,12 @@ function columnLabel(column) {
   const labels = {
     variable: "变量",
     candidate_source: "候选来源",
+    candidate_priority_rank: "候选优先级",
+    candidate_priority_score: "候选综合优先分",
+    residual_signal_score: "残差信号得分",
+    residual_evidence_status: "残差证据状态",
+    load_adjusted_relation_status: "负荷调整后关系",
+    common_capacity_candidate_flag: "共同负荷风险",
     variable_role: "变量角色",
     trend_action: "趋势验证",
     final_score: "稳健综合得分",
@@ -6177,6 +6224,7 @@ function reset() {
   recognizedColumns = [];
   recognizedNumericColumns = [];
   lastRows = [];
+  lastRecommendedRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
   lastModelVariableRows = [];

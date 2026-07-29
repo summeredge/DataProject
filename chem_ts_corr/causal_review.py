@@ -11,6 +11,8 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
         "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
         "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
         "review_priority", "review_reason", "review_tier",
+        "residual_signal_score", "residual_evidence_status", "load_adjusted_relation_status",
+        "candidate_priority_tier", "candidate_priority_score", "candidate_priority_rank",
     ]
     if ranked_features.empty:
         return pd.DataFrame(columns=cols)
@@ -43,5 +45,10 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
     priorities = frame.apply(priority, axis=1, result_type="expand")
     priorities.columns = ["review_priority", "review_reason", "review_tier"]
     out = pd.concat([frame, priorities], axis=1)
-    out = out.sort_values(["review_priority", "final_score"], ascending=[True, False]).reset_index(drop=True)
+    if out["candidate_priority_rank"].notna().any():
+        out = out.sort_values(
+            ["candidate_priority_rank", "variable"], ascending=[True, True], kind="stable"
+        ).reset_index(drop=True)
+    else:
+        out = out.sort_values(["review_priority", "final_score"], ascending=[True, False]).reset_index(drop=True)
     return out[cols]

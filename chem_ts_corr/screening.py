@@ -45,6 +45,14 @@ INDUSTRIAL_SCORE_COMPONENTS = ("association", "prediction", "stability", "lag_qu
 RAW_CANDIDATE_MIN_SCORE = 0.30
 RESIDUAL_CANDIDATE_MIN_CORR = 0.30
 RESIDUAL_CANDIDATE_MIN_N = 30
+CANDIDATE_PRIORITY_COLUMNS = [
+    "residual_signal_score",
+    "residual_evidence_status",
+    "load_adjusted_relation_status",
+    "candidate_priority_tier",
+    "candidate_priority_score",
+    "candidate_priority_rank",
+]
 
 
 def _industrial_score_weight_profiles() -> tuple[dict[str, float], ...]:
@@ -1491,6 +1499,181 @@ def build_recommended_candidates(
     )
     pool["candidate_pool_rank"] = np.arange(1, len(pool) + 1)
     return pool.drop(columns=["_reference", "_best_rank", "_force_rank", "_source_priority"]).reset_index(drop=True)
+
+
+def prioritize_recommended_candidates(
+    recommended_candidates: pd.DataFrame,
+    residual_corr_scores: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Attach load-adjusted evidence and deterministically prioritize the PR-3 pool."""
+    base_columns = [
+        column for column in recommended_candidates.columns
+        if column not in CANDIDATE_PRIORITY_COLUMNS
+    ]
+    if recommended_candidates.empty:
+        empty = recommended_candidates.loc[:, base_columns].copy(deep=True)
+        for column in CANDIDATE_PRIORITY_COLUMNS:
+            empty[column] = pd.Series(dtype="Int64" if column.endswith("_rank") or column.endswith("_tier") else "object")
+        return empty
+
+    frame = recommended_candidates.loc[:, base_columns].copy(deep=True)
+    frame["variable"] = frame["variable"].astype(str)
+    frame["_candidate_pool_sort"] = pd.to_numeric(frame.get("candidate_pool_rank"), errors="coerce")
+    frame["_candidate_final_sort"] = pd.to_numeric(frame.get("final_score"), errors="coerce")
+    frame["_candidate_source_sort"] = frame.get(
+        "candidate_source", pd.Series("", index=frame.index)
+    ).astype(str)
+    frame = frame.sort_values(
+        ["_candidate_pool_sort", "_candidate_final_sort", "_candidate_source_sort", "variable"],
+        ascending=[True, False, True, True],
+        na_position="last",
+        kind="stable",
+    ).drop_duplicates(subset="variable", keep="first")
+
+    residual_columns = [
+        "variable", "_priority_residual_corr", "_priority_residual_lag",
+        "_priority_residual_n", "_priority_residual_quality",
+        "_priority_residual_complete", "_priority_residual_present",
+    ]
+    residual_best = pd.DataFrame(columns=residual_columns)
+    if (
+        residual_corr_scores is not None
+        and not residual_corr_scores.empty
+        and "variable" in residual_corr_scores.columns
+    ):
+        residual = residual_corr_scores.copy(deep=True)
+        residual["variable"] = residual["variable"].astype(str)
+        residual = residual[residual["variable"].isin(frame["variable"])]
+        residual["_priority_residual_corr"] = pd.to_numeric(residual.get("residual_corr"), errors="coerce")
+        residual["_priority_residual_lag"] = pd.to_numeric(residual.get("residual_lag"), errors="coerce")
+        residual["_priority_residual_n"] = pd.to_numeric(residual.get("residual_n"), errors="coerce")
+        residual["_priority_residual_quality"] = pd.to_numeric(residual.get("residual_lag_quality"), errors="coerce")
+        valid_status = residual.get("residual_status", pd.Series("", index=residual.index)).isin(
+            ["ok", "rank_deficient"]
+        )
+        residual["_priority_residual_complete"] = (
+            valid_status
+            & np.isfinite(residual["_priority_residual_corr"])
+            & np.isfinite(residual["_priority_residual_lag"])
+            & np.isfinite(residual["_priority_residual_n"])
+            & np.isfinite(residual["_priority_residual_quality"])
+        )
+        residual["_priority_residual_present"] = True
+        residual["_priority_status_sort"] = residual.get(
+            "residual_status", pd.Series("", index=residual.index)
+        ).map({"ok": 0, "rank_deficient": 1}).fillna(2)
+        residual["_priority_corr_sort"] = residual["_priority_residual_corr"].where(
+            np.isfinite(residual["_priority_residual_corr"]), -np.inf
+        )
+        residual["_priority_quality_sort"] = residual["_priority_residual_quality"].where(
+            np.isfinite(residual["_priority_residual_quality"]), -np.inf
+        )
+        residual["_priority_n_sort"] = residual["_priority_residual_n"].where(
+            np.isfinite(residual["_priority_residual_n"]), -np.inf
+        )
+        residual_best = residual.sort_values(
+            [
+                "_priority_residual_complete", "_priority_corr_sort",
+                "_priority_quality_sort", "_priority_n_sort",
+                "_priority_status_sort", "variable",
+            ],
+            ascending=[False, False, False, False, True, True],
+            kind="stable",
+        ).drop_duplicates(subset="variable", keep="first")[residual_columns]
+
+    frame = frame.merge(residual_best, on="variable", how="left", sort=False)
+    selected_by_raw = frame.get("selected_by_raw", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    selected_by_residual = frame.get("selected_by_residual", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    common_load_risk = frame.get(
+        "common_capacity_candidate_flag", pd.Series(False, index=frame.index)
+    ).fillna(False).astype(bool)
+    force_included = frame.get("force_included", pd.Series(False, index=frame.index)).fillna(False).astype(bool)
+    control_reference = frame.get(
+        "candidate_source", pd.Series("", index=frame.index)
+    ).astype(str).eq("control_reference")
+    residual_present = frame["_priority_residual_present"].eq(True)
+    residual_complete = frame["_priority_residual_complete"].eq(True)
+    residual_strong = (
+        residual_complete
+        & frame["_priority_residual_corr"].ge(RESIDUAL_CANDIDATE_MIN_CORR)
+        & frame["_priority_residual_n"].ge(RESIDUAL_CANDIDATE_MIN_N)
+    )
+
+    frame["residual_signal_score"] = (
+        frame["_priority_residual_corr"].clip(0.0, 1.0)
+        + frame["_priority_residual_quality"].clip(0.0, 1.0)
+    ).div(2.0).where(residual_complete)
+    frame["residual_evidence_status"] = np.select(
+        [control_reference, ~residual_present, ~residual_complete, residual_strong],
+        ["control_reference", "missing", "insufficient", "strong"],
+        default="weak",
+    )
+
+    raw_only = selected_by_raw & ~selected_by_residual
+    frame["load_adjusted_relation_status"] = np.select(
+        [
+            control_reference,
+            selected_by_raw & selected_by_residual,
+            ~selected_by_raw & selected_by_residual,
+            raw_only & common_load_risk,
+            raw_only & frame["residual_evidence_status"].eq("weak"),
+            raw_only & frame["residual_evidence_status"].isin(["missing", "insufficient"]),
+            raw_only,
+            ~selected_by_raw & ~selected_by_residual & force_included,
+        ],
+        [
+            "control_reference",
+            "dual_channel_supported",
+            "residual_only_supported",
+            "raw_only_common_load_risk",
+            "raw_only_residual_weak",
+            "raw_only_residual_missing",
+            "raw_only_supported",
+            "force_included_only",
+        ],
+        default="force_included_only",
+    )
+
+    final_score = pd.to_numeric(
+        frame.get("final_score", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    priority_score = pd.Series(np.nan, index=frame.index, dtype=float)
+    dual_channel = selected_by_raw & selected_by_residual
+    residual_only = ~selected_by_raw & selected_by_residual
+    dual_score = 0.60 * final_score + 0.40 * frame["residual_signal_score"]
+    dual_available = dual_channel & dual_score.notna()
+    raw_available = raw_only & final_score.notna()
+    residual_available = residual_only & frame["residual_signal_score"].notna()
+    if dual_available.any():
+        priority_score.loc[dual_available] = dual_score.loc[dual_available]
+    if raw_available.any():
+        priority_score.loc[raw_available] = final_score.loc[raw_available]
+    if residual_available.any():
+        priority_score.loc[residual_available] = frame.loc[residual_available, "residual_signal_score"]
+    frame["candidate_priority_score"] = priority_score
+    frame["candidate_priority_tier"] = frame["load_adjusted_relation_status"].map(
+        {
+            "dual_channel_supported": 0,
+            "raw_only_supported": 1,
+            "residual_only_supported": 1,
+            "raw_only_residual_weak": 1,
+            "raw_only_residual_missing": 1,
+            "raw_only_common_load_risk": 2,
+            "force_included_only": 3,
+            "control_reference": 4,
+        }
+    ).astype("Int64")
+    frame = frame.sort_values(
+        [
+            "candidate_priority_tier", "candidate_priority_score",
+            "_priority_residual_n", "_candidate_pool_sort", "variable",
+        ],
+        ascending=[True, False, False, True, True],
+        na_position="last",
+        kind="stable",
+    ).reset_index(drop=True)
+    frame["candidate_priority_rank"] = np.arange(1, len(frame) + 1)
+    return frame.loc[:, [*base_columns, *CANDIDATE_PRIORITY_COLUMNS]]
 
 
 def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:

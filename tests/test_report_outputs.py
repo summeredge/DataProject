@@ -149,6 +149,10 @@ def test_write_outputs_preserves_candidate_source_fields_in_recommended_and_caus
     write_outputs(
         tmp_path, "target", ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {},
         recommended_candidates=recommended,
+        residual_corr_scores=pd.DataFrame([{
+            "variable": "candidate", "residual_corr": .8, "residual_lag_quality": .6,
+            "residual_n": 100, "residual_lag": 1, "residual_status": "ok",
+        }]),
     )
 
     written_recommended = pd.read_csv(tmp_path / "recommended_candidates.csv", encoding="utf-8-sig")
@@ -162,3 +166,24 @@ def test_write_outputs_preserves_candidate_source_fields_in_recommended_and_caus
         else:
             assert recommended_value == expected
             assert causal_value == expected
+    for field in [
+        "residual_signal_score", "residual_evidence_status", "load_adjusted_relation_status",
+        "candidate_priority_tier", "candidate_priority_score", "candidate_priority_rank",
+    ]:
+        assert field in written_recommended.columns
+        assert field in causal.columns
+        if pd.isna(written_recommended.loc[0, field]):
+            assert pd.isna(causal.loc[0, field])
+        else:
+            assert written_recommended.loc[0, field] == causal.loc[0, field]
+    assert written_recommended.loc[0, "residual_signal_score"] == .7
+    assert written_recommended.loc[0, "residual_evidence_status"] == "strong"
+    assert written_recommended.loc[0, "load_adjusted_relation_status"] == "residual_only_supported"
+    assert written_recommended.loc[0, "candidate_priority_rank"] == 1
+
+    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    for label in [
+        "双通道支持候选数", "仅原始通道候选数", "仅残差通道候选数",
+        "共同负荷风险候选数", "仅人工强制包含数", "控制参考候选数",
+    ]:
+        assert label in summary

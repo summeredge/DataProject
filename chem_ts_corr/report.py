@@ -10,6 +10,7 @@ from chem_ts_corr.near_miss import build_near_miss_candidates
 from chem_ts_corr.screening import (
     build_recommended_candidates as _build_recommended_candidates,
     order_initial_candidates,
+    prioritize_recommended_candidates,
 )
 
 
@@ -57,7 +58,7 @@ def write_outputs(
         risk_flags=risk_flags,
         screening_top_n=_metric_int(metrics, "top_k") or 50,
     )
-    candidate_source = (
+    candidate_pool = (
         recommended_candidates
         if recommended_candidates is not None
         else _build_recommended_candidates(
@@ -65,6 +66,9 @@ def write_outputs(
             _metric_int(metrics, "top_k"),
             residual_corr_scores=residual_corr_scores,
         )
+    )
+    candidate_source = prioritize_recommended_candidates(
+        candidate_pool, residual_corr_scores
     )
 
     files = {
@@ -93,6 +97,7 @@ def write_outputs(
         importance,
         metrics,
         risk_flags if risk_flags is not None else pd.DataFrame(),
+        candidate_source,
     )
     (output_dir / "summary.md").write_text(summary, encoding="utf-8")
 
@@ -120,6 +125,7 @@ def build_markdown_summary(
     importance: pd.DataFrame,
     metrics: dict[str, float | str],
     risk_flags: pd.DataFrame,
+    recommended_candidates: pd.DataFrame | None = None,
 ) -> str:
     risky = risk_flags[risk_flags.get("risk_count", 0) > 0] if not risk_flags.empty else pd.DataFrame()
     common_capacity = _risk_subset(risky, "common_capacity_driver_flag")
@@ -138,6 +144,20 @@ def build_markdown_summary(
             f"- 有效分析变量数量: {len(ranked_features)}",
             f"- 重点候选数量: {_metric_int(metrics, 'recommended_candidate_count') or 0}",
             f"- 控制/负荷参考变量数量: {control_reference_count}",
+        ]
+    )
+    candidate_pool = recommended_candidates if recommended_candidates is not None else pd.DataFrame()
+    relation = candidate_pool.get(
+        "load_adjusted_relation_status", pd.Series("", index=candidate_pool.index)
+    ).astype(str)
+    lines.extend(
+        [
+            f"- 双通道支持候选数: {int(relation.eq('dual_channel_supported').sum())}",
+            f"- 仅原始通道候选数: {int(relation.str.startswith('raw_only_').sum())}",
+            f"- 仅残差通道候选数: {int(relation.eq('residual_only_supported').sum())}",
+            f"- 共同负荷风险候选数: {int(relation.eq('raw_only_common_load_risk').sum())}",
+            f"- 仅人工强制包含数: {int(relation.eq('force_included_only').sum())}",
+            f"- 控制参考候选数: {int(relation.eq('control_reference').sum())}",
         ]
     )
 

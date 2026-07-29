@@ -60,6 +60,22 @@ def test_secondary_variables_include_config_forced_when_no_force_column():
     assert variables == ["A", "B", "C", "D"]
 
 
+def test_secondary_variables_follow_candidate_priority_rank():
+    recommended = pd.DataFrame(
+        {
+            "variable": ["pool_first", "priority_first", "priority_second"],
+            "candidate_pool_rank": [1, 3, 2],
+            "candidate_priority_rank": [3, 1, 2],
+            "force_included": [False, False, False],
+        }
+    )
+    config = AnalysisConfig(Path("dummy.csv"), "time", "Y", Path("out"))
+
+    variables = _secondary_variables_from_ranked(recommended, config)
+
+    assert variables == ["priority_first", "priority_second", "pool_first"]
+
+
 def test_secondary_lag_search_changed_normalizes_resample_rule():
     base = AnalysisConfig(
         input_path=Path("dummy.csv"),

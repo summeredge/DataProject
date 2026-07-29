@@ -81,6 +81,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         build_recommended_candidates,
         final_ranked_features,
         load_roles,
+        prioritize_recommended_candidates,
         residual_corr_scores,
         risk_flags,
     )
@@ -200,6 +201,7 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         residual_corr_scores=residual_output,
         residual_top_k=config.top_k,
     )
+    recommended = prioritize_recommended_candidates(recommended, residual_output)
     importance = pd.DataFrame()
     granger = pd.DataFrame()
     metrics: dict[str, float | str] = {}

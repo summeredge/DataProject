@@ -14,7 +14,12 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.report import build_recommended_candidates, build_markdown_summary, write_outputs
 from chem_ts_corr.screening import final_ranked_features
 from chem_ts_corr.service import analyze_numeric_frame
-from chem_ts_corr.web import INDEX_HTML, _build_result_payload, _order_recommended_candidates
+from chem_ts_corr.web import (
+    INDEX_HTML,
+    _build_result_payload,
+    _order_recommended_candidates,
+    _secondary_variables_from_ranked,
+)
 
 
 FORBIDDEN_INITIAL_FIELDS = {
@@ -69,6 +74,10 @@ FOLLOWUP_OUTPUTS = {
 PR3_CANDIDATE_FIELDS = {
     "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
     "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
+}
+PR4_CANDIDATE_FIELDS = {
+    "residual_signal_score", "residual_evidence_status", "load_adjusted_relation_status",
+    "candidate_priority_tier", "candidate_priority_score", "candidate_priority_rank",
 }
 
 
@@ -268,18 +277,39 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
     assert [row["variable"] for row in payload["overview"]["top10"]] == ranked.head(10)["variable"].tolist()
     assert set(ranked.set_index("variable").loc[controls, "variable_role"]) == {"residual_control"}
     assert not (PR3_CANDIDATE_FIELDS & set(ranked.columns))
+    assert not (PR4_CANDIDATE_FIELDS & set(ranked.columns))
     assert all(not (PR3_CANDIDATE_FIELDS & set(row)) for row in payload["rankedFeatures"])
+    assert all(not (PR4_CANDIDATE_FIELDS & set(row)) for row in payload["rankedFeatures"])
     assert all(not (PR3_CANDIDATE_FIELDS & set(row)) for row in payload["overview"]["top10"])
+    assert all(not (PR4_CANDIDATE_FIELDS & set(row)) for row in payload["overview"]["top10"])
     assert PR3_CANDIDATE_FIELDS <= set(recommended.columns)
+    assert PR4_CANDIDATE_FIELDS <= set(recommended.columns)
     assert all(PR3_CANDIDATE_FIELDS <= set(row) for row in payload["recommendedCandidates"])
-    assert recommended["candidate_pool_rank"].tolist() == list(range(1, len(recommended) + 1))
+    assert all(PR4_CANDIDATE_FIELDS <= set(row) for row in payload["recommendedCandidates"])
+    assert sorted(recommended["candidate_pool_rank"].tolist()) == list(range(1, len(recommended) + 1))
+    assert recommended["candidate_priority_rank"].tolist() == list(range(1, len(recommended) + 1))
     assert [row["variable"] for row in payload["recommendedCandidates"]] == recommended["variable"].tolist()
+    assert _secondary_variables_from_ranked(recommended, config=AnalysisConfig(
+        tmp_path / "input.csv", "time", "target", tmp_path
+    )) == recommended["variable"].tolist()
     source_values = {"raw_only", "residual_only", "raw_and_residual", "force_included", "control_reference"}
     assert set(recommended["candidate_source"]) <= source_values
     assert {row["candidate_source"] for row in payload["recommendedCandidates"]} <= source_values
+    residual_statuses = {"strong", "weak", "insufficient", "missing", "control_reference"}
+    relation_statuses = {
+        "dual_channel_supported", "residual_only_supported", "raw_only_supported",
+        "raw_only_common_load_risk", "raw_only_residual_weak", "raw_only_residual_missing",
+        "force_included_only", "control_reference",
+    }
+    assert set(recommended["residual_evidence_status"]) <= residual_statuses
+    assert set(recommended["load_adjusted_relation_status"]) <= relation_statuses
+    assert {row["residual_evidence_status"] for row in payload["recommendedCandidates"]} <= residual_statuses
+    assert {row["load_adjusted_relation_status"] for row in payload["recommendedCandidates"]} <= relation_statuses
     assert PR3_CANDIDATE_FIELDS <= set(causal.columns)
-    recommended_sources = recommended.set_index("variable")[sorted(PR3_CANDIDATE_FIELDS)]
-    causal_sources = causal.set_index("variable").loc[recommended_sources.index, sorted(PR3_CANDIDATE_FIELDS)]
+    assert PR4_CANDIDATE_FIELDS <= set(causal.columns)
+    candidate_fields = sorted(PR3_CANDIDATE_FIELDS | PR4_CANDIDATE_FIELDS)
+    recommended_sources = recommended.set_index("variable")[candidate_fields]
+    causal_sources = causal.set_index("variable").loc[recommended_sources.index, candidate_fields]
     pd.testing.assert_frame_equal(recommended_sources, causal_sources, check_dtype=False)
 
     _run_complete_initial_output(tmp_path / "without_roles", residual_controls=False)
@@ -341,6 +371,43 @@ def test_historical_recommended_csv_without_pool_rank_preserves_file_order(tmp_p
     assert [row["variable"] for row in payload["recommendedCandidates"]] == ["c", "a", "b"]
 
 
+def test_historical_recommended_csv_uses_pool_rank_without_priority_rank(tmp_path: Path):
+    ranked = pd.DataFrame([{"variable": value, "final_score": score} for value, score in [("a", .9), ("b", .8), ("c", .7)]])
+    recommended = ranked.assign(candidate_pool_rank=[3, 1, 2], candidate_source="raw_only")
+    ranked.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    recommended.to_csv(tmp_path / "recommended_candidates.csv", index=False, encoding="utf-8-sig")
+    (tmp_path / "summary.md").write_text("# 初步筛选摘要\n", encoding="utf-8")
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+
+    payload = _build_result_payload("run", tmp_path, config)
+
+    assert [row["variable"] for row in payload["recommendedCandidates"]] == ["b", "c", "a"]
+
+
+def test_valid_residual_output_does_not_change_complete_initial_results(tmp_path: Path, monkeypatch):
+    rows = 120
+    time = np.arange(rows, dtype=float)
+    frame = pd.DataFrame(
+        {
+            "target": np.sin(time / 7),
+            "candidate": np.sin((time + 2) / 7),
+            "control": np.cos(time / 9),
+        },
+        index=pd.date_range("2026-01-01", periods=rows, freq="min"),
+    )
+    config = AnalysisConfig(
+        tmp_path / "input.csv", "time", "target", tmp_path,
+        max_lag=3, top_k=10, residual_control_columns=["control"],
+        enable_model=False, skip_model_lift=True, skip_rolling_corr=True,
+    )
+    with_residual = analyze_numeric_frame(frame, config).ranked_features
+    monkeypatch.setattr(screening, "residual_corr_scores", lambda *args, **kwargs: pd.DataFrame(columns=["variable"]))
+    without_residual = analyze_numeric_frame(frame, config).ranked_features
+
+    fields = ["variable", "final_score", "driver_rank", "candidate_grade", "recommended_use", "risk_flags"]
+    pd.testing.assert_frame_equal(with_residual[fields], without_residual[fields])
+
+
 def test_initial_web_contract_excludes_four_layer_fields():
     initial_blocks = [
         INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}\n", 1)[0],
@@ -390,6 +457,42 @@ def test_recommended_web_contract_uses_pool_rank_and_maps_all_candidate_sources(
         assert label in display_source
 
 
+def test_pr4_web_contract_displays_priority_fields_and_statuses_only_in_recommendations():
+    display_source = INDEX_HTML.split("function displayCellValue", 1)[1].split("function openTrendForCandidate", 1)[0]
+    recommended_columns = INDEX_HTML.split("function recommendedCandidateColumns()", 1)[1].split("}", 1)[0]
+    initial_columns = INDEX_HTML.split("function coreCandidateColumns()", 1)[1].split("}", 1)[0]
+
+    for field in [
+        "candidate_priority_rank", "candidate_source", "load_adjusted_relation_status",
+        "candidate_priority_score", "residual_signal_score", "residual_evidence_status",
+        "common_capacity_candidate_flag", "final_score",
+    ]:
+        assert f'"{field}"' in recommended_columns
+    for field in PR4_CANDIDATE_FIELDS:
+        assert field not in initial_columns
+    for label in [
+        "候选优先级", "候选综合优先分", "残差信号得分", "残差证据状态",
+        "负荷调整后关系", "共同负荷风险",
+    ]:
+        assert label in INDEX_HTML
+    for enum_value in [
+        "strong", "weak", "insufficient", "missing", "control_reference",
+        "dual_channel_supported", "residual_only_supported", "raw_only_supported",
+        "raw_only_common_load_risk", "raw_only_residual_weak", "raw_only_residual_missing",
+        "force_included_only",
+    ]:
+        assert enum_value in display_source
+    for label in [
+        "残差证据强", "残差证据弱", "残差证据不足", "无残差证据",
+        "原始与残差双通道支持", "残差通道支持", "原始通道支持",
+        "原始强但负荷调整后明显减弱", "原始通道支持，残差证据较弱",
+        "原始通道支持，残差证据不足", "人工强制包含",
+    ]:
+        assert label in display_source
+    assert display_source.count("return labels[value] || value") >= 3
+    assert "残差证据用于候选筛选和优先级排序，不代表因果关系或独立驱动结论。" in INDEX_HTML
+
+
 def _javascript_function(name: str) -> str:
     source = INDEX_HTML.split(f"function {name}", 1)[1]
     return f"function {name}" + source.split("\n}\n", 1)[0] + "\n}"
@@ -401,7 +504,7 @@ def test_initial_tables_preserve_api_order_until_the_user_sorts():
     for target_id in ['"table"', '"overviewTop"']:
         assert f"delete tableSortStates[{target_id}]" in render_source
         assert f"tableSortStates[{target_id}] = {{ column: \"final_score\"" not in render_source
-    assert 'targetId === candidateTable || targetId === "overviewTop"' in compact_source
+    assert 'targetId === candidateTable || targetId === recommendedCandidateTable || targetId === "overviewTop"' in compact_source
     assert "ensureTableSortState(targetId, preserveInputOrder ? null : columns[0])" in compact_source
 
     rows = [

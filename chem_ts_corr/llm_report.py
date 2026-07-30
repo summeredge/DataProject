@@ -142,9 +142,9 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
 - predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
 - 必须按 overview.score_method 说明当前评分版本；评分版本仅表示评分语义，不代表新的因果算法，也不得据此声称确定性因果关系。
-- evidence_confidence 的中文含义为“证据修正系数”，当前仅由 data_quality_score 决定。evidence_completeness 和 evidence_coverage_status 只表示证据覆盖情况，不参与 evidence_score、final_score 或候选排名。
-- 缺失证据不是零分证据。未计算、不可用或数据不足的可选证据会从当前权重组合中省略并重新归一化；实际计算得到的零值才代表弱证据。
-- evidence_strength 是多个允许权重组合结果的中位数，不得解释为等权几何平均、概率或统计置信度。
+- evidence_confidence 的中文含义为“证据修正系数”，当前仅由 data_quality_score 决定。evidence_completeness 和 evidence_coverage_status 只表示基础关联、数据质量和时间方向三个核心字段的覆盖情况，不参与 evidence_score、final_score 或候选排名。
+- 变化量、稳定性、预测和残差证据只用于解释或后续分析，不参与初步 evidence_strength、evidence_score 或 final_score。
+- evidence_strength 是最佳滞后处的基础关联强度，不得解释为概率、统计置信度或确定性因果证据。
 - 评分组件覆盖字段只表示计算覆盖情况；不得将“覆盖完整”解释为“全部证据支持”。
 - 结论必须引用变量名、证据来源、滞后、风险标签或复核决策；如果证据不足，必须明确说“证据不足”，不要编造原因。
 - 核心工程原则：用 PV 做分析，用回路做 MV 候选，用 SV/MV/APC 写入点做实际操纵点确认。

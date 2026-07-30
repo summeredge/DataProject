@@ -40,29 +40,24 @@ def _regime_summary(signed_correlations: tuple[float, float, float]) -> pd.Serie
     return _summarize_regime_robustness(scores, max_lag=10).iloc[0]
 
 
-def test_three_correlation_evidence_scores_use_equal_weight_geometric_mean():
+def test_later_correlation_evidence_does_not_change_initial_association():
     actual = _combined(association=0.8, innovation=0.6, independent=0.7)
-    equal_weight = (0.8 * 0.6 * 0.7) ** (1 / 3)
-    old_nested_square_root = np.sqrt(np.sqrt(0.8 * 0.6) * 0.7)
 
-    assert actual == pytest.approx(equal_weight)
-    assert actual != pytest.approx(old_nested_square_root)
+    assert actual == pytest.approx(0.8)
 
 
 @pytest.mark.parametrize(
-    ("innovation", "independent", "expected"),
+    ("innovation", "independent"),
     [
-        (np.nan, np.nan, 0.8),
-        (0.6, np.nan, np.sqrt(0.8 * 0.6)),
-        (np.nan, 0.7, np.sqrt(0.8 * 0.7)),
+        (np.nan, np.nan),
+        (0.6, np.nan),
+        (np.nan, 0.7),
     ],
 )
-def test_missing_correlation_evidence_is_not_treated_as_zero(
-    innovation: float,
-    independent: float,
-    expected: float,
+def test_optional_correlation_evidence_is_explanatory_only(
+    innovation: float, independent: float,
 ):
-    assert _combined(0.8, innovation, independent) == pytest.approx(expected)
+    assert _combined(0.8, innovation, independent) == pytest.approx(0.8)
 
 
 @pytest.mark.parametrize(

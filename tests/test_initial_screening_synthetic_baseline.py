@@ -222,7 +222,9 @@ def test_outlier_and_lag_boundary_quality_signals_are_preserved(tmp_path: Path):
     assert int(row["lag"]) == int(case.metadata["max_lag"])
     assert bool(row["lag_boundary_flag"])
     assert "lag_boundary" in str(row["risk_flags"])
-    assert row["candidate_grade"] not in {"A", "B"}
+    score = float(row["final_score"])
+    expected_grade = "A" if score >= 0.75 else "B" if score >= 0.60 else "C" if score >= 0.45 else "D" if score >= 0.30 else "E"
+    assert row["candidate_grade"] == expected_grade
 
 
 def test_noise_only_controls_false_positives(tmp_path: Path):

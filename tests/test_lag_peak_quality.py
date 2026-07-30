@@ -63,11 +63,11 @@ def test_competing_peak_scores_below_clear_peak():
     assert multi["peak_prominence"] < sharp["peak_prominence"]
 
 
-def test_boundary_peak_receives_fixed_penalty():
+def test_boundary_peak_receives_proportional_penalty():
     interior = _quality("interior", {-3: 0.3, -1: 0.2, 0: 0.8, 1: 0.2}, max_lag=5)
     boundary = _quality("boundary", {2: 0.3, 4: 0.2, 5: 0.8}, max_lag=5)
 
-    assert boundary["lag_quality"] == pytest.approx(max(0.0, interior["shape_quality"] - 0.25))
+    assert boundary["lag_quality"] == pytest.approx(boundary["shape_quality"] * 0.75)
     assert boundary["lag_quality"] < interior["lag_quality"]
     assert bool(boundary["lag_boundary_flag"]) is True
 
@@ -143,7 +143,9 @@ def test_old_lag_quality_formula_is_absent():
     assert "max(0, -peak_sharpness)" not in source
     assert "lag_quality = best_score -" not in source
     assert "0.70 * peak_prominence" in source
-    assert "0.25 if boundary" in source
+    assert "shape_quality -" not in source
+    assert "abs(bl)" not in source
+    assert "0.75 if boundary" in source
 
 
 def test_final_ranked_features_accepts_new_peak_quality_output():

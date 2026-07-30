@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Literal, TypedDict
 
 import numpy as np
@@ -25,7 +25,7 @@ RISK_RELATIVE_PENALTY_WEIGHTS = {
     "lag_boundary": 0.00,
     "low_model_lift": 0.00,
     "poor_data_quality": 0.00,
-    "residual_collinearity": 0.10,
+    "residual_collinearity": 0.00,
     "redundant_proxy": 0.00,
 }
 EVIDENCE_SCORE_CAPS = {
@@ -41,7 +41,9 @@ CLASS_PRIORITY_FACTORS = {
     "poor_quality": 0.35,
     "uncertain_candidate": 0.80,
 }
-INDUSTRIAL_SCORE_COMPONENTS = ("association", "prediction", "stability", "lag_quality")
+# Fixed initial-screening temporal constraints. These are not user parameters.
+TARGET_LEADS_PENALTY_RATE = 0.50
+TARGET_LEADS_SCORE_CAP = 0.25
 RAW_CANDIDATE_MIN_SCORE = 0.30
 RESIDUAL_CANDIDATE_MIN_CORR = 0.30
 RESIDUAL_CANDIDATE_MIN_N = 30
@@ -53,43 +55,6 @@ CANDIDATE_PRIORITY_COLUMNS = [
     "candidate_priority_score",
     "candidate_priority_rank",
 ]
-
-
-def _industrial_score_weight_profiles() -> tuple[dict[str, float], ...]:
-    profiles: list[dict[str, float]] = []
-    for association in range(10, 41, 5):
-        for prediction in range(10, 41, 5):
-            for stability in range(10, 41, 5):
-                lag_quality = 100 - association - prediction - stability
-                if not 10 <= lag_quality <= 40:
-                    continue
-                profiles.append({
-                    "association": association / 100,
-                    "prediction": prediction / 100,
-                    "stability": stability / 100,
-                    "lag_quality": lag_quality / 100,
-                })
-    return tuple(profiles)
-
-
-INDUSTRIAL_SCORE_WEIGHT_PROFILES = _industrial_score_weight_profiles()
-
-
-def _available_weight_profile_scores(
-    components: pd.DataFrame, profiles: Sequence[Mapping[str, float]]
-) -> pd.DataFrame:
-    component_values = components.to_numpy(dtype=float)
-    available = ~pd.isna(component_values)
-    profile_weights = pd.DataFrame(profiles, columns=components.columns).to_numpy(dtype=float)
-    weighted_sum = np.where(available, component_values, 0.0) @ profile_weights.T
-    available_weight = available.astype(float) @ profile_weights.T
-    profile_scores = np.divide(
-        weighted_sum,
-        available_weight,
-        out=np.full_like(weighted_sum, np.nan),
-        where=available_weight > 0,
-    )
-    return pd.DataFrame(profile_scores, index=components.index)
 
 
 REGIME_NAMES = ("low", "mid", "high")
@@ -842,7 +807,20 @@ def classify_candidate(row: pd.Series) -> str:
     for token, candidate_class in [
         ("strong_formula_leakage", "formula_or_derived"),
         ("poor_data_quality", "poor_quality"),
-        ("target_leads_variable", "downstream_response"),
+    ]:
+        if token in flags:
+            return candidate_class
+
+    temporal_status = str(row.get("temporal_direction_status", ""))
+    if temporal_status == "target_leads_supported":
+        return "downstream_response"
+    if temporal_status == "variable_leads_supported":
+        return "upstream_driver_candidate"
+    if temporal_status == "synchronous":
+        return "synchronous_association"
+    if temporal_status == "direction_unresolved":
+        return "uncertain_candidate"
+    for token, candidate_class in [
         ("common_capacity_driver", "capacity_driven"),
         ("redundant_proxy", "uncertain_candidate"),
     ]:
@@ -867,31 +845,20 @@ def classify_candidate(row: pd.Series) -> str:
 
 def _combine_correlation_evidence(
     association_score: pd.Series,
-    independent_signal_score: pd.Series,
-    innovation_score: pd.Series,
+    independent_signal_score: pd.Series | None = None,
+    innovation_score: pd.Series | None = None,
 ) -> tuple[pd.Series, pd.Series]:
     association = pd.to_numeric(association_score, errors="coerce").astype(float)
-    independent = pd.to_numeric(independent_signal_score, errors="coerce").astype(float)
-    innovation = pd.to_numeric(innovation_score, errors="coerce").astype(float)
-    innovation_verified = innovation.notna()
-    independent_verified = independent.notna()
-    available = pd.DataFrame(
-        {
-            "association": association.clip(0, 1),
-            "innovation": innovation.clip(0, 1),
-            "independent": independent.clip(0, 1),
-        }
-    )
-    available_count = available.notna().sum(axis=1)
-    combined = available.prod(axis=1, skipna=True).pow(
-        1.0 / available_count.where(available_count.gt(0))
-    )
-    combined = combined.where(association.notna())
     status = pd.Series("association_only", index=association_score.index, dtype=object)
-    status.loc[innovation_verified] = "innovation_verified"
-    status.loc[independent_verified & ~innovation_verified] = "independent_verified"
-    status.loc[independent_verified & innovation_verified] = "innovation_and_independent_verified"
-    return combined.clip(0, 1), status
+    return association.clip(0, 1), status
+
+
+def _temporal_adjustment(row: pd.Series) -> tuple[str, float, float]:
+    value = row.get("temporal_direction_status", pd.NA)
+    status = "direction_unresolved" if pd.isna(value) else str(value)
+    if status == "target_leads_supported":
+        return status, TARGET_LEADS_PENALTY_RATE, TARGET_LEADS_SCORE_CAP
+    return status, 0.0, 1.0
 
 
 def _data_quality_score(diag: Mapping[str, object]) -> float:
@@ -1183,6 +1150,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         "driver_priority_factor", "driver_priority_score", "driver_rank", "candidate_grade",
         "recommended_use", "recommended_action", "force_included", "engineering_context",
         "is_residual_control", "is_capacity_reference", "is_segment_reference", "variable_role",
+        "stability_score", "evidence_missing_items", "evidence_coverage_status",
+        "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
+        "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
     ]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -1209,7 +1179,10 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     if "variable" not in risk_source.columns:
         risk_source = pd.DataFrame(columns=["variable"])
     final = final.merge(risk_source, on="variable", how="left")
-    lag_peak_columns = ["variable", "lag_quality"]
+    lag_peak_columns = [
+        "variable", "lag_quality", "near_peak_lag_min", "near_peak_lag_max",
+        "near_peak_lag_count", "temporal_direction_status",
+    ]
     if "lag_boundary_flag" not in final.columns:
         lag_peak_columns.append("lag_boundary_flag")
     final = final.merge(
@@ -1217,6 +1190,8 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         on="variable",
         how="left",
     )
+    if "temporal_direction_status" not in final.columns:
+        final["temporal_direction_status"] = pd.NA
     final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
     # Some legacy callers pre-merge regime evidence.  Pandas then suffixes the
     # duplicate flag; normalize it before the layer-status contract is built.
@@ -1263,7 +1238,9 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         final["correlation_evidence_score"],
         final["correlation_evidence_status"],
     ) = _combine_correlation_evidence(
-        final["association_score"], final["independent_signal_score"], final["innovation_score"]
+        final["association_score"],
+        final["independent_signal_score"],
+        final["innovation_score"],
     )
     both_stability = final["regime_stability_final"].notna() & final["rolling_stability"].notna()
     final["stability_score"] = final["rolling_stability"].where(
@@ -1274,72 +1251,61 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         * final.loc[both_stability, "regime_stability_final"]
     )
 
-    correlation_completeness = 0.5 + 0.5 * final["innovation_score"].notna().astype(float)
-    final["evidence_completeness"] = (
-        correlation_completeness
-        + final["prediction_score"].notna().astype(float)
-        + final["stability_score"].notna().astype(float)
-        + final["lag_quality"].notna().astype(float)
-    ) / 4.0
     data_quality_raw = final.get("data_quality_score", pd.Series(1.0, index=final.index))
-    final["data_quality_score"] = pd.to_numeric(data_quality_raw, errors="coerce").fillna(1.0).clip(0, 1)
-    # Coverage remains an output contract.  Only measured data quality adjusts
-    # the score; unavailable optional evidence is omitted by profile reweighting.
+    final["data_quality_score"] = pd.to_numeric(data_quality_raw, errors="coerce").clip(0, 1)
     final["evidence_confidence"] = final["data_quality_score"]
-    evidence_items = {
-        "innovation_score": "变化量验证",
-        "prediction_score": "模型提升",
-        "stability_score": "稳定性验证",
-        "lag_quality": "滞后质量",
-    }
-    missing_evidence = final[list(evidence_items)].isna()
-    final["evidence_missing_items"] = missing_evidence.apply(
-        lambda row: "；".join(
-            label for field, label in evidence_items.items() if row[field]
-        ),
-        axis=1,
+    association_available = final["association_score"].notna()
+    quality_available = final["data_quality_score"].notna()
+    temporal_available = final["temporal_direction_status"].notna()
+    final["evidence_available_count"] = (
+        association_available.astype(int)
+        + quality_available.astype(int)
+        + temporal_available.astype(int)
     )
-    missing_count = missing_evidence.sum(axis=1)
+    final["evidence_completeness"] = final["evidence_available_count"] / 3.0
+    final["evidence_missing_items"] = pd.DataFrame(
+        {
+            "基础关联": ~association_available,
+            "数据质量": ~quality_available,
+            "时间方向": ~temporal_available,
+        }
+    ).apply(lambda row: "；".join(row.index[row].tolist()), axis=1)
+    missing_count = 3 - final["evidence_available_count"]
     final["evidence_coverage_status"] = np.select(
         [missing_count.eq(0), missing_count.eq(1)],
         ["完整", "部分完整"],
         default="证据不足",
     )
 
-    components = pd.DataFrame(
-        {
-            "association": final["correlation_evidence_score"],
-            "prediction": final["prediction_score"],
-            "stability": final["stability_score"],
-            "lag_quality": final["lag_quality"],
-        },
-        index=final.index,
-    )
-    final["evidence_available_count"] = components.notna().sum(axis=1).astype(int)
-    profile_scores = _available_weight_profile_scores(
-        components, INDUSTRIAL_SCORE_WEIGHT_PROFILES
-    )
-    final["evidence_strength"] = profile_scores.median(axis=1).clip(0, 1)
-    final["evidence_score_low"] = (
-        profile_scores.quantile(0.10, axis=1) * final["evidence_confidence"]
-    ).clip(0, 1)
-    final["evidence_score_high"] = (
-        profile_scores.quantile(0.90, axis=1) * final["evidence_confidence"]
-    ).clip(0, 1)
+    final["evidence_strength"] = final["association_score"]
     final["evidence_score"] = (
         final["evidence_strength"] * final["evidence_confidence"]
     ).clip(0, 1)
-    final["score_method"] = "industrial_robust_v3"
+    final["evidence_score_low"] = final["evidence_score"]
+    final["evidence_score_high"] = final["evidence_score"]
+    final["score_method"] = "initial_association_temporal_v4"
     risk_values = final.get("risk_flags", pd.Series("", index=final.index)).map(_risk_adjustment)
     final[["risk_penalty_rate", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
         risk_values.tolist(), index=final.index
     )
     final["risk_penalty"] = final["evidence_score"] * final["risk_penalty_rate"]
-    penalized_score = (final["evidence_score"] - final["risk_penalty"]).clip(0, 1)
-    final["final_score"] = np.minimum(penalized_score, final["risk_score_cap"]).clip(0, 1)
+    temporal_values = final.apply(_temporal_adjustment, axis=1)
+    final[["temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap"]] = pd.DataFrame(
+        temporal_values.tolist(), index=final.index
+    )
+    risk_adjusted_score = (
+        final["evidence_score"] * (1.0 - final["risk_penalty_rate"])
+    ).clip(0, 1)
+    temporal_adjusted_score = (
+        risk_adjusted_score * (1.0 - final["temporal_penalty_rate"])
+    ).clip(0, 1)
+    final["final_score"] = pd.concat(
+        [temporal_adjusted_score, final["risk_score_cap"], final["temporal_score_cap"]],
+        axis=1,
+    ).min(axis=1, skipna=False).clip(0, 1)
     final["association_rank"] = final["evidence_score"].rank(
         method="first", ascending=False
-    ).astype(int)
+    ).astype("Int64")
     final["candidate_class"] = final.apply(classify_candidate, axis=1)
     # These columns are retained only for readers of historical CSV files. They
     # are aliases of the statistical score and never affect screening behavior.
@@ -1740,28 +1706,7 @@ def order_initial_candidates(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _grade_candidate(row: pd.Series) -> str:
     score = _safe_float(row.get("final_score", 0), default=0.0)
-    grade = "A" if score >= 0.75 else "B" if score >= 0.6 else "C" if score >= 0.45 else "D" if score >= 0.3 else "E"
-    flags = _risk_token_set(row.get("risk_flags", ""))
-    # PR-8C downstream_response/lag_boundary: explicit temporal conflict is
-    # retained for explanation but cannot receive an upstream high-confidence grade.
-    if flags.intersection({"target_leads_variable", "lag_boundary"}):
-        return max(grade, "C", key=lambda value: "ABCDE".index(value))
-    # PR-8C nonlinear_stable_driver: validated incremental prediction can earn
-    # a reviewable grade only when no explicit temporal, quality, or regime conflict exists.
-    if (
-        _safe_float(row.get("prediction_score", 0), default=0.0) > 0.05
-        and _safe_float(row.get("lag", 0), default=0.0) > 0
-        and not flags.intersection(
-            {
-                "strong_formula_leakage",
-                "poor_data_quality",
-                "unstable_across_regimes",
-                "unstable_over_time",
-            }
-        )
-    ):
-        return min(grade, "C", key=lambda value: "ABCDE".index(value))
-    return grade
+    return "A" if score >= 0.75 else "B" if score >= 0.6 else "C" if score >= 0.45 else "D" if score >= 0.3 else "E"
 
 
 def _recommend_use(row: pd.Series) -> str:
@@ -1769,8 +1714,6 @@ def _recommend_use(row: pd.Series) -> str:
     grade = str(row.get("candidate_grade", "E"))
     if "poor_data_quality" in flags:
         return "poor_quality_variable"
-    if "common_capacity_driver" in flags:
-        return "capacity_driven"
     raw_corr = _safe_float(row.get("raw_corr", 0), default=0.0)
     lag = int(_safe_float(row.get("lag", 0), default=0.0))
     has_formula = "formula_like" in flags
@@ -1778,18 +1721,23 @@ def _recommend_use(row: pd.Series) -> str:
     has_common = "common_capacity_driver" in flags
     if has_strong_formula or (has_formula and has_common) or (has_formula and lag == 0 and raw_corr >= 0.95):
         return "formula_coupled_reference"
+    if str(row.get("temporal_direction_status", "")) == "target_leads_supported":
+        return "state_indicator"
+    if "common_capacity_driver" in flags:
+        return "capacity_driven"
     if "unstable_across_regimes" in flags or "unstable_over_time" in flags:
         return "unstable_candidate"
-    if lag < 0:
-        return "state_indicator"
     if grade == "A":
         return "strong_screening_candidate"
-    if grade == "B" and _safe_float(row.get("model_lift_score", 0), default=0.0) > 0.05:
-        return "prediction_candidate"
     return "manual_review_required"
 
 
 def _recommended_action(row: pd.Series) -> str:
+    if str(row.get("temporal_direction_status", "")) == "target_leads_supported":
+        return (
+            "目标明显领先该变量，不适合作为上游原因候选；"
+            "可能是下游响应、反馈动作或其他滞后结果，具体机制需工艺确认"
+        )
     use_value = row.get("recommended_use", "manual_review_required")
     use = "manual_review_required" if pd.isna(use_value) else str(use_value)
     mapping = {

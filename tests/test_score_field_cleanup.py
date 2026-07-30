@@ -30,7 +30,10 @@ def _result(
     ranked = pd.DataFrame([{"variable": "x", "score": raw, "innovation_score": innovation, "lag": 1, "direction": "变量领先目标"}])
     residual_frame = _frame() if residual is None else _frame({"variable": "x", "residual_corr": residual})
     rolling_frame = _frame() if rolling is None else _frame({"variable": "x", "rolling_stability": rolling})
-    lag_frame = _frame() if lag_quality is None else _frame({"variable": "x", "lag_quality": lag_quality})
+    lag_frame = _frame() if lag_quality is None else _frame({
+        "variable": "x", "lag_quality": lag_quality,
+        "temporal_direction_status": "variable_leads_supported",
+    })
     lift_frame = _frame() if model_lift is None else _frame({"variable": "x", "model_lift": model_lift})
     stability = _frame() if regime is None else _frame({"variable": "x", "regime_stability_final": regime})
     risks = _frame({"variable": "x", "risk_flags": risk_flags})
@@ -46,10 +49,12 @@ def test_legacy_and_followup_fields_are_removed_from_initial_output_schema():
         "raw_corr_score", "residual_corr_score", "independent_signal_score",
         "residual_status", "regime_stability_final", "rolling_stability",
         "model_lift_score", "model_lift_status", "prediction_score",
-        "evidence_coverage_status", "evidence_missing_items",
     ]:
         assert field not in row.index
-    for field in ["association_score", "correlation_evidence_score", "lag_quality", "final_score"]:
+    for field in [
+        "association_score", "correlation_evidence_score", "lag_quality", "final_score",
+        "evidence_coverage_status", "evidence_missing_items", "stability_score",
+    ]:
         assert field in row.index
 
 
@@ -58,8 +63,8 @@ def test_association_score_is_clipped(raw: float, expected: float):
     assert _result(raw)["association_score"] == pytest.approx(expected)
 
 
-def test_present_residual_changes_correlation_evidence_status():
-    assert _result(residual=0.3)["correlation_evidence_status"] == "independent_verified"
+def test_present_residual_does_not_change_correlation_evidence_status():
+    assert _result(residual=0.3)["correlation_evidence_status"] == "association_only"
 
 
 def test_missing_residual_remains_missing_with_association_only_fallback():
@@ -69,11 +74,11 @@ def test_missing_residual_remains_missing_with_association_only_fallback():
     assert row["correlation_evidence_score"] == pytest.approx(row["association_score"])
 
 
-def test_zero_residual_is_valid_evidence():
+def test_zero_residual_is_explanatory_only():
     row = _result(residual=0.0)
 
-    assert row["correlation_evidence_status"] == "independent_verified"
-    assert row["correlation_evidence_score"] == 0.0
+    assert row["correlation_evidence_status"] == "association_only"
+    assert row["correlation_evidence_score"] == pytest.approx(0.8)
 
 
 def test_missing_lag_quality_remains_missing():
@@ -90,23 +95,23 @@ def test_real_zero_lag_quality_is_valid():
     assert row["lag_quality_status"] == "ok"
 
 
-def test_v3_score_preserves_common_scale_with_available_initial_evidence():
+def test_v4_score_uses_association_with_complete_core_evidence():
     row = _result(raw=0.8, innovation=0.8, lag_quality=0.8)
 
-    assert row["score_method"] == "industrial_robust_v3"
-    assert row["evidence_completeness"] == pytest.approx(0.5)
+    assert row["score_method"] == "initial_association_temporal_v4"
+    assert row["evidence_completeness"] == pytest.approx(1.0)
     assert row["evidence_score"] == pytest.approx(0.8)
 
 
-def test_current_runtime_score_method_assignment_is_v3():
+def test_current_runtime_score_method_assignment_is_v4():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
 
-    assert 'final["score_method"] = "industrial_robust_v3"' in source
+    assert 'final["score_method"] = "initial_association_temporal_v4"' in source
     assert 'final["score_method"] = "industrial_robust_v2"' not in source
     assert source.count('final["score_method"] = ') == 1
 
 
-def test_ranked_features_csv_preserves_initial_schema_and_exports_v3(tmp_path: Path):
+def test_ranked_features_csv_preserves_initial_schema_and_exports_v4(tmp_path: Path):
     ranked = pd.DataFrame([_result()])
     expected_columns = list(ranked.columns)
 
@@ -114,7 +119,7 @@ def test_ranked_features_csv_preserves_initial_schema_and_exports_v3(tmp_path: P
 
     exported = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
     assert list(exported.columns) == expected_columns
-    assert exported["score_method"].tolist() == ["industrial_robust_v3"]
+    assert exported["score_method"].tolist() == ["initial_association_temporal_v4"]
     assert "prediction_score" not in exported.columns
 
 
@@ -190,7 +195,7 @@ def test_report_uses_initial_score_fields_without_four_layer_explanations():
 def test_web_uses_final_score_labels_and_hides_followup_fields():
     source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
 
-    assert 'final_score: "稳健综合得分"' in source
+    assert 'final_score: "初步筛选得分"' in source
     assert 'table: { column: "final_score", direction: "desc" }' in source
     assert 'table: { column: "driver_rank", direction: "asc" }' not in source
     assert 'layer1_association_status: "Layer 1 关联状态"' not in source

@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.screening import (
-    INDUSTRIAL_SCORE_WEIGHT_PROFILES,
     final_ranked_features,
     model_lift_scores,
     risk_flags,
@@ -50,9 +49,11 @@ def _ranked(variable: str, score: float, lag: int = 0) -> dict[str, object]:
     return {"variable": variable, "score": score, "innovation_score": score, "lag": lag, "direction": "同步变化"}
 
 
-def test_v1_fixed_weights_are_replaced_by_robust_profiles():
-    assert len(INDUSTRIAL_SCORE_WEIGHT_PROFILES) > 10
-    assert all(sum(profile.values()) == pytest.approx(1.0) for profile in INDUSTRIAL_SCORE_WEIGHT_PROFILES)
+def test_initial_score_has_no_weight_profile_implementation():
+    source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
+
+    assert "INDUSTRIAL_SCORE_WEIGHT_PROFILES" not in source
+    assert "_available_weight_profile_scores" not in source
 
 
 @pytest.mark.parametrize("best_lag", [0, -3])
@@ -106,16 +107,14 @@ def test_innovation_conflict_metadata_survives_without_false_verification():
     assert row["correlation_evidence_status"] == "association_only"
 
 
-def test_verified_residual_uses_equal_weight_family_formula():
+def test_verified_residual_is_explanatory_only():
     row = _evaluate(
         [_ranked("x", 0.9)],
         residual=_frame({"variable": "x", "residual_corr": 0.3}),
     ).iloc[0]
-    expected = (0.9 * 0.9 * 0.3) ** (1 / 3)
-
     assert row["association_score"] == pytest.approx(0.9)
-    assert row["correlation_evidence_score"] == pytest.approx(expected)
-    assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
+    assert row["correlation_evidence_score"] == pytest.approx(0.9)
+    assert row["correlation_evidence_status"] == "association_only"
 
 
 def test_missing_residual_uses_association_only():
@@ -123,35 +122,33 @@ def test_missing_residual_uses_association_only():
 
     assert row["association_score"] == pytest.approx(0.85)
     assert row["correlation_evidence_score"] == pytest.approx(0.85)
-    assert row["correlation_evidence_status"] == "innovation_verified"
+    assert row["correlation_evidence_status"] == "association_only"
 
 
-def test_zero_residual_is_valid_independent_signal():
+def test_zero_residual_does_not_zero_initial_association():
     row = _evaluate(
         [_ranked("x", 0.8)],
         residual=_frame({"variable": "x", "residual_corr": 0.0}),
     ).iloc[0]
 
-    assert row["correlation_evidence_status"] == "innovation_and_independent_verified"
-    assert row["correlation_evidence_score"] == 0.0
+    assert row["correlation_evidence_status"] == "association_only"
+    assert row["correlation_evidence_score"] == pytest.approx(0.8)
 
 
 @pytest.mark.parametrize(
-    ("raw", "residual", "expected"),
-    [(0.7, 0.7, 0.7), (0.4, 0.8, (0.4 * 0.4 * 0.8) ** (1 / 3))],
+    ("raw", "residual"),
+    [(0.7, 0.7), (0.4, 0.8)],
 )
-def test_equal_weight_family_formula_handles_equal_or_higher_residual(
-    raw: float, residual: float, expected: float
-):
+def test_residual_value_does_not_change_initial_association(raw: float, residual: float):
     row = _evaluate(
         [_ranked("x", raw)],
         residual=_frame({"variable": "x", "residual_corr": residual}),
     ).iloc[0]
 
-    assert row["correlation_evidence_score"] == pytest.approx(expected)
+    assert row["correlation_evidence_score"] == pytest.approx(raw)
 
 
-def test_independent_signal_can_reverse_raw_correlation_order():
+def test_independent_signal_cannot_reverse_raw_correlation_order():
     result = _evaluate(
         [_ranked("a", 0.95), _ranked("b", 0.80)],
         residual=pd.DataFrame(
@@ -161,13 +158,13 @@ def test_independent_signal_can_reverse_raw_correlation_order():
     indexed = result.set_index("variable")
 
     assert indexed.loc["a", "raw_corr"] > indexed.loc["b", "raw_corr"]
-    assert indexed.loc["b", "correlation_evidence_score"] > indexed.loc["a", "correlation_evidence_score"]
-    assert indexed.loc["b", "evidence_score"] > indexed.loc["a", "evidence_score"]
-    assert indexed.loc["b", "final_score"] > indexed.loc["a", "final_score"]
-    assert result["variable"].tolist() == ["b", "a"]
+    assert indexed.loc["a", "correlation_evidence_score"] > indexed.loc["b", "correlation_evidence_score"]
+    assert indexed.loc["a", "evidence_score"] > indexed.loc["b", "evidence_score"]
+    assert indexed.loc["a", "final_score"] > indexed.loc["b", "final_score"]
+    assert result["variable"].tolist() == ["a", "b"]
 
 
-def test_all_evidence_uses_fixed_component_budget():
+def test_later_evidence_does_not_enter_initial_score():
     row = _evaluate(
         [_ranked("x", 0.9)],
         residual=_frame({"variable": "x", "residual_corr": 0.3}),
@@ -176,27 +173,18 @@ def test_all_evidence_uses_fixed_component_budget():
         lag_peak=_frame({"variable": "x", "lag_quality": 0.5}),
         model_lift=_frame({"variable": "x", "model_lift": 0.4}),
     ).iloc[0]
-    correlation = (0.9 * 0.9 * 0.3) ** (1 / 3)
-    stability_score = np.sqrt(0.7 * 0.6)
-    expected = np.median([
-        profile["association"] * correlation
-        + profile["prediction"] * 0.4
-        + profile["stability"] * stability_score
-        + profile["lag_quality"] * 0.5
-        for profile in INDUSTRIAL_SCORE_WEIGHT_PROFILES
-    ])
-
-    assert row["evidence_score"] == pytest.approx(expected)
+    assert row["evidence_strength"] == pytest.approx(0.9)
+    assert row["evidence_score"] == pytest.approx(0.9)
 
 
-def test_missing_evidence_is_not_renormalized():
+def test_optional_evidence_missing_does_not_reduce_numeric_score():
     row = _evaluate(
         [_ranked("x", 0.8)],
         residual=_frame({"variable": "x", "residual_corr": 0.4}),
         lag_peak=_frame({"variable": "x", "lag_quality": 0.6}),
     ).iloc[0]
-    assert row["evidence_completeness"] == pytest.approx(0.5)
-    assert row["evidence_score"] < row["correlation_evidence_score"]
+    assert row["evidence_completeness"] == pytest.approx(2 / 3)
+    assert row["evidence_score"] == pytest.approx(row["correlation_evidence_score"])
 
 
 def test_pr3_risk_penalty_and_cap_are_unchanged():
@@ -217,9 +205,13 @@ def test_pr4_direction_classes_survive_production_risk_pipeline():
         ranked, empty, empty, empty, {"upstream": "PV", "downstream": "PV"}, []
     )
     variable_only = pd.DataFrame(columns=["variable"])
+    lag_peak = pd.DataFrame([
+        {"variable": "upstream", "temporal_direction_status": "variable_leads_supported"},
+        {"variable": "downstream", "temporal_direction_status": "target_leads_supported"},
+    ])
 
     result = final_ranked_features(
-        ranked, variable_only, variable_only, variable_only, generated, variable_only, variable_only
+        ranked, variable_only, variable_only, variable_only, generated, lag_peak, variable_only
     ).set_index("variable")
 
     assert result.loc["upstream", "candidate_class"] == "upstream_driver_candidate"
@@ -303,7 +295,7 @@ def test_all_inputs_are_not_modified():
 def test_empty_or_nan_residual_is_association_only(residual: pd.DataFrame):
     row = _evaluate([_ranked("x", 0.8)], residual=residual).iloc[0]
 
-    assert row["correlation_evidence_status"] == "innovation_verified"
+    assert row["correlation_evidence_status"] == "association_only"
     assert row["correlation_evidence_score"] == pytest.approx(0.8)
 
 

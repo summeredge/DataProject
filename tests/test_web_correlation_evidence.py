@@ -271,7 +271,7 @@ def test_candidate_table_orders_final_score_before_correlation_details():
     expected_order = ["variable", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "risk_flags", "recommended_use"]
     positions = [core_columns.index(f'"{field}"') for field in expected_order]
     assert positions == sorted(positions)
-    assert 'final_score: "稳健综合得分"' in labels
+    assert 'final_score: "初步筛选得分"' in labels
     assert 'layer1_association_status: "Layer 1 关联状态"' not in labels
     assert 'candidate_summary: "候选解释"' not in labels
 

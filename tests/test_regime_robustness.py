@@ -228,8 +228,8 @@ def test_final_output_does_not_fill_missing_regime_with_half(stability: pd.DataF
 def test_missing_regime_does_not_replace_time_stability_or_trigger_v1_renormalization():
     row = _final(pd.DataFrame(), lag_quality=0.6)
 
-    assert "stability_score" not in row.index
-    assert row["evidence_completeness"] == 1.0
+    assert row["stability_score"] == pytest.approx(0.8)
+    assert row["evidence_completeness"] == pytest.approx(2 / 3)
 
 
 def test_partial_regime_evidence_enters_total_score():
@@ -239,8 +239,10 @@ def test_partial_regime_evidence_enters_total_score():
     row = _final(stability)
 
     assert "regime_status" not in row.index
-    assert "stability_score" not in row.index
-    assert 0.0 <= row["final_score"] <= 1.0
+    assert row["stability_score"] == pytest.approx(
+        np.sqrt(float(stability.loc[0, "regime_stability_final"]) * 0.8)
+    )
+    assert row["final_score"] == pytest.approx(0.8)
 
 
 def test_v1_regime_component_weight_is_absent():
@@ -269,8 +271,12 @@ def test_pr4_direction_and_driver_rank_sort_remain_active():
         {"variable": "down", "score": 0.9, "lag": -1},
     ])
     generated = risk_flags(ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {"up": "PV", "down": "PV"}, [])
+    lag_peak = pd.DataFrame([
+        {"variable": "up", "temporal_direction_status": "variable_leads_supported"},
+        {"variable": "down", "temporal_direction_status": "target_leads_supported"},
+    ])
     result = final_ranked_features(
-        ranked, variable_only, variable_only, variable_only, generated, variable_only, variable_only
+        ranked, variable_only, variable_only, variable_only, generated, lag_peak, variable_only
     )
     indexed = result.set_index("variable")
 
@@ -279,15 +285,11 @@ def test_pr4_direction_and_driver_rank_sort_remain_active():
     assert result["driver_rank"].is_monotonic_increasing
 
 
-def test_v2_components_keep_single_association_family_entry():
+def test_initial_score_has_single_association_owner():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
-    components = source.split("components = pd.DataFrame", 1)[1].split(
-        'final["evidence_available_count"]', 1
-    )[0]
 
-    assert components.count('"association":') == 1
-    assert '"raw":' not in components
-    assert '"residual":' not in components
+    assert source.count('final["evidence_strength"] = final["association_score"]') == 1
+    assert "components = pd.DataFrame" not in source
 
 
 def test_summarizer_and_final_inputs_are_not_modified():

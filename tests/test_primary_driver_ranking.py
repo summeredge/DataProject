@@ -247,8 +247,13 @@ def test_direction_semantics_survive_production_risk_pipeline():
     empty = pd.DataFrame()
     generated = risk_flags(ranked, empty, empty, empty, {name: "PV" for name in ranked["variable"]}, [])
     variable_only = pd.DataFrame(columns=["variable"])
+    lag_peak = pd.DataFrame([
+        {"variable": "up", "temporal_direction_status": "variable_leads_supported"},
+        {"variable": "down", "temporal_direction_status": "target_leads_supported"},
+        {"variable": "sync", "temporal_direction_status": "synchronous"},
+    ])
     result = final_ranked_features(
-        ranked, variable_only, variable_only, variable_only, generated, variable_only, variable_only
+        ranked, variable_only, variable_only, variable_only, generated, lag_peak, variable_only
     ).set_index("variable")
 
     assert result.loc["up", "candidate_class"] == "upstream_driver_candidate"

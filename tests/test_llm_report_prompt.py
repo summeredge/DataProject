@@ -94,8 +94,8 @@ def test_build_llm_prompt_contains_strict_control_and_causality_constraints(tmp_
     assert "evidence_confidence 的中文含义为“证据修正系数”" in prompt
     assert "当前仅由 data_quality_score 决定" in prompt
     assert "不参与 evidence_score、final_score 或候选排名" in prompt
-    assert "缺失证据不是零分证据" in prompt
-    assert "多个允许权重组合结果的中位数" in prompt
+    assert "变化量、稳定性、预测和残差证据只用于解释或后续分析" in prompt
+    assert "最佳滞后处的基础关联强度" in prompt
     assert "industrial_robust_v3" in prompt
     assert "评分版本仅表示评分语义，不代表新的因果算法" in prompt
     assert "```json" in prompt

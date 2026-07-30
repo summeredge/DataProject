@@ -78,7 +78,7 @@ def test_driver_rank_follows_final_score_order():
     [
         ("strong_formula_leakage", "formula_or_derived"),
         ("poor_data_quality", "poor_quality"),
-        ("target_leads_variable", "downstream_response"),
+        ("target_leads_variable", "uncertain_candidate"),
         ("common_capacity_driver", "capacity_driven"),
     ],
 )
@@ -138,7 +138,7 @@ def test_upstream_class_is_reachable_through_production_risk_pipeline():
     )
 
     assert generated_risks.loc[0, "risk_flags"] == ""
-    assert result.loc[0, "candidate_class"] == "upstream_driver_candidate"
+    assert result.loc[0, "candidate_class"] == "uncertain_candidate"
 
 
 def test_compatibility_priority_fields_do_not_change_initial_results():
@@ -159,7 +159,7 @@ def test_compatibility_priority_fields_do_not_change_initial_results():
     )
 
 
-def test_temporal_conflict_caps_grade_without_erasing_association_score():
+def test_legacy_temporal_flag_does_not_cap_grade_or_score():
     result = _evaluate(
         [_row("a", 0.9, -1), _row("b", 0.8)],
         {"a": "target_leads_variable", "b": ""},
@@ -167,8 +167,7 @@ def test_temporal_conflict_caps_grade_without_erasing_association_score():
 
     assert result.loc["a", "final_score"] == pytest.approx(0.9)
     assert result.loc["b", "final_score"] == pytest.approx(0.8)
-    assert result.loc["a", "candidate_grade"] == "C"
-    assert result.loc["a", "recommended_use"] == "state_indicator"
+    assert result.loc["a", "candidate_grade"] == "A"
 
 
 def test_output_contains_legacy_and_shadow_fields_in_order():

@@ -112,6 +112,8 @@ INITIAL_SCREENING_COLUMNS = (
     "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
     "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
     "corr_q_value", "pearson_r2", "spearman_r2",
+    "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
+    "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
 )
 RECOMMENDED_CANDIDATE_COLUMNS = (
     *INITIAL_SCREENING_COLUMNS,
@@ -4376,6 +4378,8 @@ const INITIAL_SCREENING_DETAIL_COLUMNS = [
   "data_quality_score", "risk_level", "human_reason", "recommended_action", "force_included",
   "is_residual_control", "is_capacity_reference", "is_segment_reference",
   "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status",
+  "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
+  "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
   "pearson_p", "spearman_p", "pearson_q", "spearman_q", "corr_q_value", "pearson_r2", "spearman_r2",
 ];
 
@@ -4723,7 +4727,11 @@ function updateDirectionalityTimeDetails(lag, intervalMinutes) {
 
 function renderScreeningScoreDetails(row) {
   if (!("final_score" in (row || {}))) return "";
-  const scoreColumns = ["final_score", "data_quality_score", "risk_flags", "recommended_use", "recommended_action"];
+  const scoreColumns = [
+    "final_score", "association_score", "innovation_score", "innovation_status", "lag_quality",
+    "temporal_direction_status", "temporal_penalty_rate",
+    "data_quality_score", "risk_flags", "recommended_use", "recommended_action",
+  ];
   const renderFields = (columns, labels = {}) => columns.map((column) => `
     <div class="detail-field">
       <strong>${escapeHtml(labels[column] || columnLabel(column))}</strong>
@@ -4739,9 +4747,10 @@ function renderScreeningScoreDetails(row) {
     : "变化量相关方向";
   const innovationExplanation = innovationDirectionExplanation(row.innovation_status, preprocessMode);
   return `
-    <h4>初步筛选评分</h4>
+    <h4>初步筛选得分</h4>
     <div class="detail-grid">${renderFields(scoreColumns)}</div>
-    <p>final_score 是初步分析中实际可用统计证据经过风险处理后的综合筛选得分。</p>
+    <div class="detail-field"><strong>近峰滞后范围</strong><span>${escapeHtml(`[${displayCellValue("near_peak_lag_min", row.near_peak_lag_min)}, ${displayCellValue("near_peak_lag_max", row.near_peak_lag_max)}]（${displayCellValue("near_peak_lag_count", row.near_peak_lag_count)} 个点）`)}</span></div>
+    <p>final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。</p>
     <h4>相关性证据</h4>
     <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
     <details class="correlation-evidence-details">
@@ -5881,7 +5890,11 @@ function formatValue(value) {
       ranked_window: "排序窗口",
       true: "是",
       false: "否",
+      variable_leads_supported: "变量领先目标，时间方向允许作为上游候选",
       variable_leads_target: "变量领先目标",
+      synchronous: "变量与目标基本同步，无法区分上游和下游",
+      target_leads_supported: "目标明显领先该变量，不适合作为上游原因候选",
+      direction_unresolved: "时间方向无法可靠确认",
       conditional_granger_supported: "条件格兰杰支持",
       predictive_contribution_positive: "预测贡献为正",
       granger_auxiliary_support: "格兰杰辅助支持",
@@ -6017,7 +6030,7 @@ function columnLabel(column) {
     common_capacity_candidate_flag: "共同负荷风险",
     variable_role: "变量角色",
     trend_action: "趋势验证",
-    final_score: "稳健综合得分",
+    final_score: "初步筛选得分",
     lag: "最佳滞后",
     direction: "时间关系",
     correlation_direction: "相关方向",
@@ -6028,6 +6041,12 @@ function columnLabel(column) {
     independent_signal_score: "独立残差信号得分",
     correlation_evidence_score: "关联证据综合得分",
     correlation_evidence_status: "关联证据状态",
+    temporal_direction_status: "时间方向状态",
+    temporal_penalty_rate: "时间方向扣分",
+    temporal_score_cap: "时间方向得分上限",
+    near_peak_lag_min: "近峰滞后最小值",
+    near_peak_lag_max: "近峰滞后最大值",
+    near_peak_lag_count: "近峰滞后点数",
     prediction_score: "增量预测得分",
     stability_score: "综合稳定性",
     data_quality_score: "数据质量得分",

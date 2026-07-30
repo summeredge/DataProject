@@ -75,14 +75,14 @@ def test_no_risk_preserves_evidence_score():
     assert row["final_score"] == pytest.approx(row["evidence_score"])
 
 
-def test_target_leads_changes_driver_class_without_reducing_prediction_evidence():
+def test_legacy_target_lead_risk_label_does_not_duplicate_temporal_penalty():
     row = _one("target_leads_variable", 0.9)
 
     assert row["risk_penalty_rate"] == 0.0
     assert row["risk_penalty"] == 0.0
     assert row["risk_score_cap"] == 1.0
     assert row["final_score"] == pytest.approx(0.9)
-    assert row["candidate_class"] == "downstream_response"
+    assert row["candidate_class"] == "uncertain_candidate"
 
 
 @pytest.mark.parametrize(
@@ -131,8 +131,8 @@ def test_multiple_caps_choose_lowest_value():
 def test_relative_penalty_rate_is_bounded():
     row = _one(";".join(RISK_RELATIVE_PENALTY_WEIGHTS))
 
-    assert row["risk_penalty_rate"] == pytest.approx(0.60)
-    assert row["risk_penalty"] == pytest.approx(0.60)
+    assert row["risk_penalty_rate"] == pytest.approx(0.50)
+    assert row["risk_penalty"] == pytest.approx(0.50)
 
 
 def test_unknown_risk_does_not_adjust_score():
@@ -287,7 +287,7 @@ def test_v2_risk_constants_separate_evidence_and_engineering_priority():
         "lag_boundary": 0.00,
         "low_model_lift": 0.00,
         "poor_data_quality": 0.00,
-        "residual_collinearity": 0.10,
+        "residual_collinearity": 0.00,
         "redundant_proxy": 0.00,
     }
     assert EVIDENCE_SCORE_CAPS == {

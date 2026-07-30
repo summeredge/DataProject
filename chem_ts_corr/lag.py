@@ -8,6 +8,8 @@ import pandas as pd
 from chem_ts_corr.common import benjamini_hochberg
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
+NEAR_PEAK_SCORE_RATIO = 0.95
+TEMPORAL_NEUTRAL_BAND_POINTS = 1
 
 LAG_SCORE_COLUMNS = [
     "variable", "lag", "pearson", "pearson_p", "pearson_r2", "spearman",
@@ -30,6 +32,10 @@ LAG_PEAK_QUALITY_COLUMNS = [
     "shape_quality",
     "lag_boundary_flag",
     "lag_quality",
+    "near_peak_lag_min",
+    "near_peak_lag_max",
+    "near_peak_lag_count",
+    "temporal_direction_status",
 ]
 
 
@@ -172,6 +178,17 @@ def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFra
         best = g.loc[g["score"].idxmax()]
         bl = int(best["lag"])
         best_score = float(best["score"])
+        near_peak = g.loc[g["score"].ge(best_score * NEAR_PEAK_SCORE_RATIO)]
+        near_peak_lag_min = int(near_peak["lag"].min())
+        near_peak_lag_max = int(near_peak["lag"].max())
+        if near_peak_lag_min > TEMPORAL_NEUTRAL_BAND_POINTS:
+            temporal_direction_status = "variable_leads_supported"
+        elif near_peak_lag_max < -TEMPORAL_NEUTRAL_BAND_POINTS:
+            temporal_direction_status = "target_leads_supported"
+        elif near_peak_lag_min == 0 and near_peak_lag_max == 0:
+            temporal_direction_status = "synchronous"
+        else:
+            temporal_direction_status = "direction_unresolved"
 
         nearby_scores = g.loc[g["lag"].sub(bl).abs().eq(1), "score"]
         nearby = float(nearby_scores.mean()) if not nearby_scores.empty else np.nan
@@ -193,8 +210,8 @@ def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFra
                 1.0,
             )
         )
-        boundary = abs(bl) == max_lag
-        lag_quality = float(np.clip(shape_quality - (0.25 if boundary else 0.0), 0.0, 1.0))
+        boundary = bl == -max_lag or bl == max_lag
+        lag_quality = float(np.clip(shape_quality * (0.75 if boundary else 1.0), 0.0, 1.0))
         rows.append(
             {
                 "variable": var,
@@ -208,6 +225,10 @@ def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFra
                 "shape_quality": shape_quality,
                 "lag_boundary_flag": boundary,
                 "lag_quality": lag_quality,
+                "near_peak_lag_min": near_peak_lag_min,
+                "near_peak_lag_max": near_peak_lag_max,
+                "near_peak_lag_count": int(len(near_peak)),
+                "temporal_direction_status": temporal_direction_status,
             }
         )
     return pd.DataFrame(rows, columns=LAG_PEAK_QUALITY_COLUMNS)

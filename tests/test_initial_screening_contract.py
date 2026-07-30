@@ -62,6 +62,8 @@ INITIAL_SCREENING_FIELDS = {
     "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign",
     "innovation_status", "pearson_p", "spearman_p", "pearson_q", "spearman_q",
     "corr_q_value", "pearson_r2", "spearman_r2",
+    "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
+    "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
 }
 
 FOLLOWUP_OUTPUTS = {
@@ -544,7 +546,8 @@ def test_initial_score_details_only_reference_whitelisted_fields():
         assert forbidden not in source
     for allowed in ["final_score", "data_quality_score", "risk_flags", "recommended_use", "recommended_action"]:
         assert allowed in source
-    assert "final_score 是初步分析中实际可用统计证据经过风险处理后的综合筛选得分。" in source
+    assert "final_score 是初步分析中实际可用统计证据经过风险处理后的综合筛选得分。" not in source
+    assert "初步筛选得分" in source
     assert "evidence_strength" not in detail_modal_source
     assert "evidence_score" not in detail_modal_source
 

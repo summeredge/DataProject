@@ -9,7 +9,6 @@ from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.near_miss import build_near_miss_candidates
 from chem_ts_corr.screening import (
     build_recommended_candidates as _build_recommended_candidates,
-    order_initial_candidates,
     prioritize_recommended_candidates,
 )
 
@@ -25,6 +24,11 @@ DISPLAY_SCORE_COLUMNS = {
     "evidence_score",
     "evidence_score_low",
     "evidence_score_high",
+    "correlation_evidence_score",
+    "innovation_score",
+    "lag_quality",
+    "stability_score",
+    "temporal_penalty_rate",
     "证据覆盖度",
     "证据修正系数",
     "数据质量得分",
@@ -167,7 +171,7 @@ def build_markdown_summary(
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
     lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable", "final_score", "association_score", "correlation_evidence_score", "innovation_score", "lag_quality", "data_quality_score", "evidence_score", "risk_flags", "recommended_use"] if c in ranked_features.columns]
+    decomp_cols = [c for c in ["variable", "final_score", "association_score", "innovation_score", "innovation_status", "correlation_evidence_score", "lag_quality", "temporal_direction_status", "temporal_penalty_rate", "stability_score", "data_quality_score", "evidence_score", "risk_flags", "recommended_use"] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
@@ -212,7 +216,8 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 是初步统计筛选的稳健综合得分；缺失可选评分组件与真实零值分开处理，可用组件按其实际权重重新归一化。",
+            "- final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。",
+            "- 时间方向状态仅判断变量是否在目标变化之前出现，不代表确定性因果或自动识别控制响应。",
             "- 当前摘要只解释初步分析已生成的相关性、滞后、数据质量和基础风险结果。",
             "- 增强筛选、Granger、模型分析和综合复核须在对应页面单独运行后解读。",
             "- lag_scores.csv 中普通 p 值仅供参考；工业时序通常存在自相关、非独立样本和多重比较，应优先查看 corr_q_value 与工程合理性。",

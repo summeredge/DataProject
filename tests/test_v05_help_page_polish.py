@@ -33,14 +33,13 @@ def test_direction_wording_is_globally_consistent():
     required = [
         "变量领先目标",
         "变量滞后目标",
+        "目标领先变量",
         "target_leads_variable",
         "target_leads_candidate",
     ]
     for marker in required:
         assert marker in INDEX_HTML
-    forbidden = [
-        "目标领先变量",
-    ]
+    forbidden = ["更可能表现为响应变量、反馈动作或下游状态"]
     for marker in forbidden:
         assert marker not in INDEX_HTML
 

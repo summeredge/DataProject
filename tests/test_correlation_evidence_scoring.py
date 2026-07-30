@@ -201,14 +201,14 @@ def test_pr3_risk_penalty_and_cap_are_unchanged():
 def test_pr4_direction_classes_survive_production_risk_pipeline():
     ranked = pd.DataFrame([_ranked("upstream", 0.8, 1), _ranked("downstream", 0.8, -1)])
     empty = pd.DataFrame()
-    generated = risk_flags(
-        ranked, empty, empty, empty, {"upstream": "PV", "downstream": "PV"}, []
-    )
     variable_only = pd.DataFrame(columns=["variable"])
     lag_peak = pd.DataFrame([
         {"variable": "upstream", "temporal_direction_status": "variable_leads_supported"},
         {"variable": "downstream", "temporal_direction_status": "target_leads_supported"},
     ])
+    generated = risk_flags(
+        ranked, empty, empty, empty, {"upstream": "PV", "downstream": "PV"}, [], lag_peak
+    )
 
     result = final_ranked_features(
         ranked, variable_only, variable_only, variable_only, generated, lag_peak, variable_only

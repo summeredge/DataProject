@@ -4618,17 +4618,27 @@ function renderGenericDetailModalBody(row, options = {}) {
   `;
 }
 
-function timeRelationshipExplanation(lag, intervalMinutes = null) {
-  const value = lagProfileNumber(lag);
-  const relationship = lagDirectionText(lag);
-  if (relationship === "未计算") return "当前缺少可用的最佳滞后，无法判断时间关系，建议复核数据和时间对齐。";
-  if (relationship === "同步变化") return "候选变量与目标变量主要表现为同步变化。";
-  const interval = lagProfileNumber(intervalMinutes);
-  const distance = interval !== null && interval > 0
-    ? `约 ${Math.abs(value) * interval} 分钟`
-    : ` ${Math.abs(value)} 个采样点`;
-  if (relationship === "变量领先目标") return `候选变量领先目标变量${distance}。`;
-  return `候选变量滞后目标变量${distance}，更可能表现为响应变量、反馈动作或下游状态，建议复核工艺关系。`;
+function timeRelationshipExplanation(row, intervalMinutes = null) {
+  const status = String(row?.temporal_direction_status ?? "not_computed");
+  const messages = {
+    variable_leads_supported: "接近最优的滞后位置均显示变量领先目标，时间方向允许其作为上游候选，但不代表因果成立。",
+    target_leads_supported: "接近最优的滞后位置均显示目标领先变量，该变量不适合作为上游原因候选；可能是下游响应、反馈动作或其他滞后结果，具体机制需工艺确认。",
+    synchronous: "接近最优的滞后位置集中在同步区域，当前无法区分上游和下游。",
+    direction_unresolved: "已完成滞后扫描，但接近最优的滞后范围无法可靠区分时间方向。",
+    not_computed: "当前没有获得可用的时间方向结果，建议检查数据、时间轴和滞后扫描设置。",
+  };
+  const lag = lagProfileNumber(row?.lag);
+  const bestPoint = lag === null ? "" : ` 最佳相关点位于${formatSignedLag(lag)}个采样点。`;
+  const nearMin = lagProfileNumber(row?.near_peak_lag_min);
+  const nearMax = lagProfileNumber(row?.near_peak_lag_max);
+  const nearCount = lagProfileNumber(row?.near_peak_lag_count);
+  const nearRange = nearMin === null || nearMax === null || nearCount === null
+    ? ""
+    : ` 接近最优的滞后范围为[${nearMin}, ${nearMax}]（${nearCount}个点）。`;
+  const boundary = row?.lag_boundary_flag === true || String(row?.lag_boundary_flag) === "1"
+    ? " 最佳滞后触及搜索边界，准确滞后长度可能尚未完全识别。"
+    : "";
+  return `${messages[status] || messages.not_computed}${bestPoint}${nearRange}${boundary}`;
 }
 
 function correlationDirectionExplanation(direction, preprocessMode) {
@@ -4695,24 +4705,23 @@ function preprocessModeLabel(mode) {
   return labels[String(mode ?? "")] || "未知预处理口径";
 }
 
-function directionalitySummary(lag, correlationDirection, intervalMinutes = null) {
-  const value = lagProfileNumber(lag);
-  const relationship = lagDirectionText(lag);
-  if (relationship === "未计算") return `时间关系未计算，${correlationDirection || "相关方向未计算"}。`;
-  const interval = lagProfileNumber(intervalMinutes);
-  const distance = interval !== null && interval > 0
-    ? `约 ${Math.abs(value) * interval} 分钟`
-    : ` ${Math.abs(value)} 个采样点`;
+function directionalitySummary(row, correlationDirection, intervalMinutes = null) {
+  const labels = {
+    variable_leads_supported: "变量领先方向获得近峰范围支持",
+    target_leads_supported: "目标领先方向获得近峰范围支持",
+    synchronous: "近峰滞后集中于同步区域",
+    direction_unresolved: "近峰范围方向未能可靠区分",
+    not_computed: "时间方向未计算",
+  };
   const correlation = correlationDirection === "方向较弱"
     ? "相关方向较弱"
     : correlationDirection === "未计算" ? "相关方向未计算" : `${correlationDirection}相关`;
-  if (relationship === "变量领先目标") return `变量领先目标${distance}，${correlation}。`;
-  if (relationship === "变量滞后目标") return `变量滞后目标${distance}，${correlation}，更可能表现为响应或反馈关系。`;
-  return `与目标同步变化，${correlation}。`;
+  const status = String(row?.temporal_direction_status ?? "not_computed");
+  return `${labels[status] || labels.not_computed}，${correlation}。`;
 }
 
-function directionInteractionExplanation(lag, correlationDirection) {
-  if (lagDirectionText(lag) === "变量领先目标" && correlationDirection === "负向") {
+function directionInteractionExplanation(row, correlationDirection) {
+  if (row?.temporal_direction_status === "variable_leads_supported" && correlationDirection === "负向") {
     return "候选变量先变化，并与之后的目标变化呈反向关系。";
   }
   return "时间关系与相关方向是两种独立信息，建议结合工艺机理和时间对齐复核。";
@@ -4721,8 +4730,11 @@ function directionInteractionExplanation(lag, correlationDirection) {
 function updateDirectionalityTimeDetails(lag, intervalMinutes) {
   const explanation = el("directionalityTimeExplanation");
   const summary = el("directionalitySummary");
-  if (explanation) explanation.textContent = timeRelationshipExplanation(lag, intervalMinutes);
-  if (summary) summary.textContent = directionalitySummary(lag, summary.dataset.correlationDirection, intervalMinutes);
+  if (!explanation) return;
+  const row = JSON.parse(explanation.dataset.directionEvidence || "{}");
+  row.lag = lag;
+  explanation.textContent = timeRelationshipExplanation(row, intervalMinutes);
+  if (summary) summary.textContent = directionalitySummary(row, summary.dataset.correlationDirection, intervalMinutes);
 }
 
 function renderScreeningScoreDetails(row) {
@@ -4739,7 +4751,7 @@ function renderScreeningScoreDetails(row) {
     </div>
   `).join("");
   const preprocessMode = currentAnalysisContext.preprocess_mode;
-  const timeRelationship = lagDirectionText(row.lag);
+  const timeRelationship = displayCellValue("temporal_direction_status", row.temporal_direction_status);
   const correlationDirection = row.correlation_direction || "未计算";
   const innovationDirection = innovationDirectionText(row.innovation_sign);
   const innovationDirectionLabel = preprocessMode === "diff" || preprocessMode === "detrend_diff"
@@ -4759,7 +4771,7 @@ function renderScreeningScoreDetails(row) {
       <div class="detail-grid">${renderFields(CORRELATION_DETAIL_COLUMNS)}</div>
     </details>
     <h4>方向性解释</h4>
-    <p><strong>组合摘要：</strong><span id="directionalitySummary" data-correlation-direction="${escapeHtml(correlationDirection)}">${escapeHtml(directionalitySummary(row.lag, correlationDirection))}</span></p>
+    <p><strong>组合摘要：</strong><span id="directionalitySummary" data-correlation-direction="${escapeHtml(correlationDirection)}">${escapeHtml(directionalitySummary(row, correlationDirection))}</span></p>
     <div class="detail-grid">
       <div class="detail-field"><strong>分析口径</strong><span>${escapeHtml(preprocessModeLabel(preprocessMode))}</span></div>
       <div class="detail-field"><strong>最佳滞后</strong><span>${escapeHtml(formatSignedLag(row.lag))}</span></div>
@@ -4770,9 +4782,9 @@ function renderScreeningScoreDetails(row) {
       <div class="detail-field"><strong>${escapeHtml(innovationDirectionLabel)}</strong><span>${escapeHtml(innovationDirection)}</span></div>
       <div class="detail-field"><strong>主筛查—变化量一致性</strong><span>${escapeHtml(innovationExplanation)}</span></div>
     </div>
-    <p id="directionalityTimeExplanation">${escapeHtml(timeRelationshipExplanation(row.lag))}</p>
+    <p id="directionalityTimeExplanation" data-direction-evidence="${escapeHtml(JSON.stringify({ temporal_direction_status: row.temporal_direction_status, lag: row.lag, near_peak_lag_min: row.near_peak_lag_min, near_peak_lag_max: row.near_peak_lag_max, near_peak_lag_count: row.near_peak_lag_count, lag_boundary_flag: row.lag_boundary_flag }))}">${escapeHtml(timeRelationshipExplanation(row))}</p>
     <p>${escapeHtml(correlationDirectionExplanation(correlationDirection, preprocessMode))}</p>
-    <p>${escapeHtml(directionInteractionExplanation(row.lag, correlationDirection))}</p>
+    <p>${escapeHtml(directionInteractionExplanation(row, correlationDirection))}</p>
     <p>${escapeHtml(correlationConsistencyMessage(row.pearson, row.spearman))}</p>
     <p class="help">时间领先和正负相关只表示当前数据中的时序关联，不等于因果方向。共同负荷、上游扰动和工况切换均可能产生类似结果。</p>
     <h4>滞后相关曲线</h4>

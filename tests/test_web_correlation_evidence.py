@@ -404,23 +404,22 @@ def test_innovation_direction_missing_values_are_rendered_as_not_computed():
     assert "innovationDirectionText(row.innovation_sign)" in detail
 
 
-def test_frontend_uses_one_lag_direction_function_for_all_direction_details():
+def test_frontend_uses_near_peak_status_for_screening_direction_details():
     assert INDEX_HTML.count("function lagDirectionText") == 1
     assert "function timeRelationshipFromLag" not in INDEX_HTML
-    lag_source = _javascript_function("lagDirectionText", "lagProfileTimeHint")
-    assert 'lagDirectionText(lag, missingText = "未计算")' in INDEX_HTML
-    assert "lagProfileNumber(lag)" in lag_source
-    assert 'return "变量领先目标"' in lag_source
-    assert 'return "变量滞后目标"' in lag_source
-    assert 'return "同步变化"' in lag_source
     for function_name, next_name in [
         ("timeRelationshipExplanation", "correlationDirectionExplanation"),
         ("directionalitySummary", "directionInteractionExplanation"),
         ("directionInteractionExplanation", "updateDirectionalityTimeDetails"),
         ("renderScreeningScoreDetails", "lagProfileCacheKey"),
-        ("lagProfileTimeHint", "correlationConsistencyMessage"),
     ]:
-        assert "lagDirectionText(" in _javascript_function(function_name, next_name)
+        assert "temporal_direction_status" in _javascript_function(function_name, next_name)
+    explanation = _javascript_function("timeRelationshipExplanation", "correlationDirectionExplanation")
+    assert "lagDirectionText(" not in explanation
+    assert "接近最优的滞后范围无法可靠区分时间方向" in explanation
+    assert "当前没有获得可用的时间方向结果" in explanation
+    assert explanation.count("可能是下游响应、反馈动作或其他滞后结果") == 1
+    assert "最佳滞后触及搜索边界，准确滞后长度可能尚未完全识别" in explanation
 
 
 def test_analysis_context_is_replaced_and_cleared_without_reading_current_form():

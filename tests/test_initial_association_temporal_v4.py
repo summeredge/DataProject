@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from chem_ts_corr.screening import final_ranked_features
+from chem_ts_corr.screening import classify_candidate, final_ranked_features, risk_flags
 
 
 def _frame(row: dict[str, object] | None = None) -> pd.DataFrame:
@@ -14,7 +14,7 @@ def _score(
     association: float,
     *,
     data_quality: float = 1.0,
-    temporal_status: str = "variable_leads_supported",
+    temporal_status: object = "variable_leads_supported",
     innovation_score: float = 0.0,
     innovation_status: str = "innovation_verified",
     residual_corr: float = 0.0,
@@ -115,3 +115,73 @@ def test_missing_core_data_quality_is_not_filled_or_scored():
     assert row["evidence_completeness"] == pytest.approx(2 / 3)
     assert row["evidence_missing_items"] == "数据质量"
     assert pd.isna(row["final_score"])
+
+
+@pytest.mark.parametrize(
+    ("status", "available", "standardized"),
+    [
+        (None, 2, "not_computed"),
+        ("", 2, "not_computed"),
+        (float("nan"), 2, "not_computed"),
+        ("not_computed", 2, "not_computed"),
+        ("direction_unresolved", 3, "direction_unresolved"),
+    ],
+)
+def test_temporal_coverage_uses_standardized_missing_semantics(
+    status: object, available: int, standardized: str,
+):
+    row = _score(0.8, temporal_status=status)
+
+    assert row["temporal_direction_status"] == standardized
+    assert row["evidence_available_count"] == available
+    assert ("时间方向" in row["evidence_missing_items"]) is (available == 2)
+
+
+def test_missing_association_propagates_but_real_zero_remains_zero():
+    missing = _score(float("nan"))
+    zero = _score(0.0)
+
+    for field in ["association_score", "evidence_strength", "evidence_score", "final_score"]:
+        assert pd.isna(missing[field])
+    assert missing["evidence_available_count"] == 2
+    assert missing["evidence_missing_items"] == "基础关联"
+    for field in ["association_score", "evidence_strength", "evidence_score", "final_score"]:
+        assert zero[field] == 0.0
+    assert zero["evidence_available_count"] == 3
+
+
+@pytest.mark.parametrize(
+    ("status", "target_flag", "candidate_class"),
+    [
+        ("direction_unresolved", False, "uncertain_candidate"),
+        ("target_leads_supported", True, "downstream_response"),
+        (pd.NA, False, "uncertain_candidate"),
+    ],
+)
+def test_negative_best_lag_never_overrides_near_peak_direction_status(
+    status: str, target_flag: bool, candidate_class: str,
+):
+    ranked = pd.DataFrame([{"variable": "x", "score": 0.8, "lag": -5}])
+    lag_peak = pd.DataFrame([{
+        "variable": "x", "lag_quality": 0.8, "lag_boundary_flag": False,
+        "near_peak_lag_min": -8, "near_peak_lag_max": 3 if not target_flag else -3,
+        "near_peak_lag_count": 4, "temporal_direction_status": status,
+    }])
+    empty = _frame()
+    risks = risk_flags(ranked, empty, empty, empty, {"x": "PV"}, [], lag_peak)
+    row = final_ranked_features(
+        ranked, empty, empty, empty, risks, lag_peak, empty,
+    ).iloc[0]
+
+    assert bool(risks.iloc[0]["target_leads_variable_flag"]) is target_flag
+    assert ("target_leads_variable" in risks.iloc[0]["risk_flags"]) is target_flag
+    assert row["temporal_penalty_rate"] == (0.50 if target_flag else 0.0)
+    assert row["temporal_score_cap"] == (0.25 if target_flag else 1.0)
+    assert row["candidate_class"] == candidate_class
+    if target_flag:
+        assert row["recommended_use"] == "state_indicator"
+        assert row["recommended_action"] == (
+            "目标明显领先该变量，不适合作为上游原因候选；"
+            "可能是下游响应、反馈动作或其他滞后结果，具体机制需工艺确认"
+        )
+    assert classify_candidate(pd.Series({"lag": -5, "temporal_direction_status": "not_computed"})) == "uncertain_candidate"

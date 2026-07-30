@@ -818,7 +818,7 @@ def classify_candidate(row: pd.Series) -> str:
         return "upstream_driver_candidate"
     if temporal_status == "synchronous":
         return "synchronous_association"
-    if temporal_status == "direction_unresolved":
+    if temporal_status in {"direction_unresolved", "not_computed"}:
         return "uncertain_candidate"
     for token, candidate_class in [
         ("common_capacity_driver", "capacity_driven"),
@@ -827,19 +827,6 @@ def classify_candidate(row: pd.Series) -> str:
         if token in flags:
             return candidate_class
 
-    lag_value = row.get("best_lag", row.get("lag", pd.NA))
-    try:
-        if pd.isna(lag_value):
-            return "uncertain_candidate"
-    except (TypeError, ValueError):
-        return "uncertain_candidate"
-    lag = _safe_float(lag_value, default=np.nan)
-    if np.isnan(lag):
-        return "uncertain_candidate"
-    if lag > 0:
-        return "upstream_driver_candidate"
-    if lag == 0:
-        return "synchronous_association"
     return "uncertain_candidate"
 
 
@@ -855,10 +842,27 @@ def _combine_correlation_evidence(
 
 def _temporal_adjustment(row: pd.Series) -> tuple[str, float, float]:
     value = row.get("temporal_direction_status", pd.NA)
-    status = "direction_unresolved" if pd.isna(value) else str(value)
+    status = "not_computed" if pd.isna(value) else str(value).strip()
+    if status not in {
+        "variable_leads_supported",
+        "target_leads_supported",
+        "synchronous",
+        "direction_unresolved",
+        "not_computed",
+    }:
+        status = "not_computed"
     if status == "target_leads_supported":
         return status, TARGET_LEADS_PENALTY_RATE, TARGET_LEADS_SCORE_CAP
     return status, 0.0, 1.0
+
+
+def _temporal_status_available(value: object) -> bool:
+    return value in {
+        "variable_leads_supported",
+        "target_leads_supported",
+        "synchronous",
+        "direction_unresolved",
+    }
 
 
 def _data_quality_score(diag: Mapping[str, object]) -> float:
@@ -1079,7 +1083,11 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         formula_like = _looks_like_formula_variable(variable)
         strong_formula = formula_like and raw_corr > 0.98 and lag_value == 0
         common_capacity = bool(control_columns) and raw_corr >= 0.5 and residual_corr < raw_corr * 0.65
-        target_leads = lag_value < 0
+        temporal_status = lag_map.get(variable, {}).get("temporal_direction_status")
+        target_leads = (
+            isinstance(temporal_status, str)
+            and temporal_status == "target_leads_supported"
+        )
         regime_evaluated = regime_status in {"partial_coverage", "full_coverage"}
         unstable_reg = (
             regime_evaluated
@@ -1225,7 +1233,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         model_source_status.notna(), np.where(lift_raw.notna(), "ok", "not_computed")
     )
     final["lag_quality_status"] = np.where(lagq_raw.notna(), "ok", "not_computed")
-    final["association_score"] = pd.to_numeric(final["raw_corr"], errors="coerce").fillna(0.0).clip(0, 1)
+    final["association_score"] = pd.to_numeric(final["raw_corr"], errors="coerce").clip(0, 1)
     final["innovation_score"] = pd.to_numeric(innovation_raw, errors="coerce").clip(0, 1)
     final["regime_stability_final"] = regime_raw.clip(0,1)
     final["rolling_stability"] = rolling_raw.clip(0,1)
@@ -1254,9 +1262,13 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     data_quality_raw = final.get("data_quality_score", pd.Series(1.0, index=final.index))
     final["data_quality_score"] = pd.to_numeric(data_quality_raw, errors="coerce").clip(0, 1)
     final["evidence_confidence"] = final["data_quality_score"]
+    temporal_values = final.apply(_temporal_adjustment, axis=1)
+    final[["temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap"]] = pd.DataFrame(
+        temporal_values.tolist(), index=final.index
+    )
     association_available = final["association_score"].notna()
     quality_available = final["data_quality_score"].notna()
-    temporal_available = final["temporal_direction_status"].notna()
+    temporal_available = final["temporal_direction_status"].map(_temporal_status_available)
     final["evidence_available_count"] = (
         association_available.astype(int)
         + quality_available.astype(int)
@@ -1289,10 +1301,6 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         risk_values.tolist(), index=final.index
     )
     final["risk_penalty"] = final["evidence_score"] * final["risk_penalty_rate"]
-    temporal_values = final.apply(_temporal_adjustment, axis=1)
-    final[["temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap"]] = pd.DataFrame(
-        temporal_values.tolist(), index=final.index
-    )
     risk_adjusted_score = (
         final["evidence_score"] * (1.0 - final["risk_penalty_rate"])
     ).clip(0, 1)

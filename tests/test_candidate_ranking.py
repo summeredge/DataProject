@@ -99,12 +99,17 @@ def test_candidate_class_uses_declared_risk_priority():
     assert classify_candidate(row) == "formula_or_derived"
 
 
-def test_positive_lag_without_risk_is_upstream_driver_candidate():
-    assert classify_candidate(pd.Series({"best_lag": 20, "risk_flags": ""})) == "upstream_driver_candidate"
+def test_supported_variable_lead_is_upstream_driver_candidate():
+    assert classify_candidate(pd.Series({
+        "best_lag": 20, "risk_flags": "",
+        "temporal_direction_status": "variable_leads_supported",
+    })) == "upstream_driver_candidate"
 
 
-def test_zero_lag_without_risk_is_synchronous_association():
-    assert classify_candidate(pd.Series({"best_lag": 0, "risk_flags": ""})) == "synchronous_association"
+def test_supported_synchronous_status_is_synchronous_association():
+    assert classify_candidate(pd.Series({
+        "best_lag": 0, "risk_flags": "", "temporal_direction_status": "synchronous",
+    })) == "synchronous_association"
 
 
 def test_other_or_missing_lag_is_uncertain_candidate():

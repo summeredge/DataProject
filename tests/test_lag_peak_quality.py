@@ -148,6 +148,14 @@ def test_old_lag_quality_formula_is_absent():
     assert "0.75 if boundary" in source
 
 
+def test_lag_algorithm_does_not_use_absolute_lag_for_boundaries_or_direction():
+    source = Path("chem_ts_corr/lag.py").read_text(encoding="utf-8")
+
+    for forbidden in ["abs(lag)", "abs(best_lag)", "abs(bl)"]:
+        assert forbidden not in source
+    assert '"lag_boundary_flag": lag == -max_lag or lag == max_lag' in source
+
+
 def test_final_ranked_features_accepts_new_peak_quality_output():
     lag_peak = build_lag_peak_quality(
         pd.DataFrame(_lag_rows("x", {-3: 0.3, -1: 0.2, 0: 0.8, 1: 0.2})),

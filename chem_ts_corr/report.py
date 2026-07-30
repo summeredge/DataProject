@@ -170,8 +170,13 @@ def build_markdown_summary(
     lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 
-    lines.extend(["", "## 评分分解 Top 15", ""])
-    decomp_cols = [c for c in ["variable", "final_score", "association_score", "innovation_score", "innovation_status", "correlation_evidence_score", "lag_quality", "temporal_direction_status", "temporal_penalty_rate", "stability_score", "data_quality_score", "evidence_score", "risk_flags", "recommended_use"] if c in ranked_features.columns]
+    lines.extend(["", "## 初步得分构成 Top 15", ""])
+    decomp_cols = [c for c in [
+        "variable", "final_score", "association_score", "data_quality_score",
+        "risk_penalty_rate", "risk_score_cap", "risk_cap_reason",
+        "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
+        "risk_flags", "recommended_use",
+    ] if c in ranked_features.columns]
     decomposition = ranked_features[decomp_cols].head(15) if decomp_cols else pd.DataFrame()
     decomposition = decomposition.rename(
         columns={
@@ -179,6 +184,18 @@ def build_markdown_summary(
         }
     )
     lines.extend(_table_lines(decomposition))
+
+    lines.extend([
+        "", "## 辅助解释证据 Top 15", "",
+        "以下字段不参与初步final_score，仅用于解释和后续复核。", "",
+    ])
+    auxiliary_cols = [c for c in [
+        "variable", "innovation_score", "innovation_status", "lag_quality",
+        "lag_boundary_flag", "near_peak_lag_min", "near_peak_lag_max",
+        "near_peak_lag_count", "stability_score",
+    ] if c in ranked_features.columns]
+    auxiliary = ranked_features[auxiliary_cols].head(15) if auxiliary_cols else pd.DataFrame()
+    lines.extend(_table_lines(auxiliary))
 
     lines.extend(["", "## 疑似共同负荷驱动", ""])
     lines.extend(_table_lines(common_capacity.head(15)))

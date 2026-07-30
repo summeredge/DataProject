@@ -123,7 +123,7 @@ def compute_lag_scores(
                     "n": pearson["n"],
                     "abs_pearson": abs(pearson_r) if not np.isnan(pearson_r) else np.nan,
                     "abs_spearman": abs(spearman_r) if not np.isnan(spearman_r) else np.nan,
-                    "lag_boundary_flag": abs(lag) == max_lag,
+                    "lag_boundary_flag": lag == -max_lag or lag == max_lag,
                 }
             )
 

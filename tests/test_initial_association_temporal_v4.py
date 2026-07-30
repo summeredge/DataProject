@@ -66,6 +66,79 @@ def test_ficq400001_conflict_does_not_enter_numeric_score():
     assert row["final_score"] == pytest.approx(0.391919508048)
 
 
+def test_fic_records_keep_expected_score_order_in_the_same_dataframe():
+    ranked = pd.DataFrame([
+        {
+            "variable": "FIC421002.PV",
+            "score": 0.438664,
+            "lag": 120,
+            "innovation_score": 0.006014,
+            "innovation_status": "innovation_verified",
+        },
+        {
+            "variable": "FICQ400001.PV",
+            "score": 0.391954,
+            "lag": 117,
+            "innovation_score": float("nan"),
+            "innovation_status": "innovation_sign_conflict",
+        },
+    ])
+    risks = pd.DataFrame([
+        {
+            "variable": "FIC421002.PV",
+            "risk_flags": "",
+            "data_quality_score": 0.997312,
+        },
+        {
+            "variable": "FICQ400001.PV",
+            "risk_flags": "",
+            "data_quality_score": 0.999912,
+        },
+    ])
+    lag_peak = pd.DataFrame([
+        {
+            "variable": "FIC421002.PV",
+            "lag_quality": 0.0,
+            "lag_boundary_flag": True,
+            "near_peak_lag_min": 110,
+            "near_peak_lag_max": 120,
+            "near_peak_lag_count": 11,
+            "temporal_direction_status": "variable_leads_supported",
+        },
+        {
+            "variable": "FICQ400001.PV",
+            "lag_quality": 0.00003544,
+            "lag_boundary_flag": False,
+            "near_peak_lag_min": 110,
+            "near_peak_lag_max": 119,
+            "near_peak_lag_count": 10,
+            "temporal_direction_status": "variable_leads_supported",
+        },
+    ])
+    empty = _frame()
+
+    result = final_ranked_features(
+        ranked, empty, empty, empty, risks, lag_peak, empty,
+    )
+    indexed = result.set_index("variable")
+
+    assert result["variable"].tolist()[:2] == ["FIC421002.PV", "FICQ400001.PV"]
+    assert indexed.loc["FIC421002.PV", "final_score"] == pytest.approx(0.437484871168)
+    assert indexed.loc["FICQ400001.PV", "final_score"] == pytest.approx(0.391919508048)
+    assert (
+        indexed.loc["FIC421002.PV", "final_score"]
+        > indexed.loc["FICQ400001.PV", "final_score"]
+    )
+    assert indexed.loc["FIC421002.PV", "driver_rank"] == 1
+    assert indexed.loc["FICQ400001.PV", "driver_rank"] == 2
+    assert indexed.loc["FIC421002.PV", "innovation_score"] == pytest.approx(0.006014)
+    assert pd.isna(indexed.loc["FICQ400001.PV", "innovation_score"])
+    assert indexed.loc["FIC421002.PV", "innovation_status"] == "innovation_verified"
+    assert indexed.loc["FICQ400001.PV", "innovation_status"] == "innovation_sign_conflict"
+    assert indexed.loc["FIC421002.PV", "lag_quality"] == 0.0
+    assert indexed.loc["FICQ400001.PV", "lag_quality"] == pytest.approx(0.00003544)
+
+
 def test_later_evidence_does_not_change_initial_score_or_grade():
     low = _score(0.6)
     high = _score(

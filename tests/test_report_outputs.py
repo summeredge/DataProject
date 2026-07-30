@@ -36,6 +36,27 @@ def test_markdown_separates_initial_score_inputs_from_auxiliary_evidence():
         assert field in auxiliary
 
 
+def test_state_indicator_is_reported_as_not_suitable_for_causal_conclusion():
+    ranked = pd.DataFrame([{
+        "variable": "downstream_x",
+        "final_score": 0.25,
+        "recommended_use": "state_indicator",
+        "candidate_class": "downstream_response",
+        "temporal_direction_status": "target_leads_supported",
+    }])
+
+    markdown = build_markdown_summary(
+        "target", ranked, pd.DataFrame(), pd.DataFrame(), {}, pd.DataFrame()
+    )
+    strong = markdown.split("## 强初筛候选", 1)[1].split("## 相关性线索", 1)[0]
+    not_causal = markdown.split("## 不建议作为因果结论的变量", 1)[1].split(
+        "## 当前阶段建议", 1
+    )[0]
+
+    assert "downstream_x" in not_causal
+    assert "downstream_x" not in strong
+
+
 def test_write_outputs_writes_expected_files(tmp_path: Path):
     ranked = pd.DataFrame(
         [

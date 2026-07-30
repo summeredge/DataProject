@@ -134,7 +134,7 @@ def build_markdown_summary(
     risky = risk_flags[risk_flags.get("risk_count", 0) > 0] if not risk_flags.empty else pd.DataFrame()
     common_capacity = _risk_subset(risky, "common_capacity_driver_flag")
     strong = _recommended_subset(ranked_features, "strong_screening_candidate")
-    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "unstable_candidate", "poor_quality_variable"])] if not ranked_features.empty else pd.DataFrame()
+    not_causal = ranked_features[ranked_features.get("recommended_use", pd.Series(dtype=str)).isin(["capacity_driven", "formula_coupled_reference", "unstable_candidate", "poor_quality_variable", "state_indicator"])] if not ranked_features.empty else pd.DataFrame()
 
     lines = [f"# 初步筛选摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():

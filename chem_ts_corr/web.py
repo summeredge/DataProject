@@ -2575,7 +2575,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>初步分析 Top 10</h2>
-        <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
+        <div class="help">final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <div id="candidatesTab">
           <h2>去负荷(残差)验证候选</h2>

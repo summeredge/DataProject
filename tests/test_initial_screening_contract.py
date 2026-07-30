@@ -619,6 +619,22 @@ def test_initial_score_details_only_reference_whitelisted_fields():
     assert "evidence_score" not in detail_modal_source
 
 
+def test_web_final_score_explanations_match_the_initial_scoring_contract():
+    expected = "final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。"
+    old = "final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。"
+    explanations = [
+        line.strip()
+        for line in INDEX_HTML.splitlines()
+        if "final_score 是" in line
+    ]
+
+    assert explanations
+    assert all(expected in explanation for explanation in explanations)
+    assert old not in INDEX_HTML
+    for forbidden in ["lag_quality", "滞后质量", "创新得分", "残差证据", "稳定性", "模型结果"]:
+        assert all(forbidden not in explanation for explanation in explanations)
+
+
 def test_initial_detail_columns_are_whitelisted():
     detail_source = INDEX_HTML.split("function candidateDetailColumns(row)", 1)[1].split("function renderCandidateTable", 1)[0]
 

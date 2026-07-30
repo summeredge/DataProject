@@ -54,7 +54,7 @@ FORBIDDEN_INITIAL_FIELDS = {
 }
 
 INITIAL_SCREENING_FIELDS = {
-    "variable", "final_score", "pearson", "spearman", "method", "dominant_corr",
+    "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
     "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
     "human_reason", "recommended_use", "recommended_action", "force_included",
@@ -64,6 +64,8 @@ INITIAL_SCREENING_FIELDS = {
     "corr_q_value", "pearson_r2", "spearman_r2",
     "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
     "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
+    "is_auto_control_reference", "is_control_reference", "control_reference_type",
+    "control_reference_source",
 }
 
 FOLLOWUP_OUTPUTS = {
@@ -443,6 +445,70 @@ def test_initial_web_shows_variable_role_and_complete_result_copy():
     assert "_initial_screening_frame(recommended).head(50)" not in payload_source
 
 
+def test_web_residual_candidate_display_has_no_outer_card_or_legacy_label():
+    candidate_area = INDEX_HTML.split('<div id="candidatesTab">', 1)[1].split(
+        '<div id="trendTab"', 1
+    )[0]
+
+    assert '<section id="candidatesTab"' not in INDEX_HTML
+    assert "去负荷(残差)验证候选" in candidate_area
+    assert "基于原始关联和去负荷后的残差信号筛选得到，用于后续验证排序，不代表因果关系或独立驱动结论。" in candidate_area
+    assert "重点候选池" not in INDEX_HTML
+    assert "初步分析 Top 10" in INDEX_HTML
+    assert "完整初步分析结果" in candidate_area
+    assert "结果质量提示" in candidate_area
+
+
+def test_web_control_reference_table_uses_complete_ranked_rows_and_existing_details():
+    candidate_area = INDEX_HTML.split('<div id="candidatesTab">', 1)[1].split(
+        '<div id="trendTab"', 1
+    )[0]
+    render_source = INDEX_HTML.split("function renderAnalysisResult(data)", 1)[1].split(
+        "function sleep", 1
+    )[0]
+    table_source = INDEX_HTML.split("function renderControlReferenceTable(rows)", 1)[1].split(
+        "function coreCandidateColumns", 1
+    )[0]
+
+    assert candidate_area.index("去负荷(残差)验证候选") < candidate_area.index(
+        "控制/负荷参考变量"
+    ) < candidate_area.index("完整初步分析结果")
+    assert "由已配置的残差控制列、负荷列、分段列，以及位号末尾的.SV/.SP/.MV自动识别。" in candidate_area
+    assert "以.PV结尾的变量，不会仅凭前缀自动识别" in candidate_area
+    assert '<section id="controlReferenceTable"' not in INDEX_HTML
+    assert 'lastRows.filter((row) => row.is_control_reference === true)' in render_source
+    assert "renderCompactDetailTable" in table_source
+    assert "candidateDetailColumns" in table_source
+    assert "当前未识别到控制或负荷参考变量。" in table_source
+    for field in [
+        "driver_rank", "variable", "control_reference_type", "control_reference_source",
+        "final_score", "temporal_direction_status", "data_quality_score", "risk_flags",
+    ]:
+        assert f'"{field}"' in INDEX_HTML.split("function controlReferenceColumns()", 1)[1].split("}", 1)[0]
+    for suffix in [".SV", ".SP", ".MV"]:
+        assert suffix in candidate_area
+
+
+def test_web_candidate_payload_preserves_variable_names(tmp_path: Path):
+    candidates = pd.DataFrame(
+        [
+            {"variable": "AI400014.PV", "final_score": 0.9, "candidate_priority_rank": 1},
+            {"variable": "AIC450005.PV", "final_score": 0.8, "candidate_priority_rank": 2},
+        ]
+    )
+    candidates.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    candidates.to_csv(tmp_path / "recommended_candidates.csv", index=False, encoding="utf-8-sig")
+    (tmp_path / "summary.md").write_text("# 初步筛选摘要\n", encoding="utf-8")
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+
+    payload = _build_result_payload("run", tmp_path, config)
+
+    assert [row["variable"] for row in payload["recommendedCandidates"]] == [
+        "AI400014.PV",
+        "AIC450005.PV",
+    ]
+
+
 def test_recommended_web_contract_uses_pool_rank_and_maps_all_candidate_sources():
     payload_source = inspect.getsource(_build_result_payload)
     order_source = inspect.getsource(_order_recommended_candidates)
@@ -492,7 +558,7 @@ def test_pr4_web_contract_displays_priority_fields_and_statuses_only_in_recommen
     ]:
         assert label in display_source
     assert display_source.count("return labels[value] || value") >= 3
-    assert "残差证据用于候选筛选和优先级排序，不代表因果关系或独立驱动结论。" in INDEX_HTML
+    assert "基于原始关联和去负荷后的残差信号筛选得到，用于后续验证排序，不代表因果关系或独立驱动结论。" in INDEX_HTML
 
 
 def _javascript_function(name: str) -> str:
@@ -506,7 +572,8 @@ def test_initial_tables_preserve_api_order_until_the_user_sorts():
     for target_id in ['"table"', '"overviewTop"']:
         assert f"delete tableSortStates[{target_id}]" in render_source
         assert f"tableSortStates[{target_id}] = {{ column: \"final_score\"" not in render_source
-    assert 'targetId === candidateTable || targetId === recommendedCandidateTable || targetId === "overviewTop"' in compact_source
+    assert "delete tableSortStates[controlReferenceTable]" in render_source
+    assert 'targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop"' in compact_source
     assert "ensureTableSortState(targetId, preserveInputOrder ? null : columns[0])" in compact_source
 
     rows = [

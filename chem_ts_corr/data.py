@@ -75,7 +75,7 @@ def read_timeseries_table(
             last_error = exc
             continue
     if last_error is not None:
-        raise ValueError("文本文件编码识别失败，请手动选择 UTF-8 或 GBK / GB18030") from last_error
+        raise ValueError("文本文件编码自动识别失败，请将文件转换为 UTF-8 或 GBK / GB18030 后重试") from last_error
     raise ValueError("文本文件读取失败")
 
 

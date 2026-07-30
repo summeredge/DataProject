@@ -34,7 +34,7 @@ from chem_ts_corr.causal_review_runner import run_causal_review_stage
 from chem_ts_corr.modeling import fit_explainable_model
 from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
 from chem_ts_corr.pipeline import run_analysis
-from chem_ts_corr.screening import order_initial_candidates
+from chem_ts_corr.screening import CONTROL_REFERENCE_COLUMNS, order_initial_candidates
 from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
@@ -104,7 +104,7 @@ MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
 INITIAL_SCREENING_COLUMNS = (
-    "variable", "final_score", "pearson", "spearman", "method", "dominant_corr",
+    "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
     "lag_boundary_flag", "n", "data_quality_score", "risk_flags", "risk_level",
     "human_reason", "recommended_use", "recommended_action", "force_included",
@@ -114,9 +114,10 @@ INITIAL_SCREENING_COLUMNS = (
     "corr_q_value", "pearson_r2", "spearman_r2",
     "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
     "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
+    *CONTROL_REFERENCE_COLUMNS,
 )
 RECOMMENDED_CANDIDATE_COLUMNS = (
-    *INITIAL_SCREENING_COLUMNS,
+    *(column for column in INITIAL_SCREENING_COLUMNS if column not in CONTROL_REFERENCE_COLUMNS),
     "candidate_source", "selected_by_raw", "selected_by_residual", "raw_candidate_rank",
     "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag",
     "residual_signal_score", "residual_evidence_status", "load_adjusted_relation_status",
@@ -2470,20 +2471,13 @@ INDEX_HTML = r"""<!doctype html>
     <section class="controls">
       <div class="control-group">
         <div class="control-group-title">数据输入</div>
+      <label>数据文件（CSV / Excel / TXT）
+        <input id="fileInput" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
+      </label>
       <div class="actions">
         <button id="upload">上传并识别列</button>
         <button id="reset" class="secondary">清空</button>
       </div>
-      <label>数据文件（CSV / Excel / TXT）
-        <input id="fileInput" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
-      </label>
-      <label>文件编码
-        <select id="encoding">
-          <option value="auto">自动识别</option>
-          <option value="utf-8-sig">UTF-8</option>
-          <option value="gb18030">GBK / GB18030</option>
-        </select>
-      </label>
       </div>
       <div class="control-group">
         <div class="control-group-title">数据剔除</div>
@@ -2583,19 +2577,23 @@ INDEX_HTML = r"""<!doctype html>
         <h2>初步分析 Top 10</h2>
         <div class="help">final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
-        <section id="candidatesTab">
-          <h2>重点候选池</h2>
-          <div class="help">残差证据用于候选筛选和优先级排序，不代表因果关系或独立驱动结论。</div>
-          <div id="recommendedCandidateTable" class="empty">完成主筛查后显示重点候选。</div>
+        <div id="candidatesTab">
+          <h2>去负荷(残差)验证候选</h2>
+          <div class="help">基于原始关联和去负荷后的残差信号筛选得到，用于后续验证排序，不代表因果关系或独立驱动结论。</div>
+          <div id="recommendedCandidateTable" class="empty">完成主筛查后显示去负荷(残差)验证候选。</div>
+          <h2>控制/负荷参考变量</h2>
+          <div class="help">由已配置的残差控制列、负荷列、分段列，以及位号末尾的.SV/.SP/.MV自动识别。此类变量保留原始统计得分和排名，但默认不进入普通验证候选排序。</div>
+          <div class="help">位号包含FIC、TIC、PIC、LIC或AIC但以.PV结尾的变量，不会仅凭前缀自动识别为控制参考变量。</div>
+          <div id="controlReferenceTable" class="empty">当前未识别到控制或负荷参考变量。</div>
           <h2>完整初步分析结果</h2>
-          <div class="help">展示所有有效分析变量的初步统计结果。控制、负荷和工况参考变量不会从完整结果中删除；重点候选范围单独保存于 recommended_candidates.csv。</div>
+          <div class="help">展示所有有效分析变量的初步统计结果。控制、负荷和工况参考变量不会从完整结果中删除；验证候选范围单独保存于 recommended_candidates.csv。</div>
           <h3>结果质量提示</h3>
           <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
           <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
           <h2>轻量遗漏候选</h2>
           <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
           <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
-        </section>
+        </div>
       </div>
 
       <div id="trendTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-trendTab">
@@ -2921,7 +2919,6 @@ el("copyLlmReport").addEventListener("click", copyLlmReport);
 el("upload").addEventListener("click", uploadFile);
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
-el("encoding").addEventListener("change", () => { if (fileId) loadColumns(); });
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
 el("targetColumn").addEventListener("change", handleProtectedColumnChange);
 
@@ -3153,7 +3150,7 @@ async function uploadFile() {
 
 async function loadColumns() {
   try {
-    const url = `/api/columns?file_id=${encodeURIComponent(fileId)}&encoding=${encodeURIComponent(el("encoding").value)}`;
+    const url = `/api/columns?file_id=${encodeURIComponent(fileId)}&encoding=auto`;
     const response = await fetch(url);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "列识别失败");
@@ -3220,7 +3217,7 @@ async function analyze() {
   try {
     const form = new FormData();
     form.append("file_id", fileId);
-    form.append("encoding", el("encoding").value);
+    form.append("encoding", "auto");
     form.append("time_column", el("timeColumn").value);
     form.append("target", el("targetColumn").value);
     form.append("max_lag", el("maxLag").value);
@@ -3320,6 +3317,10 @@ function renderAnalysisResult(data) {
   renderTable(lastRows);
   delete tableSortStates[recommendedCandidateTable];
   renderRecommendedCandidateTable(lastRecommendedRows);
+  delete tableSortStates[controlReferenceTable];
+  renderControlReferenceTable(
+    lastRows.filter((row) => row.is_control_reference === true)
+  );
   delete tableSortStates["overviewTop"];
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
   renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
@@ -3891,7 +3892,7 @@ function updateAutoTrendTimeRange() {
 
 function appendChartQueryParams(params) {
   params.set("file_id", fileId);
-  params.set("encoding", el("encoding").value);
+  params.set("encoding", "auto");
   params.set("time_column", el("timeColumn").value);
   params.set("trend_start", el("trendStart").value);
   params.set("trend_end", el("trendEnd").value);
@@ -4372,11 +4373,13 @@ function stddev(values) {
 
 const candidateTable = "table";
 const recommendedCandidateTable = "recommendedCandidateTable";
+const controlReferenceTable = "controlReferenceTable";
 const candidateCoreColumns = coreCandidateColumns;
 const INITIAL_SCREENING_DETAIL_COLUMNS = [
   "dominant_corr", "lag_quality", "lag_quality_status", "lag_boundary_flag", "n",
   "data_quality_score", "risk_level", "human_reason", "recommended_action", "force_included",
   "is_residual_control", "is_capacity_reference", "is_segment_reference",
+  "is_auto_control_reference", "is_control_reference", "control_reference_type", "control_reference_source",
   "innovation_score", "innovation_lag", "innovation_direction", "innovation_sign", "innovation_status",
   "association_score", "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
   "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
@@ -4518,12 +4521,27 @@ function renderRecommendedCandidateTable(rows) {
   });
 }
 
+function renderControlReferenceTable(rows) {
+  renderCompactDetailTable({
+    targetId: controlReferenceTable,
+    rows,
+    coreColumns: controlReferenceColumns(),
+    detailColumns: candidateDetailColumns,
+    emptyText: "当前未识别到控制或负荷参考变量。",
+    modalTitle: (row) => `参考变量详情：${displayCellValue("variable", row.variable)}`,
+  });
+}
+
 function coreCandidateColumns() {
   return ["variable", "candidate_source", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"];
 }
 
 function recommendedCandidateColumns() {
   return ["variable", "candidate_priority_rank", "candidate_source", "load_adjusted_relation_status", "candidate_priority_score", "residual_signal_score", "residual_evidence_status", "common_capacity_candidate_flag", "final_score"];
+}
+
+function controlReferenceColumns() {
+  return ["driver_rank", "variable", "control_reference_type", "control_reference_source", "final_score", "temporal_direction_status", "data_quality_score", "risk_flags"];
 }
 
 function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns = null, emptyText = null, modalTitle = null, valueGetter = null, formatter = null }) {
@@ -4536,7 +4554,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === "overviewTop";
+  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
@@ -5426,6 +5444,14 @@ function evidenceText(items, emptyText = "-") {
 }
 
 function displayCellValue(column, value) {
+  if (column === "control_reference_type") {
+    const labels = {residual_control: "残差控制参考", capacity_reference: "负荷参考", segment_reference: "工况分段参考", pid_setpoint: "PID设定值参考", pid_output: "PID输出参考"};
+    return labels[value] || value;
+  }
+  if (column === "control_reference_source") {
+    const labels = {configured_residual_control: "参数配置：残差控制列", configured_capacity: "参数配置：负荷列", configured_segment: "参数配置：分段列", tag_suffix_sv: "位号后缀.SV", tag_suffix_sp: "位号后缀.SP", tag_suffix_mv: "位号后缀.MV"};
+    return labels[value] || value;
+  }
   if (column === "candidate_source") {
     const labels = {raw_only: "原始通道", residual_only: "残差通道", raw_and_residual: "原始与残差双通道", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
     return labels[value] || value;
@@ -6033,6 +6059,7 @@ function columnLabel(column) {
   if (addedLabels[column]) return addedLabels[column];
   const labels = {
     variable: "变量",
+    driver_rank: "初筛排名",
     candidate_source: "候选来源",
     candidate_priority_rank: "候选优先级",
     candidate_priority_score: "候选综合优先分",
@@ -6041,6 +6068,8 @@ function columnLabel(column) {
     load_adjusted_relation_status: "负荷调整后关系",
     common_capacity_candidate_flag: "共同负荷风险",
     variable_role: "变量角色",
+    control_reference_type: "参考类型",
+    control_reference_source: "识别来源",
     trend_action: "趋势验证",
     final_score: "初步筛选得分",
     lag: "最佳滞后",
@@ -6325,6 +6354,8 @@ function reset() {
   el("analysisTimingBreakdown").hidden = true;
   el("overviewTop").className = "empty";
   el("overviewTop").textContent = "上传数据并点击“开始分析”后显示结果。";
+  el("controlReferenceTable").className = "empty";
+  el("controlReferenceTable").textContent = "当前未识别到控制或负荷参考变量。";
   el("screeningQualityHints").className = "empty";
   el("screeningQualityHints").textContent = "完成主筛查后显示结果质量提示。";
   el("table").className = "empty";

@@ -139,10 +139,20 @@ def build_markdown_summary(
     lines = [f"# 初步筛选摘要：{target}", "", "## 运行信息", ""]
     for key, value in metrics.items():
         lines.append(f"- {key}: {value}")
-    reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
-    control_reference_count = int(
-        ranked_features.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1).sum()
-    )
+    if "is_control_reference" in ranked_features.columns:
+        reference_mask = ranked_features["is_control_reference"].fillna(False).astype(bool)
+    else:
+        legacy_reference_columns = [
+            "is_residual_control", "is_capacity_reference", "is_segment_reference"
+        ]
+        reference_mask = (
+            ranked_features.reindex(columns=legacy_reference_columns, fill_value=False)
+            .fillna(False)
+            .astype(bool)
+            .any(axis=1)
+        )
+    control_references = ranked_features.loc[reference_mask]
+    control_reference_count = int(reference_mask.sum())
     lines.extend(
         [
             f"- 有效分析变量数量: {len(ranked_features)}",
@@ -151,6 +161,10 @@ def build_markdown_summary(
         ]
     )
     candidate_pool = recommended_candidates if recommended_candidates is not None else pd.DataFrame()
+    if recommended_candidates is not None and "variable" in candidate_pool.columns:
+        strong = strong[strong["variable"].isin(candidate_pool["variable"])]
+    elif not strong.empty:
+        strong = strong[~reference_mask.reindex(strong.index, fill_value=False)]
     relation = candidate_pool.get(
         "load_adjusted_relation_status", pd.Series("", index=candidate_pool.index)
     ).astype(str)
@@ -167,6 +181,24 @@ def build_markdown_summary(
 
     lines.extend(["", "## 强初筛候选", ""])
     lines.extend(_table_lines(_core_columns(strong).head(15)))
+    lines.extend(
+        [
+            "",
+            "## 控制/负荷参考变量",
+            "",
+            "以下变量仅作为控制、负荷或工况参考展示，不因角色改变初步统计得分，也不代表已确认控制关系。",
+            "",
+        ]
+    )
+    reference_display_columns = [
+        column
+        for column in [
+            "variable", "driver_rank", "final_score", "control_reference_type",
+            "control_reference_source", "temporal_direction_status", "risk_flags",
+        ]
+        if column in control_references.columns
+    ]
+    lines.extend(_table_lines(control_references[reference_display_columns]))
     lines.extend(["", "## 相关性线索", ""])
     lines.extend(_table_lines(_core_columns(ranked_features).head(15)))
 

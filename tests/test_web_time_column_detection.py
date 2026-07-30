@@ -10,6 +10,16 @@ from chem_ts_corr import web
 from chem_ts_corr.web import INDEX_HTML
 
 
+def test_web_data_input_uses_automatic_encoding_without_a_manual_selector():
+    file_input = INDEX_HTML.index('id="fileInput"')
+    upload_button = INDEX_HTML.index('id="upload"')
+
+    assert file_input < upload_button
+    assert 'id="encoding"' not in INDEX_HTML
+    assert 'encoding=auto' in INDEX_HTML
+    assert 'form.append("encoding", "auto")' in INDEX_HTML
+
+
 def _write_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, values: list[object]
 ) -> str:

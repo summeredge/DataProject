@@ -113,13 +113,15 @@ def test_overview_panel_contains_analysis_then_candidate_content():
         "analysisTimingBreakdown",
         "overviewTop",
         "candidatesTab",
+        "controlReferenceTable",
         "screeningQualityHints",
         "table",
         "nearMissTable",
     ]:
         assert element_id in content_ids
     assert content_ids.index("overviewTop") < content_ids.index("candidatesTab")
-    assert content_ids.index("candidatesTab") < content_ids.index("screeningQualityHints")
+    assert content_ids.index("candidatesTab") < content_ids.index("controlReferenceTable")
+    assert content_ids.index("controlReferenceTable") < content_ids.index("screeningQualityHints")
 
 
 def test_all_tab_targets_are_reachable_without_orphans_or_duplicate_ids():

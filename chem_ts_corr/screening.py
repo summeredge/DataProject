@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping
 from typing import Literal, TypedDict
 
@@ -15,6 +16,13 @@ from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summari
 from chem_ts_corr.time_axis import lagged_series, sample_period_ns
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
+CONTROL_REFERENCE_COLUMNS = (
+    "is_auto_control_reference",
+    "is_control_reference",
+    "control_reference_type",
+    "control_reference_source",
+)
+_AUTO_CONTROL_REFERENCE_RE = re.compile(r"[._:\-](SV|SP|MV)$", re.IGNORECASE)
 RISK_RELATIVE_PENALTY_WEIGHTS = {
     "formula_like": 0.00,
     "strong_formula_leakage": 0.50,
@@ -32,6 +40,21 @@ EVIDENCE_SCORE_CAPS = {
     "strong_formula_leakage": 0.25,
     "poor_data_quality": 0.44,
 }
+
+
+def detect_auto_control_reference(variable: object) -> tuple[bool, str, str]:
+    """Detect explicit PID setpoint/output suffixes without inferring from tag prefixes."""
+    if not isinstance(variable, str):
+        return False, "", ""
+    match = _AUTO_CONTROL_REFERENCE_RE.search(variable.strip())
+    if match is None:
+        return False, "", ""
+    suffix = match.group(1).upper()
+    if suffix == "MV":
+        return True, "pid_output", "tag_suffix_mv"
+    return True, "pid_setpoint", f"tag_suffix_{suffix.lower()}"
+
+
 CLASS_PRIORITY_FACTORS = {
     "upstream_driver_candidate": 1.00,
     "synchronous_association": 0.90,
@@ -1161,6 +1184,7 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
         "stability_score", "evidence_missing_items", "evidence_coverage_status",
         "near_peak_lag_min", "near_peak_lag_max", "near_peak_lag_count",
         "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
+        *CONTROL_REFERENCE_COLUMNS,
     ]
     if ranked.empty:
         return pd.DataFrame(columns=cols)
@@ -1361,6 +1385,25 @@ def _finalize_driver_ranking(
         ["residual_control", "capacity_reference", "segment_reference"],
         default="candidate",
     )
+    detected = variables.map(detect_auto_control_reference)
+    final["is_auto_control_reference"] = detected.map(lambda value: value[0]).astype(bool)
+    final["is_control_reference"] = (
+        final[["is_residual_control", "is_capacity_reference", "is_segment_reference"]]
+        .any(axis=1)
+        | final["is_auto_control_reference"]
+    )
+    reference_type = detected.map(lambda value: value[1]).replace("", pd.NA)
+    reference_source = detected.map(lambda value: value[2]).replace("", pd.NA)
+    reference_type = reference_type.mask(final["is_segment_reference"], "segment_reference")
+    reference_source = reference_source.mask(final["is_segment_reference"], "configured_segment")
+    reference_type = reference_type.mask(final["is_capacity_reference"], "capacity_reference")
+    reference_source = reference_source.mask(final["is_capacity_reference"], "configured_capacity")
+    reference_type = reference_type.mask(final["is_residual_control"], "residual_control")
+    reference_source = reference_source.mask(
+        final["is_residual_control"], "configured_residual_control"
+    )
+    final["control_reference_type"] = reference_type
+    final["control_reference_source"] = reference_source
     final["recommended_action"] = final.apply(_recommended_action, axis=1)
     final = order_initial_candidates(final)
     final["driver_rank"] = np.arange(1, len(final) + 1)
@@ -1378,7 +1421,9 @@ def build_recommended_candidates(
 ) -> pd.DataFrame:
     """Build the downstream candidate pool from raw, residual, and forced channels."""
     if ranked_features.empty:
-        empty = ranked_features.copy(deep=True)
+        empty = ranked_features.drop(
+            columns=list(CONTROL_REFERENCE_COLUMNS), errors="ignore"
+        ).copy(deep=True)
         for column in ["selected_by_raw", "selected_by_residual", "candidate_source", "raw_candidate_rank", "residual_candidate_rank", "candidate_pool_rank", "common_capacity_candidate_flag"]:
             if column not in empty.columns:
                 empty[column] = pd.Series(dtype=bool if column.startswith("selected_") or column.endswith("_flag") else float if column.endswith("_rank") else str)
@@ -1387,7 +1432,12 @@ def build_recommended_candidates(
     frame["variable"] = frame["variable"].astype(str)
     forced_order = list(dict.fromkeys(str(value) for value in (force_include_variables or [])))
     forced = set(forced_order)
-    reference_columns = ["is_residual_control", "is_capacity_reference", "is_segment_reference"]
+    reference_columns = [
+        "is_residual_control",
+        "is_capacity_reference",
+        "is_segment_reference",
+        "is_auto_control_reference",
+    ]
     references = frame.reindex(columns=reference_columns, fill_value=False).fillna(False).astype(bool).any(axis=1)
     eligible = ~references if exclude_control_columns else pd.Series(True, index=frame.index)
     raw_score = pd.to_numeric(frame.get("final_score", frame.get("score", pd.Series(np.nan, index=frame.index))), errors="coerce")
@@ -1472,7 +1522,13 @@ def build_recommended_candidates(
         ascending=[True, True, True, True, True, True], kind="stable",
     )
     pool["candidate_pool_rank"] = np.arange(1, len(pool) + 1)
-    return pool.drop(columns=["_reference", "_best_rank", "_force_rank", "_source_priority"]).reset_index(drop=True)
+    return pool.drop(
+        columns=[
+            "_reference", "_best_rank", "_force_rank", "_source_priority",
+            *CONTROL_REFERENCE_COLUMNS,
+        ],
+        errors="ignore",
+    ).reset_index(drop=True)
 
 
 def prioritize_recommended_candidates(

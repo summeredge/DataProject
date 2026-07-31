@@ -2276,6 +2276,9 @@ INDEX_HTML = r"""<!doctype html>
     .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:var(--panel); }
     .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:var(--font-xs); text-align:left; }
     .multi-dropdown > summary::-webkit-details-marker { display:none; }
+    .select-filter { margin-bottom:4px; }
+    .multi-filter { width:calc(100% - 16px); margin:6px 8px 0; }
+    .select-filter-empty { padding:6px 8px; color:var(--muted); font-size:var(--font-xs); }
     .multi-options { max-height:180px; min-width:260px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:4px; }
     .multi-options label { display:grid; grid-template-columns:16px 1fr; align-items:center; column-gap:8px; font-size:var(--font-xs); color:var(--text); text-align:left; line-height:1.2; }
     .multi-options input[type="checkbox"] { margin:0; }
@@ -2934,6 +2937,7 @@ function fillCapacityOptions(columns) {
     input.addEventListener("change", updateCapacitySummary);
     box.appendChild(row);
   });
+  searchableMultiOptions(box);
   updateCapacitySummary();
 }
 
@@ -2965,6 +2969,7 @@ function fillForceIncludeOptions(columns) {
     input.addEventListener("change", updateForceIncludeSummary);
     box.appendChild(row);
   });
+  searchableMultiOptions(box);
   updateForceIncludeSummary();
 }
 
@@ -2995,6 +3000,7 @@ function fillSecondaryIncludeOptions(columns) {
     input.addEventListener("change", updateSecondaryIncludeSummary);
     box.appendChild(row);
   });
+  searchableMultiOptions(box);
   updateSecondaryIncludeSummary();
 }
 
@@ -3048,6 +3054,7 @@ function fillExcludedColumnOptions(columns) {
     });
     box.appendChild(row);
   });
+  searchableMultiOptions(box);
   updateExcludedColumnDisabledState();
 }
 
@@ -3130,6 +3137,7 @@ function appendSecondaryValidationOptions(form) {
 async function uploadFile() {
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
+  clearVariableFilters();
   clearLagProfileCache();
   currentAnalysisContext = {};
   try {
@@ -3855,7 +3863,27 @@ async function postForm(url, form) {
   return data;
 }
 
-function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
+function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
+  select._searchableOptions = { values: [...values], allowEmpty, emptyLabel };
+  let filter = document.querySelector(`[data-select-filter-for="${select.id}"]`);
+  if (!filter) {
+    filter = document.createElement("input");
+    filter.type = "search";
+    filter.className = "select-filter";
+    filter.placeholder = "筛选位号（可选）";
+    filter.setAttribute("aria-label", "筛选位号（可选）");
+    filter.dataset.selectFilterFor = select.id;
+    filter.addEventListener("input", () => renderSearchableSelect(select));
+    select.insertAdjacentElement("beforebegin", filter);
+  }
+  renderSearchableSelect(select);
+}
+
+function renderSearchableSelect(select) {
+  const { values, allowEmpty, emptyLabel } = select._searchableOptions;
+  const currentValue = select.value;
+  const query = (document.querySelector(`[data-select-filter-for="${select.id}"]`)?.value || "").trim().toLowerCase();
+  const filtered = query ? values.filter((value) => String(value).toLowerCase().includes(query)) : values;
   select.innerHTML = "";
   if (allowEmpty) {
     const option = document.createElement("option");
@@ -3863,11 +3891,69 @@ function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段"
     option.textContent = emptyLabel;
     select.appendChild(option);
   }
-  for (const value of values) {
+  if (!filtered.length) {
+    const option = document.createElement("option");
+    option.disabled = true;
+    option.textContent = "未找到匹配的位号";
+    select.appendChild(option);
+  }
+  for (const value of filtered) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = value;
     select.appendChild(option);
+  }
+  if (currentValue && !filtered.includes(currentValue)) {
+    const option = document.createElement("option");
+    option.value = currentValue;
+    option.textContent = currentValue;
+    option.hidden = true;
+    select.appendChild(option);
+  }
+  select.value = currentValue;
+}
+
+function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
+  searchableSelect(select, values, allowEmpty, emptyLabel);
+}
+
+function searchableMultiOptions(box) {
+  let filter = document.querySelector(`[data-multi-filter-for="${box.id}"]`);
+  let empty = document.querySelector(`[data-multi-filter-empty-for="${box.id}"]`);
+  if (!filter) {
+    filter = document.createElement("input");
+    filter.type = "search";
+    filter.className = "multi-filter";
+    filter.placeholder = "筛选位号（可选）";
+    filter.setAttribute("aria-label", "筛选位号（可选）");
+    filter.dataset.multiFilterFor = box.id;
+    filter.addEventListener("input", () => filterMultiOptions(box));
+    box.insertAdjacentElement("beforebegin", filter);
+    empty = document.createElement("div");
+    empty.className = "select-filter-empty";
+    empty.dataset.multiFilterEmptyFor = box.id;
+    empty.textContent = "未找到匹配的位号";
+    empty.hidden = true;
+    box.insertAdjacentElement("beforebegin", empty);
+  }
+  filterMultiOptions(box);
+}
+
+function filterMultiOptions(box) {
+  const query = (document.querySelector(`[data-multi-filter-for="${box.id}"]`)?.value || "").trim().toLowerCase();
+  const rows = Array.from(box.querySelectorAll("label"));
+  const visible = rows.filter((row) => {
+    const matches = !query || row.textContent.toLowerCase().includes(query);
+    row.hidden = !matches;
+    return matches;
+  });
+  const empty = document.querySelector(`[data-multi-filter-empty-for="${box.id}"]`);
+  if (empty) empty.hidden = visible.length > 0;
+}
+
+function clearVariableFilters() {
+  for (const filter of document.querySelectorAll("[data-select-filter-for], [data-multi-filter-for]")) {
+    filter.value = "";
   }
 }
 
@@ -6277,6 +6363,7 @@ function clearOptionalElement(targetId) {
 }
 
 function reset() {
+  clearVariableFilters();
   clearLagProfileCache();
   fileId = "";
   currentRunId = "";

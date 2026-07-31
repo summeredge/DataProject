@@ -2277,8 +2277,16 @@ INDEX_HTML = r"""<!doctype html>
     .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:var(--panel); }
     .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:var(--font-xs); text-align:left; }
     .multi-dropdown > summary::-webkit-details-marker { display:none; }
-    .variable-select-fields { display:grid; gap:3px; min-width:0; }
-    .select-filter { margin:0; }
+    .single-dropdown { min-width:0; border:1px solid var(--line); border-radius:6px; background:var(--panel); }
+    .single-dropdown > summary { display:flex; align-items:center; justify-content:space-between; gap:8px; list-style:none; cursor:pointer; padding:6px 8px; color:var(--text); font-size:var(--font-xs); }
+    .single-dropdown > summary::after { content:"⌄"; font-size:14px; line-height:1; }
+    .single-dropdown[open] > summary::after { content:"⌃"; }
+    .single-dropdown > summary::-webkit-details-marker { display:none; }
+    .single-dropdown > .select-filter { width:calc(100% - 16px); margin:6px 8px 0; }
+    .single-options { max-height:180px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:2px; }
+    .single-option { border-radius:4px; padding:6px 8px; background:transparent; color:var(--text); font-size:var(--font-xs); font-weight:400; text-align:left; }
+    .single-option:hover, .single-option[aria-selected="true"] { background:var(--surface-muted); }
+    .variable-select-native { display:none; }
     .multi-filter { width:calc(100% - 16px); margin:6px 8px 0; }
     .select-filter-empty { padding:6px 8px; color:var(--muted); font-size:var(--font-xs); }
     .multi-options { max-height:180px; min-width:260px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:4px; }
@@ -3069,6 +3077,7 @@ function restoreSelect(id, values, currentValue, allowEmpty = false, emptyLabel 
   } else if (currentValue) {
     select.value = "";
   }
+  syncSearchableSelect(select);
 }
 
 function refreshColumnSelectors() {
@@ -3194,6 +3203,7 @@ async function loadColumns() {
   } else if (timeCandidate) {
     el("timeColumn").value = timeCandidate;
   }
+  syncSearchableSelect(el("timeColumn"));
   trendTimeRangeMode = "auto";
   trendSamplingIntervalMs = Number(data.trendSamplingIntervalMs);
   trendLatestTime = data.timeEnd || "";
@@ -3203,6 +3213,7 @@ async function loadColumns() {
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
+      syncSearchableSelect(el("segmentColumn"));
       setCapacitySelection([loadCandidate]);
     }
   fillExcludedColumnOptions(recognizedNumericColumns);
@@ -3868,8 +3879,14 @@ async function postForm(url, form) {
 
 function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
   select._searchableOptions = { values: [...values], allowEmpty, emptyLabel };
+  let dropdown = document.querySelector(`[data-select-dropdown-for="${select.id}"]`);
   let filter = document.querySelector(`[data-select-filter-for="${select.id}"]`);
-  if (!filter) {
+  if (!dropdown) {
+    dropdown = document.createElement("details");
+    dropdown.className = "single-dropdown";
+    dropdown.dataset.selectDropdownFor = select.id;
+    const summary = document.createElement("summary");
+    summary.dataset.selectSummaryFor = select.id;
     filter = document.createElement("input");
     filter.type = "search";
     filter.className = "select-filter";
@@ -3877,12 +3894,20 @@ function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不�
     filter.setAttribute("aria-label", "筛选位号（可选）");
     filter.dataset.selectFilterFor = select.id;
     filter.addEventListener("input", () => renderSearchableSelect(select));
-  }
-  if (!select.closest(".variable-select-fields")) {
-    const fields = document.createElement("div");
-    fields.className = "variable-select-fields";
-    select.insertAdjacentElement("beforebegin", fields);
-    fields.append(filter, select);
+    const empty = document.createElement("div");
+    empty.className = "select-filter-empty";
+    empty.dataset.selectFilterEmptyFor = select.id;
+    empty.textContent = "未找到匹配的位号";
+    empty.hidden = true;
+    const options = document.createElement("div");
+    options.className = "single-options";
+    options.dataset.selectOptionsFor = select.id;
+    select.insertAdjacentElement("beforebegin", dropdown);
+    select.classList.add("variable-select-native");
+    select.tabIndex = -1;
+    select.setAttribute("aria-hidden", "true");
+    select.addEventListener("change", () => syncSearchableSelect(select));
+    dropdown.append(summary, filter, empty, options, select);
   }
   renderSearchableSelect(select);
 }
@@ -3890,7 +3915,8 @@ function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不�
 function renderSearchableSelect(select) {
   const { values, allowEmpty, emptyLabel } = select._searchableOptions;
   const currentValue = select.value;
-  const query = (document.querySelector(`[data-select-filter-for="${select.id}"]`)?.value || "").trim().toLowerCase();
+  const filter = document.querySelector(`[data-select-filter-for="${select.id}"]`);
+  const query = (filter?.value || "").trim().toLowerCase();
   const filtered = query ? values.filter((value) => String(value).toLowerCase().includes(query)) : values;
   select.innerHTML = "";
   if (allowEmpty) {
@@ -3899,19 +3925,19 @@ function renderSearchableSelect(select) {
     option.textContent = emptyLabel;
     select.appendChild(option);
   }
-  if (!filtered.length) {
+  if (!values.length) {
     const option = document.createElement("option");
     option.disabled = true;
     option.textContent = "未找到匹配的位号";
     select.appendChild(option);
   }
-  for (const value of filtered) {
+  for (const value of values) {
     const option = document.createElement("option");
     option.value = value;
     option.textContent = value;
     select.appendChild(option);
   }
-  if (currentValue && !filtered.includes(currentValue)) {
+  if (currentValue && !values.includes(currentValue)) {
     const option = document.createElement("option");
     option.value = currentValue;
     option.textContent = currentValue;
@@ -3919,6 +3945,37 @@ function renderSearchableSelect(select) {
     select.appendChild(option);
   }
   if (currentValue || allowEmpty) select.value = currentValue;
+  const options = document.querySelector(`[data-select-options-for="${select.id}"]`);
+  const empty = document.querySelector(`[data-select-filter-empty-for="${select.id}"]`);
+  options.innerHTML = "";
+  const visibleValues = allowEmpty ? ["", ...filtered] : filtered;
+  for (const value of visibleValues) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "single-option";
+    option.dataset.value = value;
+    option.textContent = value || emptyLabel;
+    option.setAttribute("aria-selected", value === select.value ? "true" : "false");
+    option.addEventListener("click", () => {
+      select.value = value;
+      filter.value = "";
+      renderSearchableSelect(select);
+      document.querySelector(`[data-select-dropdown-for="${select.id}"]`).open = false;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    options.appendChild(option);
+  }
+  empty.hidden = filtered.length > 0;
+  syncSearchableSelect(select);
+}
+
+function syncSearchableSelect(select) {
+  const summary = document.querySelector(`[data-select-summary-for="${select.id}"]`);
+  if (!summary) return;
+  summary.textContent = select.selectedOptions[0]?.textContent || "请选择";
+  for (const option of document.querySelectorAll(`[data-select-options-for="${select.id}"] .single-option`)) {
+    option.setAttribute("aria-selected", option.dataset.value === select.value ? "true" : "false");
+  }
 }
 
 function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
@@ -3962,6 +4019,9 @@ function filterMultiOptions(box) {
 function clearVariableFilters() {
   for (const filter of document.querySelectorAll("[data-select-filter-for], [data-multi-filter-for]")) {
     filter.value = "";
+  }
+  for (const dropdown of document.querySelectorAll(".single-dropdown, .multi-dropdown")) {
+    dropdown.open = false;
   }
 }
 
@@ -5585,7 +5645,10 @@ function setSelectValueIfExists(selectId, value) {
   if (!node) return;
   const targetValue = String(value || "");
   const option = Array.from(node.options).find((item) => item.value === targetValue);
-  if (option) node.value = targetValue;
+  if (option) {
+    node.value = targetValue;
+    syncSearchableSelect(node);
+  }
 }
 
 function missingText(targetId) {
@@ -6426,6 +6489,11 @@ function reset() {
   el("trendVar3").innerHTML = "";
   el("trendVar4").innerHTML = "";
   ["scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => { if (el(id)) el(id).value = ""; });
+  for (const select of document.querySelectorAll(".variable-select-native")) {
+    const options = document.querySelector(`[data-select-options-for="${select.id}"]`);
+    if (options) options.innerHTML = "";
+    syncSearchableSelect(select);
+  }
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";

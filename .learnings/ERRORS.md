@@ -124,3 +124,33 @@ Regression test added
 - **Context**: 修正前的完整 pytest 回归。
 - **Failure**: 1202 个测试通过，仅 `test_screening_score_v2.py` 仍直接读取已从初筛输出移除的 `stability_score`。
 - **Lesson**: 稳定性保留在独立分析结果和内部评分计算中，初筛输出契约应只验证不暴露该字段。
+
+## ERR-20260731-001 - 单选变量筛选框不应常驻显示
+
+**Scope**
+Project
+
+**Area**
+UI / workflow
+
+**Failure**
+将单选变量的筛选输入框直接放在页面表单中，虽然能够过滤变量，但增加了常态页面高度并偏离用户期望的下拉交互。
+
+**Root Cause**
+只按“标题、筛选框、下拉框”的静态结构实现，没有确认筛选框应位于点击后展开的下拉层中。
+
+**Correction**
+单选变量组件关闭时仅显示当前值，点击后才显示筛选框和候选列表；原生 `select` 继续保存和提交变量值。
+
+**Prevention Rule**
+为现有下拉框增加搜索时，默认把搜索框放入折叠下拉层；除非需求明确要求常驻搜索框，不得增加表单常态高度。
+
+**Promotion Decision**
+Do not promote
+
+**Test Decision**
+Regression test added
+
+**Related Files**
+- chem_ts_corr/web.py
+- tests/test_web_variable_select_search.py

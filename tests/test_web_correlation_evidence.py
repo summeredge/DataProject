@@ -319,6 +319,63 @@ def test_candidate_detail_has_structured_correlation_evidence_and_labels():
     assert 'return value ? "是" : "否";' in INDEX_HTML
 
 
+def test_load_adjustment_display_uses_plain_language_and_keeps_missing_semantics_distinct():
+    detail = INDEX_HTML.split("function renderScreeningScoreDetails", 1)[1].split(
+        "function hasDisplayValue", 1
+    )[0]
+    display = _javascript_function("displayCellValue", "openTrendForCandidate")
+    value_check = _javascript_function("hasDisplayValue", "loadAdjustmentChannelText")
+    explanation = _javascript_function("loadAdjustmentExplanation", "renderLoadAdjustmentValidation")
+    validation = _javascript_function("renderLoadAdjustmentValidation", "timeRelationshipExplanation")
+
+    assert "原始通道" not in INDEX_HTML
+    for marker in [
+        'raw_only: "全量数据"',
+        'raw_and_residual: "全量数据和去负荷数据"',
+        'raw_only_residual_weak: "全量数据关联明显，去负荷后独立关联较弱"',
+        'dual_channel_supported: "全量数据和去负荷后关联均有支持"',
+        'residual_only_supported: "仅在去负荷后发现独立关联"',
+        'raw_only_residual_missing: "全量数据关联明显，本次分析未执行去负荷验证"',
+        "本次分析未执行去负荷验证。",
+        "去负荷验证不可计算。",
+        "未提供去负荷验证结果。",
+        'no_valid_controls: "未找到可用的去负荷控制列"',
+        'fit_failed: "去负荷拟合失败"',
+    ]:
+        assert marker in INDEX_HTML
+    for marker in [
+        "负荷调整验证",
+        "候选来源",
+        "全量数据关联",
+        "去负荷后关联",
+        "去负荷验证状态",
+        "验证说明：",
+        "residual_signal_score",
+        "hasDisplayValue(row.residual_signal_score)",
+    ]:
+        assert marker in detail or marker in validation
+    assert "loadAdjustmentExplanation(row)" in validation
+    assert explanation.index("if (explanations[relation])") < explanation.index("const residualStatus")
+    assert "relation === \"raw_only_residual_missing\"" in explanation
+    assert "value !== null" in value_check
+    assert "value !== undefined" in value_check
+    assert "value !== \"\"" in value_check
+    assert 'if (selected === false || selected === "false")' in INDEX_HTML
+    assert 'residual_evidence_status: "去负荷验证证据"' in INDEX_HTML
+    assert 'load_adjusted_relation_status: "去负荷验证"' in INDEX_HTML
+    assert "residual_evidence_status" in display
+
+
+def test_load_adjustment_detail_stays_between_correlation_and_directional_explanations():
+    detail = INDEX_HTML.split("function renderScreeningScoreDetails", 1)[1].split(
+        "function hasDisplayValue", 1
+    )[0]
+
+    assert detail.index("相关性证据") < detail.index("renderLoadAdjustmentValidation(row)") < detail.index("方向性解释")
+    assert "时间关系" in detail
+    assert "相关方向" in detail
+
+
 def test_directionality_detail_maps_all_innovation_statuses_to_chinese_explanations():
     required = [
         "innovation_verified",

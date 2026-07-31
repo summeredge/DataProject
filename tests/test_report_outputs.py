@@ -235,7 +235,7 @@ def test_write_outputs_preserves_candidate_source_fields_in_recommended_and_caus
 
     summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
     for label in [
-        "双通道支持候选数", "仅原始通道候选数", "仅残差通道候选数",
+        "全量数据和去负荷数据均有支持候选数", "仅全量数据候选数", "仅去负荷数据候选数",
         "共同负荷风险候选数", "仅人工强制包含数", "控制参考候选数",
     ]:
         assert label in summary

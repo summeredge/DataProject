@@ -170,9 +170,9 @@ def build_markdown_summary(
     ).astype(str)
     lines.extend(
         [
-            f"- 双通道支持候选数: {int(relation.eq('dual_channel_supported').sum())}",
-            f"- 仅原始通道候选数: {int(relation.str.startswith('raw_only_').sum())}",
-            f"- 仅残差通道候选数: {int(relation.eq('residual_only_supported').sum())}",
+            f"- 全量数据和去负荷数据均有支持候选数: {int(relation.eq('dual_channel_supported').sum())}",
+            f"- 仅全量数据候选数: {int(relation.str.startswith('raw_only_').sum())}",
+            f"- 仅去负荷数据候选数: {int(relation.eq('residual_only_supported').sum())}",
             f"- 共同负荷风险候选数: {int(relation.eq('raw_only_common_load_risk').sum())}",
             f"- 仅人工强制包含数: {int(relation.eq('force_included_only').sum())}",
             f"- 控制参考候选数: {int(relation.eq('control_reference').sum())}",

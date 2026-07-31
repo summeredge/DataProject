@@ -521,7 +521,7 @@ def test_recommended_web_contract_uses_pool_rank_and_maps_all_candidate_sources(
     assert "return labels[value] || value" in display_source
     for source in ["raw_only", "residual_only", "raw_and_residual", "force_included", "control_reference"]:
         assert source in display_source
-    for label in ["原始通道", "残差通道", "原始与残差双通道", "人工强制包含", "控制/负荷参考"]:
+    for label in ["全量数据", "去负荷数据", "全量数据和去负荷数据", "人工强制包含", "控制/负荷参考"]:
         assert label in display_source
 
 
@@ -539,8 +539,8 @@ def test_pr4_web_contract_displays_priority_fields_and_statuses_only_in_recommen
     for field in PR4_CANDIDATE_FIELDS:
         assert field not in initial_columns
     for label in [
-        "候选优先级", "候选综合优先分", "残差信号得分", "残差证据状态",
-        "负荷调整后关系", "共同负荷风险",
+        "候选优先级", "候选综合优先分", "去负荷后独立关联强度", "去负荷验证证据",
+        "去负荷验证", "共同负荷风险",
     ]:
         assert label in INDEX_HTML
     for enum_value in [
@@ -551,10 +551,10 @@ def test_pr4_web_contract_displays_priority_fields_and_statuses_only_in_recommen
     ]:
         assert enum_value in display_source
     for label in [
-        "残差证据强", "残差证据弱", "残差证据不足", "无残差证据",
-        "原始与残差双通道支持", "残差通道支持", "原始通道支持",
-        "原始强但负荷调整后明显减弱", "原始通道支持，残差证据较弱",
-        "原始通道支持，残差证据不足", "人工强制包含",
+        "去负荷后独立关联明显", "去负荷后独立关联较弱", "去负荷验证不可计算", "未提供去负荷验证结果",
+        "全量数据和去负荷后关联均有支持", "仅在去负荷后发现独立关联", "全量数据关联明显",
+        "全量数据关联明显，去负荷后明显减弱", "全量数据关联明显，去负荷后独立关联较弱",
+        "全量数据关联明显，本次分析未执行去负荷验证", "人工强制包含",
     ]:
         assert label in display_source
     assert display_source.count("return labels[value] || value") >= 3

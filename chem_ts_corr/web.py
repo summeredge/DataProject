@@ -4942,6 +4942,7 @@ function renderScreeningScoreDetails(row) {
       <p class="help">大样本与时序自相关下，P/Q 值、R² 和样本数仅供参考，不参与评分、筛选、排序或颜色强调。</p>
       <div class="detail-grid">${renderFields(CORRELATION_DETAIL_COLUMNS)}</div>
     </details>
+    ${renderLoadAdjustmentValidation(row)}
     <h4>方向性解释</h4>
     <p><strong>组合摘要：</strong><span id="directionalitySummary" data-correlation-direction="${escapeHtml(correlationDirection)}">${escapeHtml(directionalitySummary(row, correlationDirection))}</span></p>
     <div class="detail-grid">
@@ -4963,6 +4964,65 @@ function renderScreeningScoreDetails(row) {
     <div id="lagProfilePanel" class="lag-profile-panel loading" aria-live="polite">正在加载滞后相关曲线……</div>
     <h4>解释说明</h4>
     <p>初步分析仅描述当前阶段的统计筛选结果，不对未执行的后续分析作解释。</p>
+  `;
+}
+
+function hasDisplayValue(value) {
+  return value !== null && value !== undefined && value !== "";
+}
+
+function loadAdjustmentChannelText(selected, channel) {
+  if (selected === true || selected === "true") return "已获得支持";
+  if (selected === false || selected === "false") return "未获得支持";
+  return `${channel}结果未提供`;
+}
+
+function loadAdjustmentExplanation(row) {
+  const explanations = {
+    dual_channel_supported: "该变量在全量数据和去负荷数据中均显示关联支持。",
+    residual_only_supported: "该变量仅在去负荷后发现独立关联。",
+    raw_only_supported: "该变量的关联目前主要表现于全量数据中。",
+    raw_only_common_load_risk: "全量数据关联在去负荷后明显减弱，可能受共同负荷影响。",
+    raw_only_residual_weak: "该变量的关联主要表现于全量数据中，去除负荷共同变化后独立关联有限。",
+    force_included_only: "该变量由人工强制包含，未形成可展示的去负荷验证结论。",
+    control_reference: "该变量作为控制或负荷参考展示，不适用去负荷验证。",
+  };
+  const relation = String(row?.load_adjusted_relation_status ?? "");
+  if (explanations[relation]) return explanations[relation];
+  if (relation === "raw_only_residual_missing") {
+    if (row?.residual_evidence_status === "insufficient") return "去负荷验证不可计算。";
+    if (row?.residual_evidence_status === "missing") return "本次分析未执行去负荷验证。";
+    return "未提供去负荷验证结果。";
+  }
+  const residualStatus = String(row?.residual_status ?? "");
+  if (["not_run", "not_computed"].includes(residualStatus)) return "本次分析未执行去负荷验证。";
+  if (residualStatus && residualStatus !== "ok") return "去负荷验证不可计算。";
+  if (row?.residual_evidence_status === "insufficient") return "去负荷验证不可计算。";
+  if (row?.residual_evidence_status === "missing") return "未提供去负荷验证结果。";
+  return "未提供去负荷验证结果。";
+}
+
+function renderLoadAdjustmentValidation(row) {
+  if (![
+    "candidate_source", "selected_by_raw", "selected_by_residual",
+    "load_adjusted_relation_status", "residual_evidence_status", "residual_signal_score",
+    "residual_status",
+  ].some((column) => column in (row || {}))) return "";
+  const fields = [];
+  if (hasDisplayValue(row.candidate_source)) fields.push(["候选来源", displayCellValue("candidate_source", row.candidate_source)]);
+  fields.push(["全量数据关联", loadAdjustmentChannelText(row.selected_by_raw, "全量数据关联")]);
+  fields.push(["去负荷后关联", loadAdjustmentChannelText(row.selected_by_residual, "去负荷后关联")]);
+  if (hasDisplayValue(row.load_adjusted_relation_status)) fields.push(["去负荷验证状态", displayCellValue("load_adjusted_relation_status", row.load_adjusted_relation_status)]);
+  if (hasDisplayValue(row.residual_evidence_status)) fields.push(["去负荷验证证据", displayCellValue("residual_evidence_status", row.residual_evidence_status)]);
+  if (hasDisplayValue(row.residual_status)) fields.push(["去负荷结果状态", displayCellValue("residual_status", row.residual_status)]);
+  if (hasDisplayValue(row.residual_signal_score)) fields.push(["去负荷后独立关联强度", displayCellValue("residual_signal_score", row.residual_signal_score)]);
+  const grid = fields.map(([label, value]) => `
+    <div class="detail-field"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value)}</span></div>
+  `).join("");
+  return `
+    <h4>负荷调整验证</h4>
+    <div class="detail-grid">${grid}</div>
+    <p><strong>验证说明：</strong>${escapeHtml(loadAdjustmentExplanation(row))}</p>
   `;
 }
 
@@ -5599,23 +5659,27 @@ function evidenceText(items, emptyText = "-") {
 
 function displayCellValue(column, value) {
   if (column === "control_reference_type") {
-    const labels = {residual_control: "残差控制参考", capacity_reference: "负荷参考", segment_reference: "工况分段参考", pid_setpoint: "PID设定值参考", pid_output: "PID输出参考"};
+    const labels = {residual_control: "去负荷控制参考", capacity_reference: "负荷参考", segment_reference: "工况分段参考", pid_setpoint: "PID设定值参考", pid_output: "PID输出参考"};
     return labels[value] || value;
   }
   if (column === "control_reference_source") {
-    const labels = {configured_residual_control: "参数配置：残差控制列", configured_capacity: "参数配置：负荷列", configured_segment: "参数配置：分段列", tag_suffix_sv: "位号后缀.SV", tag_suffix_sp: "位号后缀.SP", tag_suffix_mv: "位号后缀.MV"};
+    const labels = {configured_residual_control: "参数配置：去负荷控制列", configured_capacity: "参数配置：负荷列", configured_segment: "参数配置：分段列", tag_suffix_sv: "位号后缀.SV", tag_suffix_sp: "位号后缀.SP", tag_suffix_mv: "位号后缀.MV"};
     return labels[value] || value;
   }
   if (column === "candidate_source") {
-    const labels = {raw_only: "原始通道", residual_only: "残差通道", raw_and_residual: "原始与残差双通道", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
+    const labels = {raw_only: "全量数据", residual_only: "去负荷数据", raw_and_residual: "全量数据和去负荷数据", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
     return labels[value] || value;
   }
   if (column === "residual_evidence_status") {
-    const labels = {strong: "残差证据强", weak: "残差证据弱", insufficient: "残差证据不足", missing: "无残差证据", control_reference: "控制/负荷参考"};
+    const labels = {strong: "去负荷后独立关联明显", weak: "去负荷后独立关联较弱", insufficient: "去负荷验证不可计算", missing: "未提供去负荷验证结果", control_reference: "控制/负荷参考"};
+    return labels[value] || value;
+  }
+  if (column === "residual_status") {
+    const labels = {ok: "结果可用", not_run: "未执行", not_computed: "未执行", no_valid_controls: "未找到可用的去负荷控制列", insufficient_joint_samples: "有效样本不足", no_valid_residual_lag: "未找到可用去负荷滞后结果", rank_deficient: "控制列秩不足", rank_deficient_no_valid_residual_lag: "控制列秩不足且未找到可用去负荷滞后结果", fit_failed: "去负荷拟合失败", control_reference_not_residualized: "控制/负荷参考未参与去负荷"};
     return labels[value] || value;
   }
   if (column === "load_adjusted_relation_status") {
-    const labels = {dual_channel_supported: "原始与残差双通道支持", residual_only_supported: "残差通道支持", raw_only_supported: "原始通道支持", raw_only_common_load_risk: "原始强但负荷调整后明显减弱", raw_only_residual_weak: "原始通道支持，残差证据较弱", raw_only_residual_missing: "原始通道支持，残差证据不足", force_included_only: "人工强制包含", control_reference: "控制/负荷参考"};
+    const labels = {dual_channel_supported: "全量数据和去负荷后关联均有支持", residual_only_supported: "仅在去负荷后发现独立关联", raw_only_supported: "全量数据关联明显", raw_only_common_load_risk: "全量数据关联明显，去负荷后明显减弱", raw_only_residual_weak: "全量数据关联明显，去负荷后独立关联较弱", raw_only_residual_missing: "全量数据关联明显，本次分析未执行去负荷验证", force_included_only: "人工强制包含", control_reference: "控制/负荷参考"};
     return labels[value] || value;
   }
   const formatted = column === "risk_flags" ? formatRiskFlags(value) : formatCellValue(column, value);
@@ -6220,9 +6284,9 @@ function columnLabel(column) {
     candidate_source: "候选来源",
     candidate_priority_rank: "候选优先级",
     candidate_priority_score: "候选综合优先分",
-    residual_signal_score: "残差信号得分",
-    residual_evidence_status: "残差证据状态",
-    load_adjusted_relation_status: "负荷调整后关系",
+    residual_signal_score: "去负荷后独立关联强度",
+    residual_evidence_status: "去负荷验证证据",
+    load_adjusted_relation_status: "去负荷验证",
     common_capacity_candidate_flag: "共同负荷风险",
     variable_role: "变量角色",
     control_reference_type: "参考类型",
@@ -6232,11 +6296,11 @@ function columnLabel(column) {
     lag: "最佳滞后",
     direction: "时间关系",
     correlation_direction: "相关方向",
-    raw_corr: "原始相关",
-    association_score: "原始关联规范化得分",
+    raw_corr: "全量数据关联强度",
+    association_score: "全量数据关联规范化得分",
     innovation_score: "变化量关联得分",
-    residual_corr: "残差相关",
-    independent_signal_score: "独立残差信号得分",
+    residual_corr: "去负荷后关联强度",
+    independent_signal_score: "去负荷后独立关联得分",
     correlation_evidence_score: "关联证据综合得分",
     correlation_evidence_status: "关联证据状态",
     temporal_direction_status: "时间方向状态",
@@ -6258,7 +6322,7 @@ function columnLabel(column) {
     evidence_score_low: "证据得分下界",
     evidence_score_high: "证据得分上界",
     score_method: "评分方法",
-    residual_status: "残差状态",
+    residual_status: "去负荷结果状态",
     risk_flags: "风险标签",
     recommended_use: "建议用途",
     recommended_action: "建议动作",

@@ -2268,6 +2268,7 @@ INDEX_HTML = r"""<!doctype html>
     label { display:grid; gap:3px; font-size:var(--font-xs); line-height:1.2; color:var(--muted); }
     input, select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; color:var(--text); background:var(--panel); font-size:var(--font-xs); line-height:1.2; }
     .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .row > label { align-self:start; width:100%; }
     label.checkbox-row { display:flex; align-items:center; align-self:end; gap:8px; min-height:31px; }
     label.checkbox-row input[type="checkbox"] { width:auto; margin:0; }
     .check { display:flex; align-items:center; gap:8px; color:var(--text); font-size:14px; }
@@ -2276,11 +2277,13 @@ INDEX_HTML = r"""<!doctype html>
     .multi-dropdown { border:1px solid var(--line); border-radius:6px; background:var(--panel); }
     .multi-dropdown > summary { list-style:none; cursor:pointer; padding:6px 8px; font-size:var(--font-xs); text-align:left; }
     .multi-dropdown > summary::-webkit-details-marker { display:none; }
-    .select-filter { margin-bottom:4px; }
+    .variable-select-fields { display:grid; gap:3px; min-width:0; }
+    .select-filter { margin:0; }
     .multi-filter { width:calc(100% - 16px); margin:6px 8px 0; }
     .select-filter-empty { padding:6px 8px; color:var(--muted); font-size:var(--font-xs); }
     .multi-options { max-height:180px; min-width:260px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:4px; }
     .multi-options label { display:grid; grid-template-columns:16px 1fr; align-items:center; column-gap:8px; font-size:var(--font-xs); color:var(--text); text-align:left; line-height:1.2; }
+    .multi-options label[hidden] { display:none; }
     .multi-options input[type="checkbox"] { margin:0; }
     .multi-options span { display:block; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     button { border:0; border-radius:6px; padding:10px 14px; font-weight:650; cursor:pointer; background:var(--accent); color:#fff; }
@@ -3874,7 +3877,12 @@ function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不�
     filter.setAttribute("aria-label", "筛选位号（可选）");
     filter.dataset.selectFilterFor = select.id;
     filter.addEventListener("input", () => renderSearchableSelect(select));
-    select.insertAdjacentElement("beforebegin", filter);
+  }
+  if (!select.closest(".variable-select-fields")) {
+    const fields = document.createElement("div");
+    fields.className = "variable-select-fields";
+    select.insertAdjacentElement("beforebegin", fields);
+    fields.append(filter, select);
   }
   renderSearchableSelect(select);
 }
@@ -3910,7 +3918,7 @@ function renderSearchableSelect(select) {
     option.hidden = true;
     select.appendChild(option);
   }
-  select.value = currentValue;
+  if (currentValue || allowEmpty) select.value = currentValue;
 }
 
 function fillSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {

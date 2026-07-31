@@ -7,7 +7,7 @@ def test_common_compact_detail_table_renderer_exists():
         "buildDetailModalBody",
         "openDetailModal",
         "detailModal",
-        "查看详情",
+        "clickable-row",
         "展开完整原始字段",
     ]
     for marker in required:
@@ -46,3 +46,24 @@ def test_major_result_tables_do_not_default_to_full_wide_columns():
     ]
     for marker in forbidden:
         assert marker not in INDEX_HTML
+
+
+def test_row_click_detail_tables_do_not_render_duplicate_detail_actions():
+    compact = INDEX_HTML.split("function renderCompactDetailTable", 1)[1].split(
+        "function shouldOpenRowDetail", 1
+    )[0]
+    final_summary = INDEX_HTML.split("function renderFinalReviewSummaryTable", 1)[1].split(
+        "function selectFinalReviewRow", 1
+    )[0]
+    row_guard = INDEX_HTML.split("function shouldOpenRowDetail", 1)[1].split(
+        "function selectCompactDetailRow", 1
+    )[0]
+
+    assert "查看详情" not in INDEX_HTML
+    assert "detail_action" not in INDEX_HTML
+    assert "<th scope=\"col\">${escapeHtml(columnLabel(\"detail_action\"))}</th>" not in compact
+    assert "button.textContent = \"查看详情\"" not in compact
+    assert "button.textContent = \"查看详情\"" not in final_summary
+    assert "shouldOpenRowDetail(event)" in compact
+    assert "button, a, input, select, textarea, label" in row_guard
+    assert "window.getSelection" in row_guard

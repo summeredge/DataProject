@@ -9,7 +9,7 @@ def test_render_generic_table_uses_compact_modal_path():
         "renderGenericTable",
         "renderCompactDetailTable",
         "openDetailModal",
-        "查看详情",
+        "clickable-row",
     ]
     for marker in required:
         assert marker in INDEX_HTML
@@ -50,7 +50,6 @@ def test_enhanced_screening_tables_have_metric_explanations_without_generic_tabl
 def test_generic_table_no_longer_renders_full_width_rows_directly():
     forbidden = [
         "body.innerHTML += `<tr>${columns.map",
-        "<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join(\"\")}</tr></thead>",
     ]
     for marker in forbidden:
         assert marker not in INDEX_HTML

@@ -10,7 +10,7 @@ def test_detail_view_uses_modal_instead_of_inline_panel():
         "closeDetailModal",
         "modal-card",
         "modal-backdrop",
-        "查看详情",
+        "clickable-row",
     ]
     for marker in required:
         assert marker in INDEX_HTML

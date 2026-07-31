@@ -4714,7 +4714,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   const table = document.createElement("table");
   table.className = "compact-result-table";
   table.setAttribute("aria-label", "核心列");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}<th scope="col">${escapeHtml(columnLabel("detail_action"))}</th></tr></thead>`;
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
   const body = document.createElement("tbody");
   displayRows.forEach((row, index) => {
     const tr = document.createElement("tr");
@@ -4727,18 +4727,10 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
       td.innerHTML = formatter ? formatter(column, value, row) : escapeHtml(displayCellValue(column, value));
       tr.appendChild(td);
     }
-    const detailCell = document.createElement("td");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "small-button";
-    button.textContent = "查看详情";
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
+    tr.addEventListener("click", (event) => {
+      if (!shouldOpenRowDetail(event)) return;
       selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle, event.currentTarget);
     });
-    detailCell.appendChild(button);
-    tr.appendChild(detailCell);
-    tr.addEventListener("click", (event) => selectCompactDetailRow(table, tr, row, detailColumns, valueGetter, modalTitle, event.currentTarget));
     body.appendChild(tr);
   });
   table.appendChild(body);
@@ -4788,6 +4780,12 @@ function renderGenericDetailModalBody(row, options = {}) {
       </details>
     </div>
   `;
+}
+
+function shouldOpenRowDetail(event) {
+  if (event.defaultPrevented || event.target.closest("button, a, input, select, textarea, label")) return false;
+  const selection = window.getSelection?.();
+  return !selection || selection.isCollapsed || !event.currentTarget.contains(selection.anchorNode) || !event.currentTarget.contains(selection.focusNode);
 }
 
 function timeRelationshipExplanation(row, intervalMinutes = null) {
@@ -5448,7 +5446,7 @@ function renderFinalReviewSummaryTable(rows) {
     container.textContent = missingText("finalReviewSummaryTable");
     return;
   }
-  const columns = finalReviewSummaryColumns().filter((column) => ["trend_action", "detail_action"].includes(column) || finalSummaryValue(rows[0], column) !== undefined);
+  const columns = finalReviewSummaryColumns().filter((column) => column === "trend_action" || finalSummaryValue(rows[0], column) !== undefined);
   ensureTableSortState("finalReviewSummaryTable", "final_rank");
   const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
   const table = document.createElement("table");
@@ -5466,16 +5464,6 @@ function renderFinalReviewSummaryTable(rows) {
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           openTrendForCandidate(row);
-        });
-        td.appendChild(button);
-      } else if (column === "detail_action") {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "small-button";
-        button.textContent = "查看详情";
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          selectFinalReviewRow(row, tr);
         });
         td.appendChild(button);
       } else {
@@ -5513,7 +5501,8 @@ function attachFinalSummaryRowClick(rows) {
   const displayRows = sortedRowsForTable("finalReviewSummaryTable", rows);
   bodyRows.forEach((tr, index) => {
     tr.classList.add("clickable-row");
-    tr.addEventListener("click", () => {
+    tr.addEventListener("click", (event) => {
+      if (!shouldOpenRowDetail(event)) return;
       selectFinalReviewRow(displayRows[index], tr);
     });
   });
@@ -5827,7 +5816,6 @@ const FINAL_SUMMARY_CORE_COLUMNS = [
   "evidence_score",
   "statistical_limit_level",
   "risk_constraint_level",
-  "detail_action",
 ];
 
 const FINAL_SUMMARY_DETAIL_COLUMNS = [
@@ -5869,7 +5857,7 @@ function finalReviewSummaryDetailColumns(row) {
 
 function finalSummaryValue(row, column) {
   if (!row) return undefined;
-  if (column === "trend_action" || column === "detail_action") return "";
+  if (column === "trend_action") return "";
   const aliases = FINAL_SUMMARY_COLUMN_ALIASES[column] || [column];
   for (const key of aliases) {
     if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
@@ -6423,7 +6411,6 @@ function columnLabel(column) {
     final_rank: "最终排序",
     final_recommendation: "最终建议",
     final_decision: "最终建议",
-    detail_action: "查看详情",
     key_reason: "主要原因",
     main_reason: "主要原因",
     suggested_next_action: "建议下一步",

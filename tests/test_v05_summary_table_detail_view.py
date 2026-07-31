@@ -7,7 +7,7 @@ def test_final_summary_uses_core_columns_and_modal_review():
         "detailModal",
         "renderSingleVariableReview",
         "selectFinalReviewRow",
-        "查看详情",
+        "clickable-row",
         "主要原因",
         "建议下一步",
     ]

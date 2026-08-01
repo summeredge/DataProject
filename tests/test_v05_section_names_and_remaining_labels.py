@@ -34,7 +34,8 @@ def test_raw_risk_tag_display_is_chinese_readable():
         "formatRawRiskTags",
         "变量滞后目标",
         "滞后触及边界",
-        "数据质量差",
+        "数据质量需关注",
+        "数据质量严重不足",
     ]
     for marker in required:
         assert marker in INDEX_HTML

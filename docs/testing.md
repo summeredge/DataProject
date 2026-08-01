@@ -34,3 +34,15 @@
 ## 要求
 
 不能通过删除测试、放宽断言或修改预期掩盖问题。
+
+## 数据质量风险测试
+
+数据质量测试覆盖以下行为：
+
+-   普通质量超限（如 `missing_rate = 0.21`）仅提示并平滑降分，不封顶；
+-   严重质量超限（`missing_rate > 0.50`、`saturation_ratio > 0.80`、
+    `abnormal_jump_ratio > 0.05`、`robust_outlier_ratio > 0.05`）触发
+    `severe_data_quality`，`final_score` 上限为 `0.44`；
+-   严重阈值使用严格大于，恰好等于阈值不触发严重风险；
+-   `data_quality_score` 连续衰减且四项为零时为 `1.0`；
+-   `ranked_features.csv` 仍按 `final_score` 降序，CSV/API 字段结构不变。

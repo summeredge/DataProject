@@ -110,6 +110,86 @@ def test_poor_data_quality_risk_threshold_is_preserved():
     assert "poor_data_quality" in result["risk_flags"].split(";")
 
 
+def _quality_row(diagnostic: dict[str, float]) -> pd.Series:
+    return risk_flags(
+        pd.DataFrame([{"variable": "x", "score": 0.8, "lag": 1}]),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        pd.DataFrame([{"variable": "x", **diagnostic}]),
+        {"x": "PV"},
+        [],
+    ).iloc[0]
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        {"missing_rate": 0.21},
+        {"saturation_ratio": 0.21},
+        {"abnormal_jump_ratio": 0.011},
+        {"robust_outlier_ratio": 0.011},
+    ],
+)
+def test_mild_quality_overflow_is_poor_but_not_severe(diagnostic: dict[str, float]):
+    row = _quality_row(diagnostic)
+    tokens = row["risk_flags"].split(";")
+
+    assert "poor_data_quality" in tokens
+    assert "severe_data_quality" not in tokens
+    assert row["data_quality_score"] < 1.0
+    assert "数据质量需关注" in row["human_reason"]
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        {"missing_rate": 0.51},
+        {"saturation_ratio": 0.81},
+        {"abnormal_jump_ratio": 0.051},
+        {"robust_outlier_ratio": 0.051},
+    ],
+)
+def test_extreme_quality_overflow_marks_severe(diagnostic: dict[str, float]):
+    row = _quality_row(diagnostic)
+    tokens = row["risk_flags"].split(";")
+
+    assert "poor_data_quality" in tokens
+    assert "severe_data_quality" in tokens
+    assert row["data_quality_score"] < 1.0
+    assert "数据质量严重不足" in row["human_reason"]
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        {"missing_rate": 0.50},
+        {"saturation_ratio": 0.80},
+        {"abnormal_jump_ratio": 0.05},
+        {"robust_outlier_ratio": 0.05},
+    ],
+)
+def test_severe_quality_thresholds_require_strictly_greater(diagnostic: dict[str, float]):
+    row = _quality_row(diagnostic)
+    tokens = row["risk_flags"].split(";")
+
+    assert "severe_data_quality" not in tokens
+
+
+def test_zero_quality_rates_keep_full_score_and_no_risk():
+    row = _quality_row(
+        {
+            "missing_rate": 0.0,
+            "saturation_ratio": 0.0,
+            "abnormal_jump_ratio": 0.0,
+            "robust_outlier_ratio": 0.0,
+        }
+    )
+
+    assert row["data_quality_score"] == pytest.approx(1.0)
+    assert "poor_data_quality" not in row["risk_flags"].split(";")
+    assert "severe_data_quality" not in row["risk_flags"].split(";")
+
+
 def test_data_quality_source_uses_exponential_components_and_not_minimum():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
     function = source.split("def _data_quality_score", 1)[1].split(

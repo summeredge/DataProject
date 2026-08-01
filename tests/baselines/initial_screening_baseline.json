@@ -1077,8 +1077,8 @@
     "key_evidence": [
       {
         "variable": "x_outlier",
-        "final_score": 0.44,
-        "candidate_grade": "D",
+        "final_score": 0.5830823706296249,
+        "candidate_grade": "C",
         "recommended_use": "poor_quality_variable",
         "lag": 0,
         "direction": "同步变化",

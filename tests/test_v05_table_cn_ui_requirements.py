@@ -38,7 +38,8 @@ def test_common_evidence_and_risk_labels_are_chinese_ready():
         "滞后触及边界",
         "变量滞后目标",
         "跨工况不稳定",
-        "数据质量较差",
+        "数据质量需关注",
+        "数据质量严重不足",
     ]
     for marker in required:
         assert marker in INDEX_HTML

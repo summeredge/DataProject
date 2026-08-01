@@ -38,7 +38,7 @@ RISK_RELATIVE_PENALTY_WEIGHTS = {
 }
 EVIDENCE_SCORE_CAPS = {
     "strong_formula_leakage": 0.25,
-    "poor_data_quality": 0.44,
+    "severe_data_quality": 0.44,
 }
 
 
@@ -1102,6 +1102,12 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             or _safe_float(d.get("abnormal_jump_ratio", 0), default=0.0) > 0.01
             or _safe_float(d.get("robust_outlier_ratio", 0), default=0.0) > 0.01
         )
+        severe_quality = (
+            _safe_float(d.get("missing_rate", 0), default=0.0) > 0.50
+            or _safe_float(d.get("saturation_ratio", 0), default=0.0) > 0.80
+            or _safe_float(d.get("abnormal_jump_ratio", 0), default=0.0) > 0.05
+            or _safe_float(d.get("robust_outlier_ratio", 0), default=0.0) > 0.05
+        )
         lag_value = int(_safe_float(row.get("lag", 0), default=0.0))
         formula_like = _looks_like_formula_variable(variable)
         strong_formula = formula_like and raw_corr > 0.98 and lag_value == 0
@@ -1141,10 +1147,11 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             ("lag_boundary", lag_boundary),
             ("low_model_lift", low_lift),
             ("poor_data_quality", poor_quality),
+            ("severe_data_quality", severe_quality),
             ("residual_collinearity", residual_collinearity),
         ] if active]
 
-        strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "poor_data_quality"}]
+        strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "poor_data_quality", "severe_data_quality"}]
         weak_risks = [f for f in flags if f not in set(strong_risks)]
         level = "none" if not flags else ("strong" if len(strong_risks) >= 2 else ("medium" if strong_risks else "weak"))
         reason_map = {
@@ -1156,7 +1163,8 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             "unstable_over_time": "随时间不稳定",
             "lag_boundary": "滞后触边界",
             "low_model_lift": "模型增益偏低",
-            "poor_data_quality": "数据质量较差",
+            "poor_data_quality": "数据质量需关注",
+            "severe_data_quality": "数据质量严重不足",
             "residual_collinearity": "残差控制共线性高",
             "redundant_proxy": "与其他候选变量高度冗余，独立信息不足",
         }

@@ -89,7 +89,8 @@ def test_legacy_target_lead_risk_label_does_not_duplicate_temporal_penalty():
     ("token", "cap", "grade"),
     [
         ("common_capacity_driver", 1.0, "A"),
-        ("poor_data_quality", 0.44, "D"),
+        ("poor_data_quality", 1.0, "A"),
+        ("severe_data_quality", 0.44, "D"),
     ],
 )
 def test_engineering_risks_do_not_duplicate_component_penalties(token: str, cap: float, grade: str):
@@ -99,6 +100,24 @@ def test_engineering_risks_do_not_duplicate_component_penalties(token: str, cap:
     assert row["risk_score_cap"] == pytest.approx(cap)
     assert row["final_score"] == pytest.approx(min(0.95, cap))
     assert row["candidate_grade"] == grade
+
+
+def test_poor_data_quality_no_longer_caps_final_score():
+    row = _one("poor_data_quality", 0.95)
+
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == 1.0
+    assert row["risk_cap_reason"] == ""
+    assert row["final_score"] == pytest.approx(0.95)
+
+
+def test_severe_data_quality_caps_final_score_at_0_44():
+    row = _one("severe_data_quality", 0.95)
+
+    assert row["risk_penalty"] == 0.0
+    assert row["risk_score_cap"] == pytest.approx(0.44)
+    assert row["risk_cap_reason"] == "severe_data_quality"
+    assert row["final_score"] == pytest.approx(0.44)
 
 
 def test_formula_like_does_not_duplicate_strong_formula_penalty():
@@ -122,7 +141,7 @@ def test_engineering_risks_are_handled_by_driver_priority_not_evidence_subtracti
 
 
 def test_multiple_caps_choose_lowest_value():
-    row = _one("strong_formula_leakage;poor_data_quality;target_leads_variable")
+    row = _one("strong_formula_leakage;severe_data_quality;target_leads_variable")
 
     assert row["risk_score_cap"] == pytest.approx(0.25)
     assert row["risk_cap_reason"] == "strong_formula_leakage"
@@ -292,5 +311,5 @@ def test_v2_risk_constants_separate_evidence_and_engineering_priority():
     }
     assert EVIDENCE_SCORE_CAPS == {
         "strong_formula_leakage": 0.25,
-        "poor_data_quality": 0.44,
+        "severe_data_quality": 0.44,
     }

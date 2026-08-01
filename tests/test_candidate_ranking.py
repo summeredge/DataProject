@@ -77,7 +77,8 @@ def test_driver_rank_follows_final_score_order():
     ("risk", "expected"),
     [
         ("strong_formula_leakage", "formula_or_derived"),
-        ("poor_data_quality", "poor_quality"),
+        ("severe_data_quality", "poor_quality"),
+        ("poor_data_quality", "uncertain_candidate"),
         ("target_leads_variable", "uncertain_candidate"),
         ("common_capacity_driver", "capacity_driven"),
     ],

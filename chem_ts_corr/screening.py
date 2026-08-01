@@ -829,7 +829,7 @@ def classify_candidate(row: pd.Series) -> str:
     flags = _risk_token_set(row.get("risk_flags", ""))
     for token, candidate_class in [
         ("strong_formula_leakage", "formula_or_derived"),
-        ("poor_data_quality", "poor_quality"),
+        ("severe_data_quality", "poor_quality"),
     ]:
         if token in flags:
             return candidate_class
@@ -1146,12 +1146,12 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             ("unstable_over_time", unstable_time),
             ("lag_boundary", lag_boundary),
             ("low_model_lift", low_lift),
-            ("poor_data_quality", poor_quality),
+            ("poor_data_quality", poor_quality and not severe_quality),
             ("severe_data_quality", severe_quality),
             ("residual_collinearity", residual_collinearity),
         ] if active]
 
-        strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "poor_data_quality", "severe_data_quality"}]
+        strong_risks = [f for f in flags if f in {"strong_formula_leakage", "common_capacity_driver", "severe_data_quality"}]
         weak_risks = [f for f in flags if f not in set(strong_risks)]
         level = "none" if not flags else ("strong" if len(strong_risks) >= 2 else ("medium" if strong_risks else "weak"))
         reason_map = {
@@ -1163,13 +1163,13 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
             "unstable_over_time": "随时间不稳定",
             "lag_boundary": "滞后触边界",
             "low_model_lift": "模型增益偏低",
-            "poor_data_quality": "数据质量需关注",
+            "poor_data_quality": "数据质量需关注，建议核查缺失、单值集中和异常点",
             "severe_data_quality": "数据质量严重不足",
             "residual_collinearity": "残差控制共线性高",
             "redundant_proxy": "与其他候选变量高度冗余，独立信息不足",
         }
         reason = "；".join(reason_map.get(flag, flag) for flag in flags)
-        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "redundant_proxy_flag": variable in redundant_variables, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
+        rows.append({"variable": variable, "formula_like_flag": formula_like, "strong_formula_leakage_flag": strong_formula, "common_capacity_driver_flag": common_capacity, "redundant_proxy_flag": variable in redundant_variables, "target_leads_variable_flag": target_leads, "unstable_across_regimes_flag": unstable_reg, "unstable_over_time_flag": unstable_time, "lag_boundary_flag": lag_boundary, "low_model_lift_flag": low_lift, "poor_data_quality_flag": poor_quality and not severe_quality, "residual_collinearity_flag": residual_collinearity, "data_quality_score": data_quality_score, "risk_flags": ";".join(flags), "risk_count": len(flags), "strong_risk_count": len(strong_risks), "weak_risk_count": len(weak_risks), "risk_level": level, "human_reason": reason})
     return pd.DataFrame(rows, columns=cols)
 
 
@@ -1784,7 +1784,7 @@ def _grade_candidate(row: pd.Series) -> str:
 def _recommend_use(row: pd.Series) -> str:
     flags = _risk_token_set(row.get("risk_flags", ""))
     grade = str(row.get("candidate_grade", "E"))
-    if "poor_data_quality" in flags:
+    if "severe_data_quality" in flags:
         return "poor_quality_variable"
     raw_corr = _safe_float(row.get("raw_corr", 0), default=0.0)
     lag = int(_safe_float(row.get("lag", 0), default=0.0))
@@ -1818,7 +1818,7 @@ def _recommended_action(row: pd.Series) -> str:
         "capacity_driven": "疑似共同负荷驱动",
         "formula_coupled_reference": "疑似公式耦合，仅参考",
         "unstable_candidate": "跨工况/时间不稳定，建议复核",
-        "poor_quality_variable": "数据质量风险，建议剔除",
+        "poor_quality_variable": "数据质量严重不足，建议清洗数据或剔除该变量后重新分析",
         "state_indicator": "更可能是状态指示量",
         "control_variable_reference": "残差/负荷控制变量，仅作控制基准参考。",
     }

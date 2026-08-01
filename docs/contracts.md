@@ -46,9 +46,16 @@ evidence_score = association_score × data_quality_score
 ```
 
 普通 `poor_data_quality` 只写入 `risk_flags` 用于风险提示，不再对
-`final_score` 施加 `0.44` 上限。
+`final_score` 施加 `0.44` 上限，也不属于强风险，不强制将候选分类为
+`poor_quality` 或建议用途设为 `poor_quality_variable`。
 
 仅 `severe_data_quality` 通过 `EVIDENCE_SCORE_CAPS` 将 `final_score`
-封顶为 `0.44`，并在 `risk_cap_reason` 中记录 `severe_data_quality`。
+封顶为 `0.44`，在 `risk_cap_reason` 中记录 `severe_data_quality`，并作为
+强风险计数一次；只有它强制候选分类为 `poor_quality` 且建议用途为
+`poor_quality_variable`。
 
-`severe_data_quality` 是 `risk_flags` 内部标记，不新增 CSV/API 字段列。
+`poor_data_quality` 与 `severe_data_quality` 互斥：达到严重阈值只写入
+`severe_data_quality`，未达到严重阈值但达到普通阈值只写入
+`poor_data_quality`。
+
+两个标记都是 `risk_flags` 内部标记，不新增 CSV/API 字段列。

@@ -109,6 +109,8 @@ def test_poor_data_quality_no_longer_caps_final_score():
     assert row["risk_score_cap"] == 1.0
     assert row["risk_cap_reason"] == ""
     assert row["final_score"] == pytest.approx(0.95)
+    assert row["candidate_class"] != "poor_quality"
+    assert row["recommended_use"] != "poor_quality_variable"
 
 
 def test_severe_data_quality_caps_final_score_at_0_44():
@@ -118,6 +120,9 @@ def test_severe_data_quality_caps_final_score_at_0_44():
     assert row["risk_score_cap"] == pytest.approx(0.44)
     assert row["risk_cap_reason"] == "severe_data_quality"
     assert row["final_score"] == pytest.approx(0.44)
+    assert row["candidate_class"] == "poor_quality"
+    assert row["recommended_use"] == "poor_quality_variable"
+    assert row["recommended_action"] == "数据质量严重不足，建议清洗数据或剔除该变量后重新分析"
 
 
 def test_formula_like_does_not_duplicate_strong_formula_penalty():

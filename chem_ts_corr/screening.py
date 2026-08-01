@@ -828,8 +828,8 @@ def _risk_adjustment(value: object) -> tuple[float, float, str]:
 def classify_candidate(row: pd.Series) -> str:
     flags = _risk_token_set(row.get("risk_flags", ""))
     for token, candidate_class in [
-        ("strong_formula_leakage", "formula_or_derived"),
         ("severe_data_quality", "poor_quality"),
+        ("strong_formula_leakage", "formula_or_derived"),
     ]:
         if token in flags:
             return candidate_class
@@ -1805,6 +1805,9 @@ def _recommend_use(row: pd.Series) -> str:
 
 
 def _recommended_action(row: pd.Series) -> str:
+    flags = _risk_token_set(row.get("risk_flags", ""))
+    if "severe_data_quality" in flags:
+        return "数据质量严重不足，建议清洗数据或剔除该变量后重新分析"
     if str(row.get("temporal_direction_status", "")) == "target_leads_supported":
         return (
             "目标明显领先该变量，不适合作为上游原因候选；"

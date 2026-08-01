@@ -100,6 +100,14 @@ def test_candidate_class_uses_declared_risk_priority():
     assert classify_candidate(row) == "formula_or_derived"
 
 
+def test_severe_quality_has_highest_class_priority_over_formula():
+    row = pd.Series(
+        {"lag": -20, "risk_flags": "severe_data_quality;strong_formula_leakage"}
+    )
+
+    assert classify_candidate(row) == "poor_quality"
+
+
 def test_supported_variable_lead_is_upstream_driver_candidate():
     assert classify_candidate(pd.Series({
         "best_lag": 20, "risk_flags": "",

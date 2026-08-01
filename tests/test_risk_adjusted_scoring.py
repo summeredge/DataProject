@@ -65,6 +65,64 @@ def _one(flags: object, evidence: float = 1.0) -> pd.Series:
     return _score([("x", evidence)], _risks([("x", flags, 0, 0)])).iloc[0]
 
 
+def _score_with_temporal(flags: object, temporal: str, evidence: float = 1.0) -> pd.Series:
+    empty = pd.DataFrame(columns=["variable"])
+    complete = pd.DataFrame([{"variable": "x", "value": evidence}])
+    ranked = _ranked([("x", evidence)])
+    ranked["innovation_score"] = ranked["score"]
+    return final_ranked_features(
+        ranked=ranked,
+        residual=empty,
+        stability=empty,
+        model_lift=complete.rename(columns={"value": "model_lift_score"}).assign(status="ok"),
+        risks=_risks([("x", flags, 0, 0)]),
+        lag_peak_quality=complete.rename(columns={"value": "lag_quality"}).assign(
+            temporal_direction_status=temporal
+        ),
+        rolling_corr_scores=complete.rename(columns={"value": "rolling_stability"}),
+    ).iloc[0]
+
+
+SEVERE_QUALITY_ACTION = "数据质量严重不足，建议清洗数据或剔除该变量后重新分析"
+
+
+@pytest.mark.parametrize(
+    ("flags", "temporal"),
+    [
+        ("severe_data_quality", ""),
+        ("severe_data_quality;strong_formula_leakage", ""),
+        ("severe_data_quality", "target_leads_supported"),
+        ("severe_data_quality;strong_formula_leakage", "target_leads_supported"),
+    ],
+)
+def test_severe_data_quality_has_highest_priority(flags: str, temporal: str):
+    row = _score_with_temporal(flags, temporal)
+
+    assert row["candidate_class"] == "poor_quality"
+    assert row["recommended_use"] == "poor_quality_variable"
+    assert row["recommended_action"] == SEVERE_QUALITY_ACTION
+    assert row["final_score"] <= 0.44
+    if "strong_formula_leakage" in flags:
+        assert row["risk_score_cap"] == pytest.approx(0.25)
+        assert row["risk_cap_reason"] == "strong_formula_leakage"
+    else:
+        assert row["risk_score_cap"] == pytest.approx(0.44)
+        assert row["risk_cap_reason"] == "severe_data_quality"
+
+
+def test_non_severe_risks_keep_existing_priority_behavior():
+    formula = _one("strong_formula_leakage", 1.0)
+    assert formula["candidate_class"] == "formula_or_derived"
+
+    temporal = _score_with_temporal("", "target_leads_supported", evidence=0.9)
+    assert "目标明显领先该变量" in temporal["recommended_action"]
+
+    mild = _one("poor_data_quality", 0.95)
+    assert mild["candidate_class"] != "poor_quality"
+    assert mild["recommended_use"] != "poor_quality_variable"
+    assert mild["recommended_action"] != SEVERE_QUALITY_ACTION
+
+
 def test_no_risk_preserves_evidence_score():
     row = _one("", 0.9)
 

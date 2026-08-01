@@ -190,6 +190,77 @@ def test_poor_data_quality_is_not_an_auto_exclusion_reason():
     assert result.loc[0, "auto_exclusion_reasons"] == ""
 
 
+def test_legacy_poor_quality_class_is_not_auto_excluded():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "x"}]),
+        _ranked(
+            [
+                {
+                    "variable": "x",
+                    "risk_flags": "poor_data_quality",
+                    "candidate_class": "poor_quality",
+                    "recommended_use": "poor_quality_variable",
+                }
+            ]
+        ),
+        target="y",
+    )
+
+    assert bool(result.loc[0, "auto_eligible"]) is True
+    assert result.loc[0, "auto_exclusion_reasons"] == ""
+
+
+def test_severe_data_quality_with_poor_quality_class_remains_auto_excluded():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "x"}]),
+        _ranked(
+            [
+                {
+                    "variable": "x",
+                    "risk_flags": "severe_data_quality",
+                    "candidate_class": "poor_quality",
+                    "recommended_use": "poor_quality_variable",
+                }
+            ]
+        ),
+        target="y",
+        whitelist=["x"],
+    )
+
+    assert bool(result.loc[0, "auto_eligible"]) is False
+    assert "severe_data_quality" in result.loc[0, "auto_exclusion_reasons"].split(";")
+
+
+def test_poor_quality_without_data_quality_token_remains_auto_excluded():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "x"}]),
+        _ranked([{"variable": "x", "candidate_class": "poor_quality"}]),
+        target="y",
+        whitelist=["x"],
+    )
+
+    assert "poor_quality" in result.loc[0, "auto_exclusion_reasons"].split(";")
+
+
+def test_legacy_poor_quality_uses_exact_semicolon_tokens():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "x"}]),
+        _ranked(
+            [
+                {
+                    "variable": "x",
+                    "risk_flags": "poor_data_quality_reviewed;other",
+                    "candidate_class": "poor_quality",
+                }
+            ]
+        ),
+        target="y",
+        whitelist=["x"],
+    )
+
+    assert "poor_quality" in result.loc[0, "auto_exclusion_reasons"].split(";")
+
+
 @pytest.mark.parametrize("candidate_class", ["capacity_driven"])
 def test_risk_limited_classes_are_not_directly_excluded(candidate_class: str):
     result = build_xgb_candidate_pool(

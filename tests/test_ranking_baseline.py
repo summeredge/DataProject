@@ -262,7 +262,29 @@ def test_duplicate_ranked_variables_preserve_rows_and_unique_expectation_hits():
     top = metrics["cutoffs"]["3"]
     assert top["known_implausible_hits"] == 1
     assert top["target_leads_count"] == 2
-    assert top["ab_target_leads_count"] == 2
+    assert top["ab_target_leads_count"] == 1
+
+
+def test_ab_data_quality_counts_are_unique_by_variable():
+    ranked = pd.DataFrame(
+        [
+            {"variable": "poor", "candidate_grade": "A", "risk_flags": "poor_data_quality"},
+            {"variable": "poor", "candidate_grade": "B", "risk_flags": "poor_data_quality"},
+            {"variable": "severe", "candidate_grade": "A", "risk_flags": "severe_data_quality"},
+            {"variable": "severe", "candidate_grade": "B", "risk_flags": "severe_data_quality"},
+            {"variable": "both", "candidate_grade": "A", "risk_flags": "poor_data_quality"},
+            {"variable": "both", "candidate_grade": "B", "risk_flags": "severe_data_quality"},
+        ]
+    )
+
+    _, metrics = evaluate_ranking_baseline(ranked, cutoffs=(6,))
+    top = metrics["cutoffs"]["6"]
+
+    assert top["ab_poor_data_quality_count"] == 2
+    assert top["ab_severe_data_quality_count"] == 2
+    assert top["poor_data_quality_count"] == 2
+    assert top["severe_data_quality_count"] == 2
+    assert top["data_quality_risk_count"] == 3
 
 
 def test_duplicate_risk_rows_align_by_variable_occurrence():

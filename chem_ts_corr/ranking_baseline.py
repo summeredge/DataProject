@@ -371,7 +371,18 @@ def _build_metrics(
         entry["poor_data_quality_count"] = int(quality_flags["poor_data_quality_flag"].sum())
         entry["severe_data_quality_count"] = int(quality_flags["severe_data_quality_flag"].sum())
         entry["data_quality_risk_count"] = int(quality_flags.any(axis=1).sum())
-        ab = top["candidate_grade"].astype(str).str.upper().isin({"A", "B"})
+        ab_risk_flags = top.assign(
+            is_ab=top["candidate_grade"].astype(str).str.upper().isin({"A", "B"})
+        ).groupby("variable", sort=False)[
+            [
+                "is_ab",
+                "target_leads_variable_flag",
+                "common_capacity_driver_flag",
+                "strong_formula_leakage_flag",
+                "poor_data_quality_flag",
+                "severe_data_quality_flag",
+            ]
+        ].any()
         for column, key in [
             ("target_leads_variable_flag", "ab_target_leads_count"),
             ("common_capacity_driver_flag", "ab_common_capacity_count"),
@@ -379,7 +390,7 @@ def _build_metrics(
             ("poor_data_quality_flag", "ab_poor_data_quality_count"),
             ("severe_data_quality_flag", "ab_severe_data_quality_count"),
         ]:
-            entry[key] = int((top[column] & ab).sum())
+            entry[key] = int((ab_risk_flags["is_ab"] & ab_risk_flags[column]).sum())
         metrics["cutoffs"][str(cutoff)] = entry
     return metrics
 

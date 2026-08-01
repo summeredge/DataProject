@@ -51,3 +51,8 @@
 -   严重阈值使用严格大于，恰好等于阈值不触发严重风险；
 -   `data_quality_score` 连续衰减且四项为零时为 `1.0`；
 -   `ranked_features.csv` 仍按 `final_score` 降序，CSV/API 字段结构不变。
+
+历史兼容测试覆盖：`poor_data_quality` 与旧 `poor_quality` 分类、旧推荐用途或旧
+`medium` 风险等级并存时，仍只作为普通质量提示；精确
+`severe_data_quality` 才触发综合复核硬降级和 XGBoost 自动排除。排名基线的质量风险
+及 A/B 风险计数按唯一变量断言，重复行不得重复计数。

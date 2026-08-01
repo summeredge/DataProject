@@ -335,8 +335,21 @@ def _risk_text(row: pd.Series) -> str:
 
 
 def _has_hard_downgrade(row: pd.Series) -> bool:
-    risk_text = _risk_text(row)
-    return any(flag in risk_text for flag in HARD_DOWNGRADE_FLAGS)
+    return bool(_risk_flag_tokens(row) & HARD_DOWNGRADE_FLAGS)
+
+
+def _risk_flag_tokens(row: pd.Series) -> set[str]:
+    return {token.strip().lower() for token in _text(row.get("risk_flags")).split(";") if token.strip()}
+
+
+def _is_legacy_poor_data_quality(row: pd.Series) -> bool:
+    tokens = _risk_flag_tokens(row)
+    return (
+        "poor_data_quality" in tokens
+        and "severe_data_quality" not in tokens
+        and not (tokens & (HARD_DOWNGRADE_FLAGS - {"severe_data_quality"}))
+        and not any(STATISTICAL_LIMIT_LEVELS.get(token) == "medium" for token in tokens)
+    )
 
 
 def _statistical_limit_assessment(row: pd.Series) -> tuple[str, list[str]]:
@@ -399,6 +412,8 @@ def _data_priority(
 def _risk_constraint_level(row: pd.Series, statistical_limit_level: str, has_hard_downgrade: bool) -> str:
     risk_text = _risk_text(row)
     declared_risk_level = _text(row.get("risk_level")).lower()
+    if _is_legacy_poor_data_quality(row):
+        declared_risk_level = "weak"
     level = "none"
     if has_hard_downgrade:
         level = _max_risk(level, "strong")

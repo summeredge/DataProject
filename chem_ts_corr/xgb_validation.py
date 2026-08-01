@@ -309,11 +309,20 @@ def _auto_exclusion_reasons(
     if _text(row.get("recommended_use")) == "control_variable_reference":
         reasons.append("control_reference")
     candidate_class = _text(row.get("candidate_class"))
-    if candidate_class in AUTO_EXCLUDED_CANDIDATE_CLASSES:
+    if candidate_class in AUTO_EXCLUDED_CANDIDATE_CLASSES and not _is_legacy_poor_quality(row):
         reasons.append(candidate_class)
     risk_tokens = _risk_tokens(row.get("risk_flags"))
     reasons.extend(token for token in _AUTO_EXCLUDED_RISK_TOKEN_ORDER if token in risk_tokens)
     return tuple(reasons)
+
+
+def _is_legacy_poor_quality(row: pd.Series | dict[str, object]) -> bool:
+    risk_tokens = _risk_tokens(row.get("risk_flags"))
+    return (
+        _text(row.get("candidate_class")) == "poor_quality"
+        and "poor_data_quality" in risk_tokens
+        and "severe_data_quality" not in risk_tokens
+    )
 
 
 def prepare_xgb_validation_frame(

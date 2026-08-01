@@ -261,6 +261,54 @@ def test_poor_data_quality_is_warning_without_hard_downgrade():
     assert "poor_data_quality_warning" in row["integrated_review_reason"]
 
 
+@pytest.mark.parametrize("risk_flags", ["poor_data_quality", "poor_data_quality;lag_boundary"])
+def test_legacy_poor_data_quality_medium_level_is_limited_to_weak(risk_flags: str):
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
+    ])
+    risks = pd.DataFrame([{"variable": "x1", "risk_flags": risk_flags, "risk_level": "medium"}])
+
+    row = build_causal_review_evidence(_ranked(risk_flags=""), conditional, risk_flags=risks).iloc[0]
+
+    assert row["risk_constraint_level"] == "weak"
+    assert row["integrated_review_decision"] != "manual_review_only"
+    assert "hard_downgrade_risk" not in row["integrated_review_reason"]
+    assert "poor_data_quality_warning" in row["integrated_review_reason"]
+
+
+@pytest.mark.parametrize(
+    ("risk_flags", "expected_level", "hard_downgrade"),
+    [
+        ("poor_data_quality;common_capacity_driver", "medium", False),
+        ("poor_data_quality;strong_formula_leakage", "strong", True),
+        ("severe_data_quality", "strong", True),
+    ],
+)
+def test_legacy_poor_data_quality_preserves_other_risk_constraints(
+    risk_flags: str, expected_level: str, hard_downgrade: bool
+):
+    risks = pd.DataFrame([{"variable": "x1", "risk_flags": risk_flags, "risk_level": "medium"}])
+
+    row = build_causal_review_evidence(
+        _ranked(risk_flags="", risk_level=pd.NA), pd.DataFrame(), risk_flags=risks
+    ).iloc[0]
+
+    assert row["risk_constraint_level"] == expected_level
+    assert ("hard_downgrade_risk" in row["integrated_review_reason"]) is hard_downgrade
+
+
+def test_legacy_poor_data_quality_uses_exact_semicolon_tokens():
+    risks = pd.DataFrame(
+        [{"variable": "x1", "risk_flags": "poor_data_quality_reviewed", "risk_level": "medium"}]
+    )
+
+    row = build_causal_review_evidence(
+        _ranked(risk_flags="", risk_level=pd.NA), pd.DataFrame(), risk_flags=risks
+    ).iloc[0]
+
+    assert row["risk_constraint_level"] == "medium"
+
+
 def test_low_risk_strong_evidence_keeps_priority_review():
     conditional = pd.DataFrame([
         {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}

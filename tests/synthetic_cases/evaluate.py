@@ -508,6 +508,7 @@ def evaluate_case_expectations(
             row is not None
             and (
                 "poor_data_quality" in risk
+                or "severe_data_quality" in risk
                 or "unstable_over_time" in risk
                 or float(row["stability_score"]) < 0.35
             )

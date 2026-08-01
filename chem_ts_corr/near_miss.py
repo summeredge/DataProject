@@ -170,7 +170,7 @@ def _near_miss_score(row: pd.Series) -> float:
     lag_quality = _number(row.get("lag_quality"), 0.0)
     score = raw + 0.3 * abs(residual) + 0.2 * lag_quality
     risks = _text(row.get("risk_flags", ""))
-    if "strong_formula_leakage" in risks or "poor_data_quality" in risks:
+    if "strong_formula_leakage" in risks or "severe_data_quality" in risks:
         score *= 0.35
     return float(score)
 
@@ -194,7 +194,11 @@ def _near_miss_reason(row: pd.Series) -> str:
         reasons.append("target_lead_risk")
     if "unstable_over_time" in risks or "unstable_across_regimes" in risks:
         reasons.append("stability_risk")
-    if "strong_formula_leakage" in risks or "poor_data_quality" in risks:
+    if "poor_data_quality" in risks:
+        reasons.append("poor_data_quality_warning")
+    if "severe_data_quality" in risks:
+        reasons.append("severe_data_quality_risk")
+    if "strong_formula_leakage" in risks:
         reasons.append("data_or_formula_risk")
     if not reasons:
         reasons.append("near_miss_candidate")

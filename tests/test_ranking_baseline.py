@@ -163,7 +163,8 @@ def test_top10_top20_metrics_count_hits_risks_and_ab_risks():
     ranked.loc[1, "risk_flags"] = "common_capacity_driver"
     ranked.loc[10, "risk_flags"] = "strong_formula_leakage"
     ranked.loc[11, "risk_flags"] = "poor_data_quality"
-    ranked.loc[12, "risk_flags"] = "lag_boundary"
+    ranked.loc[12, "risk_flags"] = "severe_data_quality"
+    ranked.loc[13, "risk_flags"] = "lag_boundary"
     expectations = pd.DataFrame(
         [
             {"variable": "x1", "expected_class": "reasonable_driver"},
@@ -189,7 +190,27 @@ def test_top10_top20_metrics_count_hits_risks_and_ab_risks():
     assert top20["known_implausible_hits"] == 2
     assert top20["strong_formula_leakage_count"] == 1
     assert top20["poor_data_quality_count"] == 1
+    assert top20["severe_data_quality_count"] == 1
+    assert top20["data_quality_risk_count"] == 2
     assert top20["lag_boundary_count"] == 1
+
+
+def test_quality_risk_flags_are_separate_and_not_double_counted():
+    ranked = pd.DataFrame([
+        {"variable": "poor", "risk_flags": "poor_data_quality"},
+        {"variable": "severe", "risk_flags": "severe_data_quality"},
+        {"variable": "both", "risk_flags": "poor_data_quality;severe_data_quality"},
+        {"variable": "both", "risk_flags": "severe_data_quality"},
+    ])
+
+    detail, metrics = evaluate_ranking_baseline(ranked, cutoffs=(4,))
+    top = metrics["cutoffs"]["4"]
+
+    assert detail["poor_data_quality_flag"].tolist() == [True, False, True, False]
+    assert detail["severe_data_quality_flag"].tolist() == [False, True, True, True]
+    assert top["poor_data_quality_count"] == 2
+    assert top["severe_data_quality_count"] == 2
+    assert top["data_quality_risk_count"] == 3
 
 
 def test_all_ab_risk_metrics_exclude_c_d_e_grades():

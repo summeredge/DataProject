@@ -4572,7 +4572,7 @@ const CANONICAL_RISK_GROUPS = [
   {
     key: "data_quality_risk",
     label: "数据质量风险",
-    aliases: ["poor_data_quality", "poor_quality_variable"],
+    aliases: ["poor_data_quality", "severe_data_quality", "poor_quality_variable"],
   },
   {
     key: "synchronous_or_leakage_risk",

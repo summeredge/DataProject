@@ -138,7 +138,7 @@ def test_excluded_candidate_classes_are_recorded(candidate_class: str):
 
 
 @pytest.mark.parametrize(
-    "risk", ["strong_formula_leakage", "poor_data_quality", "target_leads_variable"]
+    "risk", ["strong_formula_leakage", "severe_data_quality", "target_leads_variable"]
 )
 def test_excluded_risk_tokens_are_recorded(risk: str):
     result = build_xgb_candidate_pool(
@@ -157,7 +157,7 @@ def test_multiple_risk_exclusion_reasons_have_deterministic_order():
         _ranked(
             [{
                 "variable": "x",
-                "risk_flags": "target_leads_variable;poor_data_quality;strong_formula_leakage",
+                "risk_flags": "target_leads_variable;severe_data_quality;strong_formula_leakage",
             }]
         ),
         target="y",
@@ -165,7 +165,7 @@ def test_multiple_risk_exclusion_reasons_have_deterministic_order():
     )
 
     assert result.loc[0, "auto_exclusion_reasons"] == (
-        "strong_formula_leakage;poor_data_quality;target_leads_variable"
+        "strong_formula_leakage;severe_data_quality;target_leads_variable"
     )
 
 
@@ -177,6 +177,17 @@ def test_risk_tokens_use_exact_semicolon_matching():
     )
 
     assert bool(result.loc[0, "auto_eligible"]) is True
+
+
+def test_poor_data_quality_is_not_an_auto_exclusion_reason():
+    result = build_xgb_candidate_pool(
+        _summary([{"variable": "x"}]),
+        _ranked([{"variable": "x", "risk_flags": "poor_data_quality"}]),
+        target="y",
+    )
+
+    assert bool(result.loc[0, "auto_eligible"]) is True
+    assert result.loc[0, "auto_exclusion_reasons"] == ""
 
 
 @pytest.mark.parametrize("candidate_class", ["capacity_driven"])
@@ -225,7 +236,7 @@ def test_final_rank_sort_is_numeric_stable_and_missing_last():
     [
         ({"final_recommendation": "not_recommended"}, {}, [], "recommendation_not_eligible"),
         ({"screening_lag": 0}, {}, [], "non_positive_screening_lag"),
-        ({}, {"risk_flags": "poor_data_quality"}, [], "poor_data_quality"),
+        ({}, {"risk_flags": "severe_data_quality"}, [], "severe_data_quality"),
         ({}, {}, ["x"], "control_variable"),
     ],
 )

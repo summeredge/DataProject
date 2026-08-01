@@ -16,6 +16,7 @@ RISK_FLAG_COLUMNS = {
     "common_capacity_driver_flag": "common_capacity_driver",
     "strong_formula_leakage_flag": "strong_formula_leakage",
     "poor_data_quality_flag": "poor_data_quality",
+    "severe_data_quality_flag": "severe_data_quality",
     "lag_boundary_flag": "lag_boundary",
 }
 OUTPUT_COLUMNS = [
@@ -32,6 +33,7 @@ OUTPUT_COLUMNS = [
     "common_capacity_driver_flag",
     "strong_formula_leakage_flag",
     "poor_data_quality_flag",
+    "severe_data_quality_flag",
     "lag_boundary_flag",
     "expected_class",
     "expectation_reason",
@@ -360,16 +362,22 @@ def _build_metrics(
             ("target_leads_variable_flag", "target_leads_count"),
             ("common_capacity_driver_flag", "common_capacity_count"),
             ("strong_formula_leakage_flag", "strong_formula_leakage_count"),
-            ("poor_data_quality_flag", "poor_data_quality_count"),
             ("lag_boundary_flag", "lag_boundary_count"),
         ]:
             entry[key] = int(top[column].sum())
+        quality_flags = top.groupby("variable", sort=False)[
+            ["poor_data_quality_flag", "severe_data_quality_flag"]
+        ].any()
+        entry["poor_data_quality_count"] = int(quality_flags["poor_data_quality_flag"].sum())
+        entry["severe_data_quality_count"] = int(quality_flags["severe_data_quality_flag"].sum())
+        entry["data_quality_risk_count"] = int(quality_flags.any(axis=1).sum())
         ab = top["candidate_grade"].astype(str).str.upper().isin({"A", "B"})
         for column, key in [
             ("target_leads_variable_flag", "ab_target_leads_count"),
             ("common_capacity_driver_flag", "ab_common_capacity_count"),
             ("strong_formula_leakage_flag", "ab_strong_formula_leakage_count"),
             ("poor_data_quality_flag", "ab_poor_data_quality_count"),
+            ("severe_data_quality_flag", "ab_severe_data_quality_count"),
         ]:
             entry[key] = int((top[column] & ab).sum())
         metrics["cutoffs"][str(cutoff)] = entry

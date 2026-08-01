@@ -60,7 +60,7 @@ STATISTICAL_LIMIT_FLAGS = {
 }
 
 HARD_DOWNGRADE_FLAGS = {
-    "poor_data_quality",
+    "severe_data_quality",
     "strong_formula_leakage",
     "target_leads_variable",
 }
@@ -417,7 +417,8 @@ def _risk_reasons(row: pd.Series, risk_level: str) -> list[str]:
     reasons: list[str] = []
     mapping = [
         ("strong_formula_leakage", "strong_formula_leakage_risk"),
-        ("poor_data_quality", "poor_data_quality_risk"),
+        ("poor_data_quality", "poor_data_quality_warning"),
+        ("severe_data_quality", "severe_data_quality_risk"),
         ("target_leads_variable", "target_lead_risk"),
         ("common_capacity_driver", "common_capacity_driver_risk"),
         ("lag_boundary", "lag_boundary_risk"),

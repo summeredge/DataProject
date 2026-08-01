@@ -94,9 +94,9 @@ def test_high_collinearity_adds_limited_signal_without_p_value_support():
     assert "conditional_granger_supported" not in row["evidence_reason"]
 
 
-def test_strong_formula_or_poor_data_quality_limits_to_manual_review_only():
+def test_strong_formula_and_severe_data_quality_limit_to_manual_review_only():
     risks = pd.DataFrame([
-        {"variable": "x1", "risk_flags": "strong_formula_leakage;poor_data_quality", "risk_level": "strong"}
+        {"variable": "x1", "risk_flags": "strong_formula_leakage;severe_data_quality", "risk_level": "strong"}
     ])
     conditional = pd.DataFrame([
         {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
@@ -108,7 +108,7 @@ def test_strong_formula_or_poor_data_quality_limits_to_manual_review_only():
     assert row["risk_constraint_level"] == "strong"
     assert row["evidence_level"] == "risk_limited_evidence"
     assert row["integrated_review_decision"] == "manual_review_only"
-    assert "poor_data_quality_risk" in row["integrated_review_reason"]
+    assert "severe_data_quality_risk" in row["integrated_review_reason"]
 
 
 def test_enhanced_validation_summary_increases_evidence_score():
@@ -227,9 +227,10 @@ def test_strong_data_common_capacity_driver_is_not_rejected():
     assert row["integrated_review_decision"] != "not_recommended"
 
 
-def test_hard_downgrade_risk_takes_precedence_over_strong_data():
+@pytest.mark.parametrize("other_risk", ["strong_formula_leakage", "target_leads_variable"])
+def test_severe_data_quality_hard_downgrade_takes_precedence_over_strong_data(other_risk: str):
     risks = pd.DataFrame([
-        {"variable": "x1", "risk_flags": "poor_data_quality", "risk_level": "strong"}
+        {"variable": "x1", "risk_flags": f"severe_data_quality;{other_risk}", "risk_level": "strong"}
     ])
     conditional = pd.DataFrame([
         {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
@@ -242,6 +243,22 @@ def test_hard_downgrade_risk_takes_precedence_over_strong_data():
     assert row["integrated_review_decision"] == "manual_review_only"
     assert row["risk_constraint_level"] == "strong"
     assert "hard_downgrade_risk" in row["integrated_review_reason"]
+
+
+def test_poor_data_quality_is_warning_without_hard_downgrade():
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.1}
+    ])
+    risks = pd.DataFrame([
+        {"variable": "x1", "risk_flags": "poor_data_quality;lag_boundary", "risk_level": "weak"}
+    ])
+
+    row = build_causal_review_evidence(_ranked(risk_flags=""), conditional, risk_flags=risks).iloc[0]
+
+    assert row["integrated_review_decision"] != "manual_review_only"
+    assert row["risk_constraint_level"] == "weak"
+    assert "hard_downgrade_risk" not in row["integrated_review_reason"]
+    assert "poor_data_quality_warning" in row["integrated_review_reason"]
 
 
 def test_low_risk_strong_evidence_keeps_priority_review():

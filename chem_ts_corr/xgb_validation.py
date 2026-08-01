@@ -66,7 +66,7 @@ AUTO_ALLOWED_RECOMMENDATIONS = frozenset(
 )
 _AUTO_EXCLUDED_RISK_TOKEN_ORDER = (
     "strong_formula_leakage",
-    "poor_data_quality",
+    "severe_data_quality",
     "target_leads_variable",
 )
 AUTO_EXCLUDED_CANDIDATE_CLASSES = frozenset(

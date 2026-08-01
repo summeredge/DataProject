@@ -83,25 +83,36 @@ def test_near_miss_zero_residual_is_valid_but_not_strong_signal():
     assert "residual_signal" not in out.loc[0, "near_miss_reason"]
 
 
-def test_near_miss_quality_and_formula_risk_affect_score_and_reason():
+def test_near_miss_quality_risks_keep_or_apply_strong_penalty_as_required():
     lag_scores = pd.DataFrame(
         [
             {"variable": "clean", "lag": 1, "abs_pearson": 0.5, "abs_spearman": 0.4, "direction": "变量领先目标"},
-            {"variable": "risky", "lag": 1, "abs_pearson": 0.5, "abs_spearman": 0.4, "direction": "变量领先目标"},
+            {"variable": "poor", "lag": 1, "abs_pearson": 0.5, "abs_spearman": 0.4, "direction": "变量领先目标"},
+            {"variable": "severe", "lag": 1, "abs_pearson": 0.5, "abs_spearman": 0.4, "direction": "变量领先目标"},
         ]
     )
     lag_quality = pd.DataFrame(
-        [{"variable": "clean", "lag_quality": 0.8}, {"variable": "risky", "lag_quality": 0.8}]
+        [
+            {"variable": "clean", "lag_quality": 0.8},
+            {"variable": "poor", "lag_quality": 0.8},
+            {"variable": "severe", "lag_quality": 0.8},
+        ]
     )
-    risks = pd.DataFrame([{"variable": "risky", "risk_flags": "strong_formula_leakage;poor_data_quality"}])
+    risks = pd.DataFrame([
+        {"variable": "poor", "risk_flags": "poor_data_quality"},
+        {"variable": "severe", "risk_flags": "severe_data_quality"},
+    ])
 
     out = build_near_miss_candidates(lag_scores, pd.DataFrame(), lag_peak_quality=lag_quality, risk_flags=risks)
     clean = out[out["variable"] == "clean"].iloc[0]
-    risky = out[out["variable"] == "risky"].iloc[0]
+    poor = out[out["variable"] == "poor"].iloc[0]
+    severe = out[out["variable"] == "severe"].iloc[0]
 
     assert "clear_lag_peak" in clean["near_miss_reason"]
-    assert "data_or_formula_risk" in risky["near_miss_reason"]
-    assert float(risky["near_miss_score"]) < float(clean["near_miss_score"])
+    assert float(poor["near_miss_score"]) == float(clean["near_miss_score"])
+    assert float(severe["near_miss_score"]) == float(clean["near_miss_score"]) * 0.35
+    assert "poor_data_quality_warning" in poor["near_miss_reason"]
+    assert "severe_data_quality_risk" in severe["near_miss_reason"]
 
 
 def test_near_miss_does_not_mutate_inputs():

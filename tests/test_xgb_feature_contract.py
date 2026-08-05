@@ -77,6 +77,33 @@ def test_all_allowed_recommendations_are_auto_eligible(recommendation: str):
     assert bool(result.loc[0, "auto_eligible"]) is True
 
 
+def test_low_final_score_candidate_with_eligible_recommendation_is_auto_included():
+    summary = _summary(
+        [{
+            "variable": "x",
+            "final_score": 0.29,
+            "final_recommendation": "priority_review",
+            "screening_lag": 2,
+        }]
+    )
+    ranked = _ranked(
+        [{
+            "variable": "x",
+            "final_score": 0.29,
+            "lag": 2,
+            "candidate_class": "upstream_driver_candidate",
+            "recommended_use": "strong_screening_candidate",
+            "risk_flags": "",
+        }]
+    )
+
+    result = build_xgb_candidate_pool(summary, ranked, target="y")
+
+    assert result["variable"].tolist() == ["x"]
+    assert bool(result.loc[0, "auto_eligible"]) is True
+    assert result.loc[0, "screening_lag"] == 2
+
+
 @pytest.mark.parametrize("recommendation", ["manual_review_only", "insufficient_evidence", "not_recommended"])
 def test_disallowed_recommendations_are_auto_excluded(recommendation: str):
     result = build_xgb_candidate_pool(

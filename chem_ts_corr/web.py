@@ -742,6 +742,7 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         base_config,
         extra_variables=extra_variables,
     )
+    _save_secondary_candidate_context(output_dir, variables)
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
@@ -889,6 +890,7 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         base_config,
         extra_variables=extra_variables,
     )
+    _save_secondary_candidate_context(output_dir, variables)
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
@@ -923,6 +925,7 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         base_config,
         extra_variables=extra_variables,
     )
+    _save_secondary_candidate_context(output_dir, variables)
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     target_mask = _target_segment_mask(scaled)
     variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
@@ -974,6 +977,72 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     }
 
 
+SECONDARY_CANDIDATE_CONTEXT_FILENAME = "secondary_candidate_context.csv"
+
+
+def _secondary_candidate_context_path(output_dir: Path) -> Path:
+    return output_dir / SECONDARY_CANDIDATE_CONTEXT_FILENAME
+
+
+def _save_secondary_candidate_context(output_dir: Path, variables: list[str]) -> None:
+    frame = pd.DataFrame({"variable": [v for v in (variables or []) if v]})
+    frame.to_csv(_secondary_candidate_context_path(output_dir), index=False, encoding="utf-8-sig")
+
+
+def _load_secondary_candidate_context(output_dir: Path) -> list[str]:
+    frame = _safe_read_result_csv(_secondary_candidate_context_path(output_dir))
+    if frame.empty or "variable" not in frame.columns:
+        return []
+    return [str(value) for value in frame["variable"].dropna() if str(value)]
+
+
+def _build_causal_review_candidate_table(
+    ranked: pd.DataFrame,
+    variables: list[str],
+    risk_flags: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    from chem_ts_corr.causal_review import build_causal_review_candidates
+
+    candidate_variables = list(dict.fromkeys([v for v in (variables or []) if v]))
+    if not candidate_variables:
+        return build_causal_review_candidates(pd.DataFrame(columns=["variable"]))
+    if ranked.empty or "variable" not in ranked.columns:
+        return build_causal_review_candidates(pd.DataFrame({"variable": candidate_variables}))
+    selected = ranked[ranked["variable"].astype(str).isin(candidate_variables)].copy(deep=True)
+    selected["variable"] = selected["variable"].astype(str)
+    missing_variables = [
+        variable for variable in candidate_variables if variable not in set(selected["variable"])
+    ]
+    if missing_variables:
+        selected = pd.concat(
+            [selected, pd.DataFrame({"variable": missing_variables})],
+            ignore_index=True,
+        )
+    if risk_flags is not None and not risk_flags.empty and "variable" in risk_flags.columns:
+        merge_columns = [
+            column
+            for column in risk_flags.columns
+            if column != "variable" and column not in selected.columns
+        ]
+        if merge_columns:
+            risk_source = risk_flags[["variable", *merge_columns]].copy(deep=True)
+            risk_source["variable"] = risk_source["variable"].astype(str)
+            risk_source = risk_source.drop_duplicates(subset=["variable"], keep="first")
+            selected = selected.merge(
+                risk_source,
+                on="variable",
+                how="left",
+                sort=False,
+                suffixes=("", "__risk"),
+            )
+            for column in merge_columns:
+                risk_column = f"{column}__risk"
+                if risk_column in selected.columns:
+                    selected[column] = selected[column].combine_first(selected[risk_column])
+                    selected = selected.drop(columns=[risk_column])
+    return build_causal_review_candidates(selected)
+
+
 
 def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
@@ -981,10 +1050,9 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     output_dir = _resolve_run_dir(run_id)
     config = _read_run_config(output_dir)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    candidates = _safe_read_result_csv(output_dir / "causal_review_candidates.csv")
     risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
-    if candidates.empty:
-        raise ValueError("请先完成主筛查并生成 causal_review_candidates.csv")
+    if ranked.empty:
+        raise ValueError("请先完成主筛查并生成 ranked_features.csv")
 
     risk_filter = _list_field(form, "risk_flag_filter")
     control_columns = (
@@ -994,6 +1062,10 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         or []
     )
     _ensure_columns_not_excluded(config, control_columns, "三层复核控制列")
+    context_variables = _load_secondary_candidate_context(output_dir)
+    candidate_variables = context_variables or _secondary_variables_from_ranked(ranked, config)
+    candidates = _build_causal_review_candidate_table(ranked, candidate_variables, risk_flags=risk)
+    candidates.to_csv(output_dir / "causal_review_candidates.csv", index=False, encoding="utf-8-sig")
     candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
     scaled = _scaled_frame_for_secondary(config)
     target_mask = _target_segment_mask(scaled)
@@ -1089,13 +1161,13 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
             error_message="missing final_review_summary; run the third-level review first",
         )
 
-    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
-    if recommended.empty:
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    if ranked.empty:
         return _xgb_response_payload(
             run_id,
             output_dir,
             status="invalid_input",
-            error_message="missing recommended_candidates; run the initial screening first",
+            error_message="missing ranked_features; run the initial screening first",
         )
     control_columns = (
         _list_field(form, "control_columns")
@@ -1113,7 +1185,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
         data=data,
         target=config.target,
         final_review_summary=final_summary,
-        ranked_features=recommended,
+        ranked_features=ranked,
         control_columns=control_columns,
         whitelist=whitelist,
         top_n=top_n,

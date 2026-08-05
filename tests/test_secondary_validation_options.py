@@ -183,6 +183,19 @@ def test_secondary_endpoints_build_candidates_from_ranked_features_only():
         assert expected_call in function_body
 
 
+def test_secondary_endpoints_persist_unified_candidate_context():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    for function_name in [
+        "_run_enhanced_screening_response",
+        "_run_granger_response",
+        "_run_model_response",
+    ]:
+        function_start = web_source.index(f"def {function_name}")
+        function_end = web_source.index("\ndef ", function_start + 1)
+        function_body = web_source[function_start:function_end]
+        assert "_save_secondary_candidate_context(output_dir, variables)" in function_body
+
+
 def _patch_secondary_endpoint_mocks(
     monkeypatch,
     tmp_path: Path,
@@ -325,6 +338,218 @@ def test_granger_drops_preprocessing_removed_variables_without_threshold_filteri
     assert float(ranked.loc[2, "final_score"]) < 0.30
     assert float(ranked.loc[3, "final_score"]) < 0.30
     assert float(ranked.loc[4, "final_score"]) < 0.30
+
+
+def test_secondary_endpoint_persists_prefilter_unified_candidate_context(tmp_path, monkeypatch):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    frame = _secondary_scaled_frame()
+    captured: dict[str, object] = {}
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def capture_granger(frame, target, variables, maxlag, **kwargs):
+        captured["variables"] = list(variables)
+        return pd.DataFrame({"variable": variables})
+
+    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
+
+    web._run_granger_response(object())
+
+    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    context = pd.read_csv(tmp_path / "secondary_candidate_context.csv", encoding="utf-8-sig")
+    assert context["variable"].tolist() == expected
+    assert captured["variables"] == expected
+
+
+def test_secondary_candidate_context_overwrites_previous_record(tmp_path, monkeypatch):
+    from chem_ts_corr import web
+
+    web._save_secondary_candidate_context(tmp_path, ["stale_1", "stale_2"])
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    frame = _secondary_scaled_frame()
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def capture_granger(frame, target, variables, maxlag, **kwargs):
+        return pd.DataFrame({"variable": variables})
+
+    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
+
+    web._run_granger_response(object())
+
+    context = pd.read_csv(tmp_path / "secondary_candidate_context.csv", encoding="utf-8-sig")
+    assert context["variable"].tolist() == ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    assert "stale_1" not in context["variable"].tolist()
+
+
+def _write_causal_review_run_files(
+    tmp_path: Path,
+    ranked: pd.DataFrame,
+    risk: pd.DataFrame | None = None,
+    stale_candidates: pd.DataFrame | None = None,
+) -> None:
+    ranked.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
+    if risk is not None:
+        risk.to_csv(tmp_path / "risk_flags.csv", index=False, encoding="utf-8-sig")
+    if stale_candidates is not None:
+        stale_candidates.to_csv(
+            tmp_path / "causal_review_candidates.csv", index=False, encoding="utf-8-sig"
+        )
+
+
+def _patch_causal_review_endpoint_mocks(
+    monkeypatch,
+    tmp_path: Path,
+    config: AnalysisConfig,
+    scaled: pd.DataFrame,
+    form: dict[str, str] | None = None,
+) -> None:
+    from chem_ts_corr import web
+
+    form = dict(form or {})
+    form.setdefault("run_id", "run-1")
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: form)
+    monkeypatch.setattr(
+        web, "_field", lambda form, name, default="": form.get(name, default)
+    )
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+    monkeypatch.setattr(
+        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: scaled
+    )
+    monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
+
+
+def _capture_causal_review_stage(monkeypatch, captured: dict[str, object]) -> None:
+    from chem_ts_corr import web
+
+    def capture_stage(**kwargs):
+        captured["candidates"] = kwargs["causal_review_candidates"]
+        captured["top_n"] = kwargs["top_n"]
+        return {
+            "conditional_granger_scores": pd.DataFrame(),
+            "causal_review_report": pd.DataFrame(),
+            "causal_review_evidence": pd.DataFrame(),
+            "final_review_summary": pd.DataFrame(),
+        }
+
+    monkeypatch.setattr(web, "run_causal_review_stage", capture_stage)
+
+
+def test_causal_review_fallback_builds_top_k_plus_whitelist_and_ignores_stale_candidates(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(
+        tmp_path / "input.csv",
+        "time",
+        "target",
+        tmp_path,
+        top_k=5,
+        force_include_variables=["v8"],
+        max_lag=2,
+    )
+    risk = pd.DataFrame(
+        [
+            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
+            for i in range(1, 11)
+        ]
+    )
+    stale = pd.DataFrame([{"variable": "v9"}])
+    scaled = _secondary_scaled_frame()
+    _write_causal_review_run_files(tmp_path, ranked, risk=risk, stale_candidates=stale)
+    _patch_causal_review_endpoint_mocks(monkeypatch, tmp_path, config, scaled)
+    captured: dict[str, object] = {}
+    _capture_causal_review_stage(monkeypatch, captured)
+
+    web._run_causal_review_response(object())
+
+    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    expected_variables = {"v1", "v2", "v3", "v4", "v5", "v8"}
+    assert set(rebuilt["variable"]) == expected_variables
+    assert "v9" not in set(rebuilt["variable"])
+    assert set(captured["candidates"]["variable"]) == expected_variables
+    assert captured["top_n"] is None
+    pd.testing.assert_frame_equal(
+        pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig"),
+        ranked,
+    )
+
+
+def test_causal_review_uses_persisted_secondary_context_including_extra_variables(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(
+        tmp_path / "input.csv",
+        "time",
+        "target",
+        tmp_path,
+        top_k=5,
+        max_lag=2,
+    )
+    risk = pd.DataFrame(
+        [
+            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
+            for i in range(1, 11)
+        ]
+    )
+    scaled = _secondary_scaled_frame()
+    web._save_secondary_candidate_context(
+        tmp_path, ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    )
+    _write_causal_review_run_files(tmp_path, ranked, risk=risk)
+    _patch_causal_review_endpoint_mocks(monkeypatch, tmp_path, config, scaled)
+    captured: dict[str, object] = {}
+    _capture_causal_review_stage(monkeypatch, captured)
+
+    web._run_causal_review_response(object())
+
+    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    assert set(rebuilt["variable"]) == {"v1", "v2", "v3", "v4", "v5", "v8", "v9"}
+    assert set(captured["candidates"]["variable"]) == {"v1", "v2", "v3", "v4", "v5", "v8", "v9"}
+
+
+def test_causal_review_top_n_truncates_only_after_full_candidate_set(tmp_path, monkeypatch):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(
+        tmp_path / "input.csv",
+        "time",
+        "target",
+        tmp_path,
+        top_k=5,
+        force_include_variables=["v8"],
+        max_lag=2,
+    )
+    risk = pd.DataFrame(
+        [
+            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
+            for i in range(1, 11)
+        ]
+    )
+    scaled = _secondary_scaled_frame()
+    _write_causal_review_run_files(tmp_path, ranked, risk=risk)
+    _patch_causal_review_endpoint_mocks(
+        monkeypatch, tmp_path, config, scaled, form={"top_n": "3"}
+    )
+    captured: dict[str, object] = {}
+    _capture_causal_review_stage(monkeypatch, captured)
+
+    web._run_causal_review_response(object())
+
+    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
+    assert len(rebuilt) == 6
+    assert captured["top_n"] == 3
+    assert len(captured["candidates"]) == 6
 
 
 def test_secondary_lag_search_changed_normalizes_resample_rule():

@@ -87,7 +87,6 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     )
     before_final = final.copy(deep=True)
     before_ranked = ranked.copy(deep=True)
-    before_recommended = recommended.reset_index(drop=True)
     captured: dict[str, object] = {}
 
     def fake_service(**kwargs):
@@ -134,9 +133,10 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert captured["whitelist"] == ["manual_a", "manual_b"]
     assert captured["control_columns"] == ["control"]
     pd.testing.assert_frame_equal(captured["final_review_summary"], before_final)
-    pd.testing.assert_frame_equal(captured["ranked_features"], before_recommended)
-    assert captured["ranked_features"]["variable"].tolist() == ["candidate_a", "candidate_b"]
-    assert "control_high_score" not in set(captured["ranked_features"]["variable"])
+    pd.testing.assert_frame_equal(captured["ranked_features"], before_ranked)
+    assert captured["ranked_features"]["variable"].tolist() == [
+        "control_high_score", "candidate_a", "candidate_b",
+    ]
     pd.testing.assert_frame_equal(pd.read_csv(run_dir / "ranked_features.csv"), before_ranked)
     assert payload["xgbModelSummary"][0]["model_name"] == "M2"
     assert payload["xgbCandidateUplift"][0]["variable"] == "x"
@@ -147,11 +147,11 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert "xgb_validation/xgb_validation_summary.json" in download_names
 
 
-def test_missing_recommended_candidates_is_rejected_before_loading_or_service_call(
+def test_missing_ranked_features_is_rejected_before_loading_or_service_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     run_dir, _, _, _ = _write_run(tmp_path)
-    (run_dir / "recommended_candidates.csv").unlink()
+    (run_dir / "ranked_features.csv").unlink()
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
     monkeypatch.setattr(
@@ -162,15 +162,15 @@ def test_missing_recommended_candidates_is_rejected_before_loading_or_service_ca
     payload = web._run_xgb_validation_response(object())
 
     assert payload["status"] == "invalid_input"
-    assert "recommended_candidates" in payload["error_message"]
+    assert "ranked_features" in payload["error_message"]
 
 
-def test_xgb_web_uses_recommended_candidates_as_priority_source():
+def test_xgb_web_uses_full_ranked_features_for_initial_screening_details():
     source = inspect.getsource(web._run_xgb_validation_response)
 
-    assert '_safe_read_result_csv(output_dir / "recommended_candidates.csv")' in source
-    assert "ranked_features=recommended" in source
-    assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' not in source
+    assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' in source
+    assert "ranked_features=ranked" in source
+    assert "recommended_candidates.csv" not in source
 
 
 def test_missing_final_review_is_rejected_before_loading_or_service_call(

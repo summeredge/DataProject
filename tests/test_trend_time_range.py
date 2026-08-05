@@ -27,6 +27,32 @@ def _write_upload(
     return file_id, times
 
 
+def _write_multi_upload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    periods: int,
+    frequency: str,
+    variable_count: int,
+) -> tuple[str, pd.DatetimeIndex]:
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    file_id = "0123456789abcdef0123456789abcdef"
+    times = pd.date_range("2025-01-01", periods=periods, freq=frequency)
+    frame = {"time": times}
+    for index in range(1, variable_count + 1):
+        frame[f"v{index}"] = [value + index * 1000 for value in range(periods)]
+    pd.DataFrame(frame).to_csv(
+        uploads / f"{file_id}.csv", index=False, encoding="utf-8-sig"
+    )
+    monkeypatch.setattr(web, "UPLOADS_DIR", uploads)
+    return file_id, times
+
+
+def _multi_variables(count: int) -> str:
+    return ",".join(f"v{index}" for index in range(1, count + 1))
+
+
 def _params(file_id: str, max_points: int, **overrides: str) -> dict[str, list[str]]:
     query = {
         "file_id": file_id,
@@ -133,6 +159,99 @@ def test_auto_range_falls_back_to_existing_bounds_without_sampling_interval():
     assert web._trend_time_bounds(
         pd.RangeIndex(12), start, end, max_points=5000, mode="auto"
     ) == (start, end)
+
+
+def test_trend_response_accepts_eight_variables(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=120, frequency="1min", variable_count=8
+    )
+
+    response = web._trend_response(
+        _params(file_id, 100, variables=_multi_variables(8))
+    )
+
+    assert [series["name"] for series in response["series"]] == [
+        f"v{index}" for index in range(1, 9)
+    ]
+
+
+def test_trend_response_rejects_nine_variables(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=120, frequency="1min", variable_count=9
+    )
+
+    with pytest.raises(ValueError, match="^最多选择 8 个趋势变量$"):
+        web._trend_response(_params(file_id, 100, variables=_multi_variables(9)))
+
+
+def test_eight_variables_30241_points_keep_all_time_points(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=30241, frequency="1min", variable_count=8
+    )
+
+    response = web._trend_response(
+        _params(file_id, 30241, variables=_multi_variables(8))
+    )
+
+    assert response["rows"] == 30241
+    assert response["max_points"] == 30241
+    for series in response["series"]:
+        assert len(series["points"]) == 30241
+
+
+def test_eight_variables_50000_points_are_capped_at_37500(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=50000, frequency="1min", variable_count=8
+    )
+
+    response = web._trend_response(
+        _params(file_id, 50000, variables=_multi_variables(8))
+    )
+
+    assert response["rows"] == 37500
+    assert response["max_points"] == 37500
+    for series in response["series"]:
+        assert len(series["points"]) == 37500
+
+
+def test_four_variables_still_allow_50000_points(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=50000, frequency="1min", variable_count=4
+    )
+
+    response = web._trend_response(
+        _params(file_id, 50000, variables=_multi_variables(4))
+    )
+
+    assert response["rows"] == 50000
+    assert response["max_points"] == 50000
+    for series in response["series"]:
+        assert len(series["points"]) == 50000
+
+
+def test_sampled_curves_share_identical_time_coordinates(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=50000, frequency="1min", variable_count=8
+    )
+
+    response = web._trend_response(
+        _params(file_id, 50000, variables=_multi_variables(8))
+    )
+
+    first_times = [point["x"] for point in response["series"][0]["points"]]
+    assert len(first_times) == 37500
+    for series in response["series"][1:]:
+        assert [point["x"] for point in series["points"]] == first_times
+
+
+def test_duplicate_trend_variables_return_single_series(tmp_path, monkeypatch):
+    file_id, _ = _write_multi_upload(
+        tmp_path, monkeypatch, periods=120, frequency="1min", variable_count=2
+    )
+
+    response = web._trend_response(_params(file_id, 100, variables="v1,v2,v1"))
+
+    assert [series["name"] for series in response["series"]] == ["v1", "v2"]
 
 
 def test_frontend_tracks_auto_and_manual_trend_time_modes():

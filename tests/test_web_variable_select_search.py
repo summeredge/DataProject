@@ -20,12 +20,39 @@ def test_all_variable_single_and_multi_selectors_use_search():
         "segmentColumn",
         "trendVar1",
         "trendVar4",
+        "trendVar8",
         "scatterX1",
         "scatterY3",
     ]:
         assert f'el("{select_id}")' in INDEX_HTML
     assert INDEX_HTML.count("searchableMultiOptions(box);") == 4
     assert "function clearVariableFilters" in INDEX_HTML
+
+
+def test_trend_variable_selectors_cover_eight_slots_everywhere():
+    load_body = INDEX_HTML.split("async function loadColumns()", 1)[1].split(
+        "async function uploadFile", 1
+    )[0]
+    refresh_body = INDEX_HTML.split("function refreshColumnSelectors()", 1)[1].split(
+        "function setSecondaryIncludeSelection", 1
+    )[0]
+    draw_body = INDEX_HTML.split("async function drawTrend()", 1)[1].split(
+        "async function drawScatterMatrix()", 1
+    )[0]
+    reset_body = INDEX_HTML.split("function reset()", 1)[1].split(
+        "function updateDrawButtons", 1
+    )[0]
+    open_body = INDEX_HTML.split("function openTrendForCandidate", 1)[1].split(
+        "function setSelectValueIfExists", 1
+    )[0]
+
+    for index in range(1, 9):
+        assert f"trendVar{index}" in refresh_body
+        assert f'el("trendVar{index}").value' in draw_body
+        assert f'el("trendVar{index}").innerHTML = ""' in reset_body
+    for index in range(5, 9):
+        assert f'fillSelect(el("trendVar{index}")' in load_body
+        assert f'setSelectValueIfExists("trendVar{index}", "")' in open_body
 
 
 def test_variable_select_layout_keeps_rows_aligned():

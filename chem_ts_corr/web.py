@@ -103,6 +103,7 @@ SCALED_FRAME_CACHE_LOCK = threading.Lock()
 MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
+MAX_TREND_TOTAL_POINTS = 300000
 INITIAL_SCREENING_COLUMNS = (
     "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
@@ -1711,6 +1712,8 @@ def _clear_scaled_frame_cache() -> None:
 def _chart_frame_from_params(
     params: dict[str, list[str]],
     variables: list[str],
+    *,
+    total_points_cap: int | None = None,
 ) -> tuple[pd.DataFrame, int, int]:
     file_id = _single(params, "file_id")
     encoding = _single(params, "encoding", "utf-8-sig")
@@ -1737,6 +1740,8 @@ def _chart_frame_from_params(
     raw = load_timeseries_csv(input_path, time_column, encoding=resolved_encoding)
     raw = drop_excluded_columns(raw, excluded_columns)
     max_points = min(100000, max(100, int(_single(params, "trend_max_points", "10000") or 10000)))
+    if total_points_cap is not None and variables:
+        max_points = min(max_points, total_points_cap // len(variables))
     start_value = _single(params, "trend_start", "")
     end_value = _single(params, "trend_end", "")
     start_time = pd.to_datetime(start_value) if start_value else None
@@ -1824,12 +1829,17 @@ def _trend_time_bounds(
 
 def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
     variables = [value for value in _single(params, "variables").split(",") if value]
+    variables = list(dict.fromkeys(variables))
     if not variables:
         raise ValueError("请选择至少一个趋势变量")
-    if len(variables) > 4:
-        raise ValueError("最多选择 4 个趋势变量")
+    if len(variables) > 8:
+        raise ValueError("最多选择 8 个趋势变量")
 
-    transformed, raw_rows, max_points = _chart_frame_from_params(params, variables)
+    transformed, raw_rows, max_points = _chart_frame_from_params(
+        params,
+        variables,
+        total_points_cap=MAX_TREND_TOTAL_POINTS,
+    )
     columns = [column for column in variables if column in transformed.columns]
     if not columns:
         raise ValueError("选择的趋势变量不是有效数值列")
@@ -2448,7 +2458,7 @@ INDEX_HTML = r"""<!doctype html>
     .lag-profile-summary strong { display:block; margin-bottom:3px; color:var(--muted); font-size:var(--font-xs); }
     .lag-profile-message { margin:0; color:var(--text); font-size:var(--font-sm); }
     .lag-profile-warning { margin:0; color:var(--warn); font-size:var(--font-sm); font-weight:650; }
-    .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)) 150px auto; gap:10px; align-items:end; }
+    .chart-controls { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; align-items:end; }
     .trend-options { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr)); gap:10px; align-items:end; }
     .scatter-matrix-section { display:grid; gap:12px; margin-top:10px; }
     .scatter-matrix-controls { display:grid; grid-template-columns:repeat(3, minmax(150px, 1fr)); gap:10px; align-items:end; }
@@ -2548,8 +2558,8 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report table { width:100%; min-width:0; border-collapse:collapse; font-size:var(--font-base); }
     .markdown-report th, .markdown-report td { white-space:normal; border:1px solid var(--line); }
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
-    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
-    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } }
+    @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } .chart-controls { grid-template-columns:repeat(2,minmax(120px,1fr)); } }
+    @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } .chart-controls { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -2694,6 +2704,10 @@ INDEX_HTML = r"""<!doctype html>
           <label>数据 2<select id="trendVar2"></select></label>
           <label>数据 3<select id="trendVar3"></select></label>
           <label>数据 4<select id="trendVar4"></select></label>
+          <label>数据 5<select id="trendVar5"></select></label>
+          <label>数据 6<select id="trendVar6"></select></label>
+          <label>数据 7<select id="trendVar7"></select></label>
+          <label>数据 8<select id="trendVar8"></select></label>
           <label>Y 轴
             <select id="trendAxisMode">
               <option value="shared">同一 Y 轴</option>
@@ -2944,7 +2958,7 @@ let llmReportMarkdown = "";
 let lastModalTrigger = null;
 let tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
 const el = (id) => document.getElementById(id);
-const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d"];
+const trendColors = ["#176b87", "#c2410c", "#6d28d9", "#15803d", "#b91c1c", "#ca8a04", "#a21caf", "#475569"];
 const llmPromptEndpoint = "/api/llm_prompt";
 let lastTrendSeries = [];
 let lastTrendAxisMode = "shared";
@@ -3160,7 +3174,7 @@ function refreshColumnSelectors() {
   const excluded = new Set(getExcludedColumnSelection());
   const available = recognizedNumericColumns.filter((name) => !excluded.has(name));
   const current = Object.fromEntries(
-    ["targetColumn", "segmentColumn", "trendVar1", "trendVar2", "trendVar3", "trendVar4", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"]
+    ["targetColumn", "segmentColumn", "trendVar1", "trendVar2", "trendVar3", "trendVar4", "trendVar5", "trendVar6", "trendVar7", "trendVar8", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"]
       .map((id) => [id, el(id).value])
   );
   const capacity = getCapacitySelection().filter((name) => !excluded.has(name));
@@ -3169,7 +3183,7 @@ function refreshColumnSelectors() {
 
   restoreSelect("targetColumn", available, current.targetColumn);
   restoreSelect("segmentColumn", available, current.segmentColumn, true, "不分段");
-  ["trendVar1", "trendVar2", "trendVar3", "trendVar4", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => {
+  ["trendVar1", "trendVar2", "trendVar3", "trendVar4", "trendVar5", "trendVar6", "trendVar7", "trendVar8", "scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => {
     restoreSelect(id, available, current[id], true, "不选择");
   });
   fillCapacityOptions(available);
@@ -3265,6 +3279,10 @@ async function loadColumns() {
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar4"), data.numericColumns, true, "不选择");
+  fillSelect(el("trendVar5"), data.numericColumns, true, "不选择");
+  fillSelect(el("trendVar6"), data.numericColumns, true, "不选择");
+  fillSelect(el("trendVar7"), data.numericColumns, true, "不选择");
+  fillSelect(el("trendVar8"), data.numericColumns, true, "不选择");
   fillSelect(el("scatterX1"), data.numericColumns, true, "不选择");
   fillSelect(el("scatterX2"), data.numericColumns, true, "不选择");
   fillSelect(el("scatterX3"), data.numericColumns, true, "不选择");
@@ -4138,9 +4156,8 @@ function appendChartQueryParams(params) {
 
 async function drawTrend() {
   try {
-    const variables = [el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value].filter(Boolean);
+    const variables = Array.from(new Set([el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value, el("trendVar5").value, el("trendVar6").value, el("trendVar7").value, el("trendVar8").value].filter(Boolean)));
     if (!variables.length) return setStatus("请至少选择一个趋势变量。");
-    if (new Set(variables).size !== variables.length) return setStatus("趋势变量不能重复选择。");
     const params = new URLSearchParams();
     appendChartQueryParams(params);
     params.set("time_range_mode", trendAutoWindowActive ? "auto" : "manual");
@@ -5761,6 +5778,10 @@ function openTrendForCandidate(rowOrVariable, maybeLag) {
   setSelectValueIfExists("trendVar2", variable);
   setSelectValueIfExists("trendVar3", "");
   setSelectValueIfExists("trendVar4", "");
+  setSelectValueIfExists("trendVar5", "");
+  setSelectValueIfExists("trendVar6", "");
+  setSelectValueIfExists("trendVar7", "");
+  setSelectValueIfExists("trendVar8", "");
   const lagText = displayCellValue("screening_lag", lag);
   const boundaryHint = row && row.lag_boundary_hint ? ` ${displayCellValue("lag_boundary_hint", row.lag_boundary_hint)}` : "";
   const hint = `当前趋势复核变量：候选 ${variable || "-"}，目标 ${target || "-"}。主筛查滞后：${lagText || "-"}。${boundaryHint}请人工观察候选变量变化后，目标变量是否在相应滞后附近出现方向合理的响应。该观察仅用于人工复核，不是因果结论。`;
@@ -6616,6 +6637,10 @@ function reset() {
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";
   el("trendVar4").innerHTML = "";
+  el("trendVar5").innerHTML = "";
+  el("trendVar6").innerHTML = "";
+  el("trendVar7").innerHTML = "";
+  el("trendVar8").innerHTML = "";
   ["scatterX1", "scatterX2", "scatterX3", "scatterY1", "scatterY2", "scatterY3"].forEach((id) => { if (el(id)) el(id).value = ""; });
   for (const select of document.querySelectorAll(".variable-select-native")) {
     const options = document.querySelector(`[data-select-options-for="${select.id}"]`);

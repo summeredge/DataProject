@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from chem_ts_corr.web import INDEX_HTML
 
 
@@ -16,6 +19,62 @@ def test_trend_stats_grid_is_fixed_four_columns_on_desktop():
     assert "grid-template-columns:repeat(4, minmax(0, 1fr))" in trend_stats_rule
     assert "auto-fit" not in trend_stats_rule
     assert "auto-fill" not in trend_stats_rule
+
+
+def test_trend_controls_layout_is_four_columns_on_desktop_and_responsive():
+    controls_rule = _css_rule(".chart-controls")
+
+    assert "display:grid" in controls_rule
+    assert "grid-template-columns:repeat(4,minmax(120px,1fr))" in controls_rule
+    assert "@media (max-width:900px)" in INDEX_HTML
+    assert ".chart-controls { grid-template-columns:repeat(2,minmax(120px,1fr)); }" in INDEX_HTML
+    assert ".chart-controls { grid-template-columns:1fr; }" in INDEX_HTML
+
+
+def test_max_trend_total_points_constant_limits_trend_response():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+
+    assert "MAX_TREND_TOTAL_POINTS = 300000" in web_source
+    trend_source = web_source.split("def _trend_response", 1)[1].split(
+        "def _finite_json_number", 1
+    )[0]
+    assert "total_points_cap=MAX_TREND_TOTAL_POINTS" in trend_source
+
+
+def test_trend_colors_extend_to_eight_distinct_colors_with_stable_first_four():
+    match = re.search(r"const trendColors = \[([^\]]+)\];", INDEX_HTML)
+    assert match is not None
+    colors = re.findall(r'"([^"]+)"', match.group(1))
+
+    assert len(colors) == 8
+    assert len(set(colors)) == 8
+    assert colors[:4] == ["#176b87", "#c2410c", "#6d28d9", "#15803d"]
+
+
+def test_trend_legend_stats_and_curve_share_series_color():
+    chart_source = INDEX_HTML.split("function renderTrendChart", 1)[1].split(
+        "function trendChartWidth", 1
+    )[0]
+    legend_source = INDEX_HTML.split("function renderTrendChart", 1)[1].split(
+        "function trendChartWidth", 1
+    )[0]
+    stats_source = _function_source("renderTrendStats", "formatCountRatio")
+
+    assert 'stroke="${trendColors[idx % trendColors.length]}"' in chart_source
+    assert 'style="background:${trendColors[idx % trendColors.length]}"' in legend_source
+    assert "renderTrendHistogram(item.points || [], trendColors[index % trendColors.length], item.name)" in stats_source
+
+
+def test_trend_stats_renders_all_returned_series_without_truncation():
+    stats_source = _function_source("renderTrendStats", "formatCountRatio")
+
+    assert "series.map((item, index)" in stats_source
+    assert "series.slice" not in stats_source
+
+
+def test_trend_page_contains_eight_variable_selectors():
+    for index in range(1, 9):
+        assert f'<label>数据 {index}<select id="trendVar{index}"></select></label>' in INDEX_HTML
 
 
 def test_trend_stats_and_axis_helpers_are_present():
@@ -174,4 +233,4 @@ def test_existing_trend_stats_guards_remain_present():
     assert "if (!series.length)" in render_source
     assert "clearTrendStats()" in render_source
     assert 'node.className = "trend-stats empty"' in clear_source
-    assert '[el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value]' in INDEX_HTML
+    assert 'el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value, el("trendVar5").value, el("trendVar6").value, el("trendVar7").value, el("trendVar8").value' in INDEX_HTML

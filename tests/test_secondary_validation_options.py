@@ -15,11 +15,11 @@ from chem_ts_corr.web import (
 )
 
 
-def test_secondary_variables_include_topk_forced_and_extra():
+def test_secondary_variables_take_top_k_then_forced_then_extra():
     ranked = pd.DataFrame(
         {
             "variable": ["A", "B", "C", "D"],
-            "force_included": [False, True, False, False],
+            "final_score": [0.1, 0.9, 0.5, 0.3],
         }
     )
     config = AnalysisConfig(
@@ -37,11 +37,16 @@ def test_secondary_variables_include_topk_forced_and_extra():
         extra_variables=["X", "B", "Y"],
     )
 
-    assert variables == ["A", "B", "C", "D", "X", "Y"]
+    assert variables == ["B", "C", "Z", "X", "Y"]
 
 
-def test_secondary_variables_include_config_forced_when_no_force_column():
-    ranked = pd.DataFrame({"variable": ["A", "B", "C"]})
+def test_secondary_variables_append_config_forced_outside_top_k():
+    ranked = pd.DataFrame(
+        {
+            "variable": ["A", "B", "C"],
+            "final_score": [0.3, 0.2, 0.1],
+        }
+    )
     config = AnalysisConfig(
         input_path=Path("dummy.csv"),
         time_column="time",
@@ -57,23 +62,269 @@ def test_secondary_variables_include_config_forced_when_no_force_column():
         extra_variables=["D", "A"],
     )
 
-    assert variables == ["A", "B", "C", "D"]
+    assert variables == ["A", "C", "D"]
 
 
-def test_secondary_variables_follow_candidate_priority_rank():
-    recommended = pd.DataFrame(
+def test_secondary_variables_order_by_final_score_descending():
+    ranked = pd.DataFrame(
         {
-            "variable": ["pool_first", "priority_first", "priority_second"],
-            "candidate_pool_rank": [1, 3, 2],
-            "candidate_priority_rank": [3, 1, 2],
-            "force_included": [False, False, False],
+            "variable": ["low", "high", "mid"],
+            "final_score": [0.2, 0.9, 0.5],
         }
     )
     config = AnalysisConfig(Path("dummy.csv"), "time", "Y", Path("out"))
 
-    variables = _secondary_variables_from_ranked(recommended, config)
+    variables = _secondary_variables_from_ranked(ranked, config)
 
-    assert variables == ["priority_first", "priority_second", "pool_first"]
+    assert variables == ["high", "mid", "low"]
+
+
+def _secondary_ranked_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "variable": [f"v{i}" for i in range(1, 11)],
+            "final_score": [0.60, 0.45, 0.29, 0.28, 0.27, 0.26, 0.25, 0.24, 0.23, 0.22],
+            "lag": [1] * 10,
+        }
+    )
+
+
+def _secondary_endpoint_config(tmp_path: Path) -> AnalysisConfig:
+    return AnalysisConfig(
+        input_path=tmp_path / "input.csv",
+        time_column="time",
+        target="target",
+        output_dir=tmp_path,
+        max_lag=2,
+        top_k=5,
+        force_include_variables=["v8"],
+        max_model_features=123,
+    )
+
+
+def _secondary_scaled_frame(columns: list[str] | None = None) -> pd.DataFrame:
+    columns = columns or [f"v{i}" for i in range(1, 11)]
+    return pd.DataFrame(
+        {
+            "target": np.arange(60, dtype=float),
+            **{name: np.arange(60, dtype=float) + i for i, name in enumerate(columns, start=1)},
+        }
+    )
+
+
+def test_secondary_variables_top_k_ignores_min_score_threshold():
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(Path("dummy.csv"), "time", "target", Path("out"), top_k=5)
+
+    variables = _secondary_variables_from_ranked(ranked, config)
+
+    assert variables == ["v1", "v2", "v3", "v4", "v5"]
+    assert float(ranked.loc[2, "final_score"]) < 0.30
+    assert float(ranked.loc[4, "final_score"]) < 0.30
+
+
+def test_secondary_variables_whitelist_outside_top_k_appended_without_replacing_top_k():
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(
+        Path("dummy.csv"),
+        "time",
+        "target",
+        Path("out"),
+        top_k=5,
+        force_include_variables=["v8"],
+    )
+
+    variables = _secondary_variables_from_ranked(ranked, config)
+
+    assert variables == ["v1", "v2", "v3", "v4", "v5", "v8"]
+    assert len(variables) == 6
+    assert variables[:5] == ["v1", "v2", "v3", "v4", "v5"]
+
+
+def test_secondary_variables_extra_outside_top_k_appended_and_deduplicated():
+    ranked = _secondary_ranked_frame()
+    config = AnalysisConfig(
+        Path("dummy.csv"),
+        "time",
+        "target",
+        Path("out"),
+        top_k=5,
+        force_include_variables=["v8"],
+    )
+
+    variables = _secondary_variables_from_ranked(
+        ranked, config, extra_variables=["v9", "v1", "v8", "v9"]
+    )
+
+    assert variables == ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    assert variables.count("v8") == 1
+    assert variables.count("v9") == 1
+
+
+def test_secondary_endpoints_build_candidates_from_ranked_features_only():
+    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
+    expected_call = (
+        "variables = _secondary_variables_from_ranked(\n"
+        "        ranked,\n"
+        "        base_config,\n"
+        "        extra_variables=extra_variables,\n"
+        "    )"
+    )
+    for function_name in [
+        "_run_enhanced_screening_response",
+        "_run_granger_response",
+        "_run_model_response",
+    ]:
+        function_start = web_source.index(f"def {function_name}")
+        function_end = web_source.index("\ndef ", function_start + 1)
+        function_body = web_source[function_start:function_end]
+        assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' in function_body
+        assert "recommended_candidates.csv" not in function_body
+        assert expected_call in function_body
+
+
+def _patch_secondary_endpoint_mocks(
+    monkeypatch,
+    tmp_path: Path,
+    ranked: pd.DataFrame,
+    config: AnalysisConfig,
+    frame: pd.DataFrame,
+):
+    from chem_ts_corr import web
+
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: {})
+    monkeypatch.setattr(web, "_field", lambda form, name: "run-1")
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+    monkeypatch.setattr(web, "_secondary_config_from_form", lambda base, form: config)
+    monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: ["v9"])
+    monkeypatch.setattr(
+        web, "_safe_read_result_csv", lambda path: ranked
+    )
+    monkeypatch.setattr(
+        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: frame
+    )
+    monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
+
+
+def test_enhanced_screening_receives_top_k_whitelist_and_extra_variables(tmp_path, monkeypatch):
+    from chem_ts_corr import screening, web
+
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    frame = _secondary_scaled_frame()
+    captured: dict[str, object] = {}
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def capture_evidence(frame, target, variables, max_lag, **kwargs):
+        captured["variables"] = list(variables)
+        return {}, {}
+
+    monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_evidence)
+    monkeypatch.setattr(
+        screening, "model_lift_scores", lambda *args, **kwargs: pd.DataFrame({"variable": []})
+    )
+    monkeypatch.setattr(
+        screening, "rolling_corr_scores", lambda *args, **kwargs: pd.DataFrame({"variable": []})
+    )
+
+    web._run_enhanced_screening_response(object())
+
+    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    assert captured["variables"] == expected
+    assert captured["variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
+
+
+def test_granger_receives_top_k_whitelist_and_extra_variables(tmp_path, monkeypatch):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    frame = _secondary_scaled_frame()
+    captured: dict[str, object] = {}
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def capture_granger(frame, target, variables, maxlag, **kwargs):
+        captured["variables"] = list(variables)
+        return pd.DataFrame({"variable": variables})
+
+    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
+
+    web._run_granger_response(object())
+
+    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    assert captured["variables"] == expected
+    assert captured["variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
+
+
+def test_model_receives_top_k_whitelist_and_extra_variables_with_max_features(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    frame = _secondary_scaled_frame()
+    captured: dict[str, object] = {}
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def read_result_csv(path):
+        if path.name == "risk_flags.csv":
+            return pd.DataFrame()
+        return ranked
+
+    monkeypatch.setattr(web, "_safe_read_result_csv", read_result_csv)
+
+    def capture_fit(frame, target, max_lag, candidate_variables, max_features, **kwargs):
+        captured["candidate_variables"] = list(candidate_variables)
+        captured["max_features"] = max_features
+        return pd.DataFrame({"variable": []}), {}
+
+    monkeypatch.setattr(web, "fit_explainable_model", capture_fit)
+    monkeypatch.setattr(
+        web,
+        "build_model_variable_importance",
+        lambda *args, **kwargs: pd.DataFrame({"variable": []}),
+    )
+    monkeypatch.setattr(
+        web,
+        "build_model_discovered_candidates",
+        lambda *args, **kwargs: pd.DataFrame({"variable": []}),
+    )
+
+    web._run_model_response(object())
+
+    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
+    assert captured["candidate_variables"] == expected
+    assert captured["candidate_variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
+    assert captured["max_features"] == 123
+
+
+def test_granger_drops_preprocessing_removed_variables_without_threshold_filtering(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    ranked = _secondary_ranked_frame()
+    config = _secondary_endpoint_config(tmp_path)
+    # v3 is removed during preprocessing; other below-0.30 Top-K variables must survive.
+    frame = _secondary_scaled_frame(columns=["v1", "v2", "v4", "v5", "v8", "v9"])
+    captured: dict[str, object] = {}
+    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
+
+    def capture_granger(frame, target, variables, maxlag, **kwargs):
+        captured["variables"] = list(variables)
+        return pd.DataFrame({"variable": variables})
+
+    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
+
+    web._run_granger_response(object())
+
+    assert captured["variables"] == ["v1", "v2", "v4", "v5", "v8", "v9"]
+    assert float(ranked.loc[2, "final_score"]) < 0.30
+    assert float(ranked.loc[3, "final_score"]) < 0.30
+    assert float(ranked.loc[4, "final_score"]) < 0.30
 
 
 def test_secondary_lag_search_changed_normalizes_resample_rule():

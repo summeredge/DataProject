@@ -293,9 +293,9 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
     assert sorted(recommended["candidate_pool_rank"].tolist()) == list(range(1, len(recommended) + 1))
     assert recommended["candidate_priority_rank"].tolist() == list(range(1, len(recommended) + 1))
     assert [row["variable"] for row in payload["recommendedCandidates"]] == recommended["variable"].tolist()
-    assert _secondary_variables_from_ranked(recommended, config=AnalysisConfig(
-        tmp_path / "input.csv", "time", "target", tmp_path
-    )) == recommended["variable"].tolist()
+    assert _secondary_variables_from_ranked(ranked, config=AnalysisConfig(
+        tmp_path / "input.csv", "time", "target", tmp_path, top_k=15
+    )) == ranked["variable"].tolist()
     source_values = {"raw_only", "residual_only", "raw_and_residual", "force_included", "control_reference"}
     assert set(recommended["candidate_source"]) <= source_values
     assert {row["candidate_source"] for row in payload["recommendedCandidates"]} <= source_values

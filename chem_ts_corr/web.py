@@ -736,17 +736,14 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
     if ranked.empty:
         raise ValueError("请先完成主筛查并生成 ranked_features.csv")
-    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
-    if recommended.empty:
-        raise ValueError("请先完成主筛查并生成 recommended_candidates.csv")
 
     variables = _secondary_variables_from_ranked(
-        recommended,
+        ranked,
         base_config,
         extra_variables=extra_variables,
     )
     if not variables:
-        raise ValueError("recommended_candidates.csv 中没有可运行增强筛选的候选变量")
+        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
     scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
     target_mask = _target_segment_mask(scaled)
@@ -885,11 +882,10 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     secondary_config = _secondary_config_from_form(base_config, form)
     extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
-    if ranked.empty or recommended.empty:
+    if ranked.empty:
         raise ValueError("请先完成主筛查")
     variables = _secondary_variables_from_ranked(
-        recommended,
+        ranked,
         base_config,
         extra_variables=extra_variables,
     )
@@ -920,11 +916,10 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     secondary_config = _secondary_config_from_form(base_config, form)
     extra_variables = _secondary_extra_variables_from_form(form)
     ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    recommended = _safe_read_result_csv(output_dir / "recommended_candidates.csv")
-    if ranked.empty or recommended.empty:
+    if ranked.empty:
         raise ValueError("请先完成主筛查")
     variables = _secondary_variables_from_ranked(
-        recommended,
+        ranked,
         base_config,
         extra_variables=extra_variables,
     )
@@ -1278,12 +1273,21 @@ def _secondary_variables_from_ranked(
     )
     if ranked.empty or "variable" not in ranked.columns:
         return list(dict.fromkeys([v for v in (extra_variables or []) if v]))
-    ordered = _order_recommended_candidates(ranked)
-    top = ordered["variable"].astype(str).tolist()
-    if "force_included" in ranked.columns:
-        forced = ordered[ordered["force_included"].astype(bool)]["variable"].astype(str).tolist()
-    else:
-        forced = [v for v in (config.force_include_variables or []) if v]
+    ordered = ranked.copy()
+    ordered["variable"] = ordered["variable"].astype(str)
+    ordered["_secondary_final_score"] = pd.to_numeric(
+        ordered.get("final_score", pd.Series(float("nan"), index=ordered.index)),
+        errors="coerce",
+    )
+    ordered = ordered.sort_values(
+        "_secondary_final_score",
+        ascending=False,
+        na_position="last",
+        kind="stable",
+    )
+    top_k = max(0, int(config.top_k or 0))
+    top = ordered["variable"].tolist()[:top_k]
+    forced = [v for v in (config.force_include_variables or []) if v]
     extra = [v for v in (extra_variables or []) if v]
     return list(dict.fromkeys(top + forced + extra))
 

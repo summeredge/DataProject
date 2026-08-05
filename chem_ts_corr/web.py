@@ -4419,10 +4419,10 @@ function renderTrendChart(series, axisMode) {
     return;
   }
   const width = trendChartWidth(container), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
-  const maxLen = Math.max(...series.map((item) => item.points.length));
-  const allValues = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value)));
-  const sharedRange = valueRange(allValues);
-  const ranges = series.map((item) => axisMode === "shared" ? sharedRange : valueRange(item.points.map((point) => Number(point.y)).filter((value) => Number.isFinite(value))));
+  let maxLen = 0;
+  for (const item of series) maxLen = Math.max(maxLen, item.points.length);
+  const sharedRange = trendSharedRange(series);
+  const ranges = series.map((item) => axisMode === "shared" ? sharedRange : valueRange(item.points));
   const x = (index) => pad.left + (index / Math.max(1, maxLen - 1)) * (width - pad.left - pad.right);
   const y = (value, range) => pad.top + (1 - (value - range.min) / Math.max(1e-12, range.max - range.min)) * (height - pad.top - pad.bottom);
   const tickLineEnd = width - pad.right;
@@ -4468,12 +4468,44 @@ function trendChartWidth(container) {
   return Math.max(320, measured || 960);
 }
 
-function valueRange(values) {
-  if (!values.length) return { min: 0, max: 1 };
-  let min = Math.min(...values), max = Math.max(...values);
+function trendRangeFromValues(count, min, max) {
+  if (!count) return { min: 0, max: 1 };
   if (min === max) { min -= 1; max += 1; }
   const margin = (max - min) * 0.08;
   return { min: min - margin, max: max + margin };
+}
+
+function trendFiniteValue(point) {
+  if (point === null || point === undefined) return NaN;
+  const raw = point.y;
+  if (raw === null || raw === undefined) return NaN;
+  return Number(raw);
+}
+
+function trendSharedRange(series) {
+  let count = 0, min = Infinity, max = -Infinity;
+  for (const item of (series || [])) {
+    for (const point of (item.points || [])) {
+      const value = trendFiniteValue(point);
+      if (!Number.isFinite(value)) continue;
+      count += 1;
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+  }
+  return trendRangeFromValues(count, min, max);
+}
+
+function valueRange(points) {
+  let count = 0, min = Infinity, max = -Infinity;
+  for (const point of (points || [])) {
+    const value = trendFiniteValue(point);
+    if (!Number.isFinite(value)) continue;
+    count += 1;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return trendRangeFromValues(count, min, max);
 }
 
 function axisTicks(range, count = 5) {
@@ -4501,29 +4533,41 @@ function clearTrendStats() {
   node.textContent = "选择数据并点击“显示趋势”后显示统计摘要。";
 }
 
+function trendNumericSummary(points) {
+  const values = [];
+  let count = 0, sum = 0, sumSquares = 0, min = Infinity, max = -Infinity;
+  for (const point of (points || [])) {
+    const value = trendFiniteValue(point);
+    if (!Number.isFinite(value)) continue;
+    values.push(value);
+    count += 1;
+    sum += value;
+    sumSquares += value * value;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return { values, count, sum, sumSquares, min, max };
+}
+
 function trendHistogram(points, requestedBinCount = 12) {
-  const values = (points || [])
-    .map((point) => Number(point.y))
-    .filter((value) => Number.isFinite(value));
-  if (!values.length) return { bins: [], min: NaN, max: NaN, mean: NaN, stddev: NaN, count: 0 };
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  const stddev = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length);
-  if (min === max) return { bins: [{ min, max, count: values.length }], min, max, mean, stddev, count: values.length };
-  const binCount = Math.min(requestedBinCount, Math.max(1, Math.ceil(Math.sqrt(values.length))));
+  const { values, count, sum, min, max } = trendNumericSummary(points);
+  if (!count) return { bins: [], min: NaN, max: NaN, mean: NaN, stddev: NaN, count: 0 };
+  const mean = sum / count;
+  const stddev = Math.sqrt(values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / count);
+  if (min === max) return { bins: [{ min, max, count }], min, max, mean, stddev, count };
+  const binCount = Math.min(requestedBinCount, Math.max(1, Math.ceil(Math.sqrt(count))));
   const binWidth = (max - min) / binCount;
   const counts = Array(binCount).fill(0);
   for (const value of values) {
     const index = Math.min(binCount - 1, Math.floor(((value - min) / (max - min)) * binCount));
     counts[index] += 1;
   }
-  const bins = counts.map((count, index) => ({
+  const bins = counts.map((binCountValue, index) => ({
     min: min + index * binWidth,
     max: index === binCount - 1 ? max : min + (index + 1) * binWidth,
-    count,
+    count: binCountValue,
   }));
-  return { bins, min, max, mean, stddev, count: values.length };
+  return { bins, min, max, mean, stddev, count };
 }
 
 function trendNormalCurve(histogram, sampleCount = 40) {
@@ -4544,7 +4588,8 @@ function renderTrendHistogram(points, color, variableName) {
   if (!histogram.bins.length) {
     return `<div class="trend-histogram"><div class="trend-histogram-title">数值分布</div><div class="trend-histogram-empty" role="img" aria-label="${safeName} 数值分布：无有效数据">无有效数据</div></div>`;
   }
-  const maxCount = Math.max(...histogram.bins.map((bin) => bin.count));
+  let maxCount = 0;
+  for (const bin of histogram.bins) maxCount = Math.max(maxCount, bin.count);
   const bars = histogram.bins.map((bin) => {
     const height = bin.count ? Math.max(3, (bin.count / maxCount) * 100) : 0;
     const title = `${formatAxisValue(bin.min)} – ${formatAxisValue(bin.max)}：${bin.count}`;
@@ -4587,20 +4632,19 @@ function formatCountRatio(count, ratio) {
 
 function trendStats(points) {
   const total = (points || []).length;
-  const values = (points || []).map((point) => Number(point.y)).filter((value) => Number.isFinite(value));
-  if (!values.length) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, ratio: 0 };
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const { values, count, sum, min, max } = trendNumericSummary(points);
+  if (!count) return { mean: NaN, stddev: NaN, max: NaN, min: NaN, range: NaN, median: NaN, count: 0, ratio: 0 };
+  const mean = sum / count;
+  const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / count;
   return {
     mean,
-    stddev: stddev(values),
+    stddev: Math.sqrt(variance),
     max,
     min,
     range: max - min,
     median: median(values),
-    count: values.length,
-    ratio: total ? values.length / total : 0,
+    count,
+    ratio: total ? count / total : 0,
   };
 }
 
@@ -4609,13 +4653,6 @@ function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function stddev(values) {
-  if (!values.length) return NaN;
-  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
-  const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
-  return Math.sqrt(variance);
 }
 
 const candidateTable = "table";

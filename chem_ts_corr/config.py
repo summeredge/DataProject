@@ -4,6 +4,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# 预处理模式契约：
+# - 新模式（raw/lowpass/lowpass_detrend/lowpass_diff）语义固定，见 docs/contracts.md；
+# - 旧模式（detrend/diff/detrend_diff）继续保留兼容，不映射为新模式；
+# - lowpass* 模式只允许在配置对象中表示，实际执行前必须被明确拒绝（暂未实现）。
+SUPPORTED_PREPROCESS_MODES = frozenset(
+    {"raw", "detrend", "diff", "detrend_diff", "lowpass", "lowpass_detrend", "lowpass_diff"}
+)
+CONTRACT_PREPROCESS_MODES = frozenset({"raw", "lowpass", "lowpass_detrend", "lowpass_diff"})
+NOT_IMPLEMENTED_PREPROCESS_MODES = frozenset({"lowpass", "lowpass_detrend", "lowpass_diff"})
+
+
 @dataclass(frozen=True)
 class AnalysisConfig:
     input_path: Path
@@ -16,6 +27,8 @@ class AnalysisConfig:
     min_valid_ratio: float = 0.7
     top_k: int = 30
     preprocess_mode: str = "raw"
+    lowpass_tau_minutes: float = 5.0
+    diff_interval_minutes: float | None = None
     detrend_window: int = 24
     segment_column: str | None = None
     segment_mode: str = "all"
@@ -45,6 +58,16 @@ class AnalysisConfig:
     xgb_top_n: int = 8
     xgb_max_lag: int | None = None
     xgb_whitelist: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.lowpass_tau_minutes <= 0:
+            raise ValueError("lowpass_tau_minutes must be greater than 0")
+        if self.diff_interval_minutes is not None and self.diff_interval_minutes <= 0:
+            raise ValueError(
+                "diff_interval_minutes must be greater than 0; use None for automatic interval"
+            )
+        if self.preprocess_mode not in SUPPORTED_PREPROCESS_MODES:
+            raise ValueError(f"Unknown preprocess mode: {self.preprocess_mode!r}")
 
     def resolved_granger_maxlag(self) -> int:
         if self.granger_maxlag is not None:

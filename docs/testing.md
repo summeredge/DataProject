@@ -56,3 +56,28 @@
 `medium` 风险等级并存时，仍只作为普通质量提示；精确
 `severe_data_quality` 才触发综合复核硬降级和 XGBoost 自动排除。排名基线的质量风险
 及 A/B 风险计数按唯一变量断言，重复行不得重复计数。
+
+## Raw 主筛查回归基线测试
+
+使用项目内可控的小型固定数据（不依赖随机外部数据），锁定 Raw 主筛查行为：
+
+- `final_score` 数值；
+- `final_score` 降序排序；
+- `driver_rank`；
+- 初筛 Top-K；
+- 候选池变量及来源；
+- `best_lag` 的正负方向（`ranked_features.csv` 的 `lag` 列）；
+- `ranked_features.csv` 关键字段；
+- 新配置字段采用默认值时 Raw 输出不变。
+
+浮点断言使用合理容差，但不得宽泛到掩盖评分变化。
+
+## 预处理模式与配置字段测试
+
+- `lowpass_tau_minutes <= 0` 被明确拒绝；
+- `diff_interval_minutes <= 0` 被明确拒绝，`None` 合法；
+- 四种契约模式（`raw`、`lowpass`、`lowpass_detrend`、`lowpass_diff`）可被配置对象
+  表示；
+- 未实现的 `lowpass*` 模式进入执行流程时被明确拒绝，不得静默回退到 `raw`；
+- 旧模式（`detrend`、`diff`、`detrend_diff`）保持兼容，且不被映射为新模式；
+- 新增字段和模式不得进入评分、排序、候选池或默认执行流程。

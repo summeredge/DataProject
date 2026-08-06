@@ -67,3 +67,206 @@ evidence_score = association_score × data_quality_score
 
 排名基线的质量风险数量及 A/B 风险数量均按当前 Top-N 内的唯一变量统计；同一变量的
 重复行不重复计数。
+
+## 预处理模式契约
+
+新模式语义固定，不得修改：
+
+```text
+raw:
+原始数据
+
+lowpass:
+原始数据 → 一阶低通
+
+lowpass_detrend:
+原始数据 → 一阶低通 → 去趋势
+
+lowpass_diff:
+原始数据 → 一阶低通 → 多点差分
+```
+
+旧模式继续保留兼容，且不得映射为新模式：
+
+```text
+detrend
+diff
+detrend_diff
+```
+
+约束：
+
+- `detrend` 不得映射为 `lowpass_detrend`；
+- `diff` 不得映射为 `lowpass_diff`；
+- 旧模式的处理逻辑、旧配置文件和旧调用方兼容行为不得修改；
+- `lowpass`、`lowpass_detrend`、`lowpass_diff` 目前仅存在于配置与文档契约，
+  尚未实现；配置对象可以表示这些模式，但任何实际执行必须被明确拒绝并报
+  “暂未实现”，不得静默回退到 `raw`。
+
+## 预处理配置字段
+
+分析配置对象包含以下字段：
+
+```python
+lowpass_tau_minutes: float = 5.0
+diff_interval_minutes: float | None = None
+```
+
+字段语义：
+
+- `lowpass_tau_minutes` 使用分钟，必须大于 `0`；
+- `diff_interval_minutes` 使用分钟；
+- `diff_interval_minutes = None` 表示自动采用一个分析采样周期；
+- `0.0` 不得表示自动，必须大于 `0`；
+- 本契约阶段不计算实际差分点数；
+- 新字段不得影响 `raw` 或旧预处理模式的结果；
+- 新字段不得自动进入评分、排序、候选池或默认执行流程。
+
+## 初筛分支状态契约
+
+分支选择状态：
+
+```text
+branch_selection_status:
+  not_required
+  awaiting_confirmation
+  confirmed
+```
+
+字段及语义：
+
+```text
+selected_preprocessing_mode
+active_screening_branch
+active_preprocessing_mode
+branch_selection_status
+```
+
+约束：
+
+- 选择 Raw 时：
+
+  - `branch_selection_status = not_required`
+  - `active_screening_branch = raw`
+  - `active_preprocessing_mode = raw`
+
+- 非 Raw 双分支完成但未确认时：
+
+  - `branch_selection_status = awaiting_confirmation`
+  - `active_screening_branch` 缺失
+  - `active_preprocessing_mode` 缺失
+
+- 已确认时：
+
+  - `branch_selection_status = confirmed`
+  - `active_screening_branch` 为 `raw` 或 `processed`
+  - `active_preprocessing_mode` 为实际进入后续阶段的模式
+
+缺失值不得使用空字符串、`false` 或 `0.0` 代替。
+
+当前阶段只定义状态契约，不实现状态流转。
+
+## 分支产物目录契约
+
+非 Raw 初筛运行的目标目录：
+
+```text
+run_directory/
+├─ screening_branches/
+│  ├─ raw/
+│  └─ processed/
+├─ preprocessing_comparison.csv
+└─ preprocessing_context.json
+```
+
+约束：
+
+- 两个分支分别生成独立的第一阶段产物；
+- 未确认前不得在运行根目录发布正式初筛文件；
+- 确认后只将选定分支发布为正式结果；
+- 不得合并两个分支的候选池；
+- 不得按变量选择两个分支中较高的分数；
+- 不得生成新的综合评分。
+
+当前阶段不创建这些目录或文件。
+
+## preprocessing_comparison.csv 契约
+
+至少包含以下字段：
+
+```text
+variable
+processed_mode
+raw_available
+processed_available
+raw_final_score
+processed_final_score
+final_score_delta
+raw_rank
+processed_rank
+rank_delta
+raw_pearson
+processed_pearson
+raw_spearman
+processed_spearman
+raw_best_lag
+processed_best_lag
+lag_direction_changed
+raw_in_top_k
+processed_in_top_k
+raw_candidate
+processed_candidate
+raw_risk_tags
+processed_risk_tags
+```
+
+计算语义固定：
+
+```text
+final_score_delta =
+processed_final_score - raw_final_score
+```
+
+```text
+rank_delta =
+raw_rank - processed_rank
+```
+
+因此 `rank_delta > 0` 表示预处理后排名提升。
+
+其他要求：
+
+- 变量集合使用两个分支的并集；
+- 单侧不存在的字段保持缺失；
+- 任一分支无有效滞后时，`lag_direction_changed` 保持缺失；
+- 不得将缺失写成 `false`；
+- 不得使用 `abs(lag)` 或 `abs(best_lag)` 判断方向；
+- 对比文件只用于展示差异，不参与评分、排序或候选生成。
+
+当前阶段不生成该文件。
+
+## preprocessing_context.json 契约
+
+至少包含以下字段：
+
+```text
+selected_preprocessing_mode
+active_screening_branch
+active_preprocessing_mode
+lowpass_tau_minutes
+requested_diff_interval_minutes
+effective_diff_points
+effective_diff_interval_minutes
+resample_rule
+branch_selection_status
+```
+
+要求：
+
+- 不适用或尚未计算的字段使用缺失语义；
+- 不得使用 `0.0` 代替缺失；
+- `selected_preprocessing_mode` 表示用户选择用于比较的模式；
+- `active_preprocessing_mode` 表示正式进入后续阶段的模式；
+- 两者不得混为一个字段。
+
+当前阶段不生成该文件。

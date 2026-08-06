@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from chem_ts_corr.config import NOT_IMPLEMENTED_PREPROCESS_MODES
 from chem_ts_corr.time_axis import infer_sample_period_ns, preserve_sample_period, sample_period_ns
 
 
@@ -182,6 +183,10 @@ def transform_frame(
     interpolate_limit_area: str = "inside",
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
+    if mode in NOT_IMPLEMENTED_PREPROCESS_MODES:
+        raise ValueError(
+            f"Preprocess mode {mode!r} is defined in the contract but is not implemented yet"
+        )
     if mode == "raw":
         return preserve_sample_period(frame, period_ns)
     if mode == "detrend":
@@ -205,6 +210,10 @@ def transform_frame_causal(
     detrend_window: int,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
+    if mode in NOT_IMPLEMENTED_PREPROCESS_MODES:
+        raise ValueError(
+            f"Preprocess mode {mode!r} is defined in the contract but is not implemented yet"
+        )
     if mode == "raw":
         return preserve_sample_period(frame, period_ns)
     if mode == "detrend":

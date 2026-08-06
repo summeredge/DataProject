@@ -124,6 +124,17 @@ RAW_RECOMMENDED = [
     {"variable": "candidate_4", "candidate_source": "raw_and_residual", "candidate_pool_rank": 5},
 ]
 
+# top_k=5 时固定 Raw 排名前五项（含控制参考变量 control_7）。
+RAW_TOP_K_5 = [
+    "candidate_0",
+    "candidate_1",
+    "control_7",
+    "candidate_2",
+    "candidate_3",
+]
+
+NON_FINITE_VALUES = [float("nan"), float("inf"), -float("inf")]
+
 
 def _raw_frame() -> pd.DataFrame:
     rows = 120
@@ -142,20 +153,21 @@ def _raw_frame() -> pd.DataFrame:
 
 def _raw_config(tmp_path: Path, **overrides) -> AnalysisConfig:
     controls = [f"control_{index}" for index in range(8)]
-    return AnalysisConfig(
-        input_path=tmp_path / "input.csv",
-        time_column="time",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=3,
-        top_k=15,
-        residual_control_columns=controls,
-        force_include_variables=[],
-        enable_model=False,
-        skip_model_lift=True,
-        skip_rolling_corr=True,
-        **overrides,
-    )
+    kwargs = {
+        "input_path": tmp_path / "input.csv",
+        "time_column": "time",
+        "target": "target",
+        "output_dir": tmp_path,
+        "max_lag": 3,
+        "top_k": 15,
+        "residual_control_columns": controls,
+        "force_include_variables": [],
+        "enable_model": False,
+        "skip_model_lift": True,
+        "skip_rolling_corr": True,
+    }
+    kwargs.update(overrides)
+    return AnalysisConfig(**kwargs)
 
 
 def test_config_exposes_new_preprocessing_fields_with_defaults():
@@ -179,6 +191,45 @@ def test_config_rejects_nonpositive_diff_interval_minutes(value: float):
         AnalysisConfig(
             Path("input.csv"), "time", "target", Path("out"), diff_interval_minutes=value
         )
+
+
+@pytest.mark.parametrize("value", NON_FINITE_VALUES)
+def test_config_rejects_nonfinite_lowpass_tau_minutes(value: float):
+    with pytest.raises(ValueError, match="lowpass_tau_minutes"):
+        AnalysisConfig(
+            Path("input.csv"), "time", "target", Path("out"), lowpass_tau_minutes=value
+        )
+
+
+@pytest.mark.parametrize("value", NON_FINITE_VALUES)
+def test_config_rejects_nonfinite_diff_interval_minutes(value: float):
+    with pytest.raises(ValueError, match="diff_interval_minutes"):
+        AnalysisConfig(
+            Path("input.csv"), "time", "target", Path("out"), diff_interval_minutes=value
+        )
+
+
+@pytest.mark.parametrize("value", [0.5, 5.0, 30.0])
+def test_config_accepts_finite_positive_preprocessing_parameters(value: float):
+    config = AnalysisConfig(
+        Path("input.csv"),
+        "time",
+        "target",
+        Path("out"),
+        lowpass_tau_minutes=value,
+        diff_interval_minutes=value,
+    )
+
+    assert config.lowpass_tau_minutes == value
+    assert config.diff_interval_minutes == value
+
+
+def test_config_accepts_none_diff_interval_minutes():
+    config = AnalysisConfig(
+        Path("input.csv"), "time", "target", Path("out"), diff_interval_minutes=None
+    )
+
+    assert config.diff_interval_minutes is None
 
 
 def test_config_represents_contract_modes_and_keeps_legacy_modes():
@@ -331,3 +382,75 @@ def test_new_fields_do_not_affect_legacy_mode_outputs(tmp_path: Path, mode: str)
     ).ranked_features
 
     pd.testing.assert_frame_equal(baseline, varied, check_exact=False)
+
+
+def test_raw_top_k_5_truncation_boundary(tmp_path: Path):
+    config = _raw_config(tmp_path, top_k=5)
+    tables = analyze_numeric_frame(_raw_frame(), config)
+    ranked = tables.ranked_features
+    recommended = tables.recommended_candidates
+
+    # 完整 ranked_features 仍保留全部变量，driver_rank 与 final_score 排序不变。
+    assert ranked["variable"].tolist() == RAW_BASELINE_VARIABLES
+    assert ranked["driver_rank"].tolist() == list(range(1, len(ranked) + 1))
+    assert ranked["final_score"].dropna().diff().dropna().le(1e-15).all()
+    indexed = ranked.set_index("variable")
+    for variable in RAW_BASELINE_VARIABLES:
+        assert indexed.loc[variable, "final_score"] == pytest.approx(
+            RAW_BASELINE["final_score"][variable], rel=0, abs=1e-9
+        )
+
+    # Top-K 截断边界：前五项及顺序固定，第六名不在 Top-K。
+    assert ranked.head(config.top_k)["variable"].tolist() == RAW_TOP_K_5
+    assert not set(RAW_TOP_K_5) & {"candidate_4"}
+    assert int(indexed.loc["candidate_4", "driver_rank"]) == 6
+
+    # 实际 Top-K 消费方：metrics 透传 top_k，候选池 raw 通道按 top_k 截断。
+    assert tables.metrics["top_k"] == pytest.approx(5.0)
+    eligible = ranked.loc[ranked["variable_role"] != "residual_control"]
+    assert eligible.head(config.top_k)["variable"].tolist() == [
+        "candidate_0",
+        "candidate_1",
+        "candidate_2",
+        "candidate_3",
+        "candidate_4",
+    ]
+    assert set(recommended["variable"]) == set(eligible.head(config.top_k)["variable"])
+    assert recommended["variable"].tolist() == [
+        item["variable"] for item in RAW_RECOMMENDED
+    ]
+    for expected in RAW_RECOMMENDED:
+        row = recommended.set_index("variable").loc[expected["variable"]]
+        assert str(row["candidate_source"]) == expected["candidate_source"]
+        assert int(row["candidate_pool_rank"]) == expected["candidate_pool_rank"]
+        assert int(row["raw_candidate_rank"]) == expected["candidate_pool_rank"]
+        assert int(row["raw_candidate_rank"]) <= config.top_k
+
+    # 结果表入口：写出的 recommended_candidates.csv 与内存推荐结果一致。
+    write_outputs(
+        tmp_path,
+        config.target,
+        tables.ranked_features,
+        tables.lag_scores,
+        tables.granger_tests,
+        tables.importance,
+        tables.metrics,
+        diagnostics=tables.diagnostics,
+        risk_flags=tables.risk_flags,
+        lag_peak_quality=tables.lag_peak_quality,
+        residual_corr_scores=tables.residual_corr_scores,
+        recommended_candidates=tables.recommended_candidates,
+    )
+    csv_recommended = pd.read_csv(
+        tmp_path / "recommended_candidates.csv", encoding="utf-8-sig"
+    )
+    pd.testing.assert_series_equal(
+        csv_recommended["variable"],
+        recommended["variable"],
+        check_dtype=False,
+    )
+    pd.testing.assert_series_equal(
+        csv_recommended["candidate_pool_rank"],
+        recommended["candidate_pool_rank"],
+        check_dtype=False,
+    )

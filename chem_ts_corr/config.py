@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 
 
@@ -60,11 +61,15 @@ class AnalysisConfig:
     xgb_whitelist: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.lowpass_tau_minutes <= 0:
-            raise ValueError("lowpass_tau_minutes must be greater than 0")
-        if self.diff_interval_minutes is not None and self.diff_interval_minutes <= 0:
+        if not math.isfinite(self.lowpass_tau_minutes) or self.lowpass_tau_minutes <= 0:
+            raise ValueError("lowpass_tau_minutes must be a finite value greater than 0")
+        if self.diff_interval_minutes is not None and (
+            not math.isfinite(self.diff_interval_minutes)
+            or self.diff_interval_minutes <= 0
+        ):
             raise ValueError(
-                "diff_interval_minutes must be greater than 0; use None for automatic interval"
+                "diff_interval_minutes must be a finite value greater than 0; "
+                "use None for automatic interval"
             )
         if self.preprocess_mode not in SUPPORTED_PREPROCESS_MODES:
             raise ValueError(f"Unknown preprocess mode: {self.preprocess_mode!r}")

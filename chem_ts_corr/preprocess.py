@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import pandas as pd
@@ -227,6 +228,71 @@ def transform_frame_causal(
         transformed = difference_by_contiguous_segment(detrended)
         return preserve_sample_period(transformed.dropna(how="all"), period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
+
+
+def lowpass_filter_frame(
+    frame: pd.DataFrame,
+    tau_minutes: float,
+) -> pd.DataFrame:
+    """Apply a time-aware first-order low-pass filter to every column.
+
+    alpha = 1 - exp(-dt / tau_minutes)
+    y(t) = y(t-1) + alpha * [x(t) - y(t-1)]
+
+    dt is the physical time between adjacent valid samples of a column.
+    Each contiguous physical segment (based on the project's sample-period
+    semantics) filters independently: the first valid value of a segment is
+    the initial state, and segments never share state. Missing inputs stay
+    missing, are never backfilled or written as 0.0, and the filter state
+    carries across missing rows inside a segment.
+    """
+    try:
+        tau_minutes = float(tau_minutes)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("tau_minutes must be a finite value greater than 0") from exc
+    if not math.isfinite(tau_minutes) or tau_minutes <= 0:
+        raise ValueError("tau_minutes must be a finite value greater than 0")
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("lowpass_filter_frame requires a DatetimeIndex")
+    if not frame.index.is_monotonic_increasing or not frame.index.is_unique:
+        raise ValueError(
+            "lowpass_filter_frame requires a monotonically increasing DatetimeIndex "
+            "with unique timestamps"
+        )
+
+    period_ns = sample_period_ns(frame)
+    segment_ids = _contiguous_segment_ids(frame.index, period_ns)
+    times_ns = frame.index.asi8
+    filtered = pd.DataFrame(index=frame.index, columns=frame.columns, dtype=float)
+    for column in frame.columns:
+        values = frame[column].to_numpy(dtype=float)
+        output: list[float] = []
+        state: float | None = None
+        state_time_ns: int | None = None
+        current_segment = -1
+        for value, time_ns, segment_id in zip(values, times_ns, segment_ids):
+            if int(segment_id) != current_segment:
+                current_segment = int(segment_id)
+                state = None
+                state_time_ns = None
+            value = float(value)
+            if math.isnan(value):
+                output.append(math.nan)
+                continue
+            time_ns = int(time_ns)
+            if state is None:
+                state = value
+                state_time_ns = time_ns
+                output.append(state)
+                continue
+            delta_minutes = (time_ns - state_time_ns) / 60_000_000_000.0
+            alpha = 1.0 - math.exp(-delta_minutes / tau_minutes)
+            state = state + alpha * (value - state)
+            state_time_ns = time_ns
+            output.append(state)
+        filtered[column] = output
+    filtered.attrs = dict(frame.attrs)
+    return preserve_sample_period(filtered, period_ns)
 
 
 def detrend_moving_average(

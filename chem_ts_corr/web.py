@@ -2561,8 +2561,295 @@ INDEX_HTML = r"""<!doctype html>
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } .chart-controls { grid-template-columns:repeat(2,minmax(120px,1fr)); } }
     @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } .chart-controls { grid-template-columns:1fr; } }
   </style>
+  <style>
+    /* ============================================================
+       Apple 设计语言主题层（依据 DESIGN-apple.md）
+       仅覆盖视觉表现：颜色 / 字体 / 圆角 / 间距 / 按钮 / 卡片
+       不改变任何元素 ID、class 或交互逻辑
+       ============================================================ */
+    :root {
+      --bg:#f5f5f7;
+      --panel:#ffffff;
+      --line:rgba(0,0,0,.08);
+      --line-soft:#e8e8ed;
+      --text:#1d1d1f;
+      --muted:#7a7a7a;
+      --text-subtle:#7a7a7a;
+      --accent:#0066cc;
+      --accent-bright:#0071e3;
+      --accent-soft:rgba(0,102,204,.10);
+      --ink-muted-80:#333333;
+      --surface-pearl:#fafafc;
+      --surface-black:#000000;
+      --surface-muted:#f5f5f7;
+      --focus:#0071e3;
+      --green:#14633b;
+      --warn:#b45309;
+      --danger-bg:#fdecec; --danger-text:#9c1c1c;
+      --warning-bg:#fdf3d7; --warning-text:#8f5900;
+      --info-bg:#e8f0fe; --info-text:#0a5da8;
+      --success-bg:#e6f6ec; --success-text:#14633b;
+      --font-stack:"SF Pro Display","SF Pro Text",system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+    }
+    body {
+      font-family:var(--font-stack);
+      font-size:15px;
+      line-height:1.5;
+      -webkit-font-smoothing:antialiased;
+    }
+    /* 全局导航：纯黑细条（global-nav） */
+    .global-nav {
+      position:sticky; top:0; z-index:60;
+      display:flex; align-items:center; justify-content:center;
+      height:44px; padding:0 20px;
+      background:var(--surface-black); color:#fff;
+    }
+    .global-nav-brand {
+      font-size:12px; font-weight:600; letter-spacing:-.12px;
+      color:#fff; white-space:nowrap;
+    }
+    /* 页头 Hero：大标题 + 副标题 */
+    header {
+      padding:56px 24px 44px;
+      background:var(--bg);
+      border-bottom:none;
+      text-align:center;
+    }
+    h1 {
+      margin:0 0 10px;
+      font-size:40px; font-weight:600; line-height:1.1; letter-spacing:-.374px;
+      color:var(--text);
+    }
+    .subtitle {
+      max-width:640px; margin:0 auto;
+      color:var(--muted);
+      font-size:17px; font-weight:400; line-height:1.47; letter-spacing:-.224px;
+    }
+    /* 主布局：羊皮纸画布 + 白色面板 */
+    main {
+      max-width:1560px; margin:0 auto;
+      padding:20px 28px 56px;
+      gap:24px;
+      align-items:start;
+    }
+    section {
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:18px;
+      padding:20px;
+    }
+    .controls { gap:14px; font-size:13px; align-content:start; }
+    .control-group {
+      gap:10px; padding:14px;
+      border:1px solid var(--line);
+      border-radius:11px;
+      background:var(--surface-muted);
+    }
+    .control-group-title {
+      font-size:13px; font-weight:600; letter-spacing:-.12px;
+      color:var(--ink-muted-80);
+    }
+    label { font-size:12px; color:var(--muted); letter-spacing:-.12px; }
+    input[type="text"], input[type="number"], input[type="datetime-local"], input[type="password"], select {
+      padding:8px 12px;
+      border:1px solid var(--line);
+      border-radius:11px;
+      background:var(--panel);
+      color:var(--text);
+      font-size:13px;
+      transition:border-color .15s ease;
+    }
+    input[type="text"]:hover, input[type="number"]:hover, input[type="datetime-local"]:hover, input[type="password"]:hover, select:hover {
+      border-color:rgba(0,0,0,.16);
+    }
+    input[type="text"]:focus, input[type="number"]:focus, input[type="datetime-local"]:focus, input[type="password"]:focus, select:focus {
+      border-color:var(--accent);
+    }
+    label.checkbox-row { color:var(--text); font-size:13px; }
+    /* 自定义下拉：胶囊芯片 */
+    .multi-dropdown, .single-dropdown {
+      background:transparent; border:none; border-radius:0;
+    }
+    .multi-dropdown > summary, .single-dropdown > summary {
+      border:1px solid var(--line);
+      border-radius:9999px;
+      background:var(--panel);
+      padding:8px 14px;
+      font-size:13px;
+      color:var(--text);
+    }
+    .single-dropdown > summary::after { color:var(--muted); }
+    .multi-options, .single-options {
+      border:1px solid var(--line);
+      border-radius:11px;
+      background:var(--panel);
+      box-shadow:0 8px 24px rgba(0,0,0,.08);
+    }
+    .single-option:hover, .single-option[aria-selected="true"] { background:var(--surface-muted); }
+    /* 按钮：蓝色胶囊 + 按压微交互 */
+    button {
+      border:1px solid transparent;
+      border-radius:9999px;
+      padding:10px 22px;
+      background:var(--accent);
+      color:#fff;
+      font-size:14px; font-weight:400; letter-spacing:-.12px;
+      transition:background .15s ease, transform .12s ease;
+    }
+    button:hover { background:var(--accent-bright); }
+    button:active { transform:scale(.95); }
+    button:disabled { opacity:.4; }
+    button.secondary {
+      background:var(--panel);
+      color:var(--ink-muted-80);
+      border-color:var(--line);
+    }
+    button.secondary:hover { background:var(--surface-pearl); }
+    /* 状态条与提示框 */
+    .status { padding:10px 14px; border-radius:11px; font-size:13px; line-height:1.5; }
+    .help {
+      padding:10px 14px;
+      border:1px solid var(--line);
+      border-radius:11px;
+      background:var(--surface-muted);
+      font-size:13px; line-height:1.6; color:var(--muted);
+    }
+    .note { font-size:12px; line-height:1.5; }
+    /* Tab 栏：悬浮胶囊分段控件 */
+    .tabs {
+      top:44px;
+      background:rgba(245,245,247,.96);
+      border-bottom:1px solid var(--line);
+      border-radius:11px;
+      padding:6px;
+      gap:4px;
+    }
+    .tab-button {
+      background:transparent;
+      color:var(--muted);
+      border-radius:9999px;
+      padding:0 16px;
+      font-size:13px;
+    }
+    .tab-button:hover { background:rgba(0,0,0,.05); color:var(--text); }
+    .tab-button.active { background:var(--accent); color:#fff; }
+    h2 {
+      margin:4px 0 14px;
+      font-size:24px; font-weight:600; line-height:1.25; letter-spacing:-.224px;
+      color:var(--text);
+    }
+    h3 {
+      margin:0 0 10px;
+      font-size:17px; font-weight:600; line-height:1.3; letter-spacing:-.224px;
+      color:var(--text);
+    }
+    h4 {
+      margin:14px 0 8px;
+      font-size:15px; font-weight:600; letter-spacing:-.12px;
+      color:var(--text);
+    }
+    /* 指标卡 */
+    .overview-grid { gap:12px; }
+    .metric-card {
+      width:auto; min-width:150px; min-height:84px;
+      padding:14px 16px;
+      border:1px solid var(--line);
+      border-radius:18px;
+      background:var(--panel);
+    }
+    .metric-value {
+      font-size:28px; font-weight:600; line-height:1.1; letter-spacing:-.28px;
+      color:var(--text);
+    }
+    .metric-label { font-size:12px; color:var(--muted); line-height:1.35; }
+    /* 图表容器 */
+    .chart { border-radius:11px; }
+    .scatter-matrix-chart { border-radius:11px; }
+    .lag-profile-panel { padding:12px; border-radius:11px; background:var(--surface-muted); }
+    .lag-profile-chart { border-radius:8px; background:var(--panel); }
+    .trend-stat-card { border-radius:11px; }
+    /* 表格 */
+    .table-wrap, .terms-help-table-wrap {
+      border-radius:11px;
+      box-shadow:none;
+    }
+    th, td { padding:9px 12px; }
+    th {
+      background:var(--surface-pearl);
+      color:var(--ink-muted-80);
+      font-size:12px; font-weight:600; letter-spacing:-.12px;
+      box-shadow:0 1px 0 var(--line-soft);
+    }
+    th:first-child { background:var(--surface-pearl); }
+    tbody tr:nth-child(even) { background:#f7f7f9; }
+    tbody tr:hover { background:var(--surface-muted); }
+    th.sortable:hover { background:#eef1f6; }
+    .compact-result-table tbody tr.selected { background:var(--info-bg); }
+    .clickable-row:hover { background:var(--surface-muted); }
+    /* 详情面板 / 复核卡片 */
+    .detail-panel, .review-card { border-radius:11px; }
+    .detail-field, .metric-item { border-radius:8px; background:var(--surface-muted); }
+    /* 弹窗 */
+    .modal-backdrop { background:rgba(0,0,0,.4); }
+    .modal-card { border-radius:18px; box-shadow:0 24px 64px rgba(0,0,0,.22); }
+    .modal-close { background:var(--surface-muted); color:var(--text); }
+    /* 下载链接：蓝色描边胶囊 */
+    .download-buttons a {
+      border:1px solid var(--accent);
+      border-radius:9999px;
+      background:transparent;
+      color:var(--accent);
+      padding:8px 16px;
+      font-size:13px;
+      transition:background .15s ease;
+    }
+    .download-buttons a:hover { background:var(--accent-soft); }
+    /* 空状态 / 代码块 / Markdown 报告 */
+    .empty { border-radius:11px; }
+    pre { border-radius:11px; }
+    .markdown-report {
+      padding:28px 32px;
+      border-radius:18px;
+      font-size:15px; line-height:1.7;
+    }
+    .markdown-report h1 { font-size:28px; letter-spacing:-.28px; }
+    .markdown-report h2 { font-size:22px; letter-spacing:-.224px; border-bottom-color:var(--line-soft); }
+    .markdown-report h3 { font-size:17px; }
+    .markdown-report code { background:#f0f2f5; }
+    .small-button { padding:4px 12px; font-size:12px; }
+    /* 页脚 */
+    .site-footer {
+      padding:28px 24px 40px;
+      background:var(--bg);
+      border-top:1px solid var(--line);
+      text-align:center;
+      color:var(--muted);
+      font-size:12px; line-height:1.6; letter-spacing:-.12px;
+    }
+    .site-footer p { margin:0; }
+    /* 滞后曲线：旧强调色映射为 Apple 蓝（纯展示层覆盖） */
+    .lag-profile-chart svg path[stroke="#176b87"] { stroke:var(--accent) !important; }
+    .lag-profile-chart svg circle[fill="#176b87"] { fill:var(--accent) !important; }
+    .lag-profile-chart svg text[fill="#176b87"] { fill:var(--accent) !important; }
+    .lag-profile-line:not(.spearman) { border-color:var(--accent) !important; }
+    /* 响应式微调 */
+    @media (max-width:900px) {
+      main { padding:16px; gap:16px; }
+      header { padding:40px 20px 28px; }
+      h1 { font-size:32px; }
+      .tabs { border-radius:16px; }
+    }
+    @media (max-width:640px) {
+      h1 { font-size:28px; }
+      .subtitle { font-size:15px; }
+      .metric-value { font-size:24px; }
+    }
+  </style>
 </head>
 <body>
+  <nav class="global-nav" aria-label="主导航">
+    <span class="global-nav-brand">化工装置时序相关性分析</span>
+  </nav>
   <header>
     <h1>化工装置时序相关性分析</h1>
     <div class="subtitle">浏览器负责上传和展示，Python 后台处理大数据并生成下载结果。</div>
@@ -2920,6 +3207,10 @@ INDEX_HTML = r"""<!doctype html>
 
     </section>
   </main>
+
+  <footer class="site-footer">
+    <p>化工装置时序相关性分析 · 结果仅供工程复核参考，不构成因果结论</p>
+  </footer>
 
   <div id="detailModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" hidden>
     <div class="modal-card">

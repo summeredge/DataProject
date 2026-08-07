@@ -27,6 +27,11 @@ def _regular_frame(
     )
 
 
+def _timestamps_from_intervals(intervals_minutes: list[int]) -> pd.DatetimeIndex:
+    offsets = np.cumsum([0, *intervals_minutes])
+    return pd.to_datetime("2026-01-01 00:00") + pd.to_timedelta(offsets, unit="min")
+
+
 def test_constant_signal_stays_constant():
     frame = pd.DataFrame(
         {"x": [5.0] * 20},
@@ -79,36 +84,107 @@ def test_physical_time_consistency_between_sampling_rates():
 
 
 def test_irregular_sampling_uses_actual_delta_t():
-    # Adjacent intervals are 4/2/4/2/4 minutes; the modal sample period is
-    # 4 minutes, so the 2-minute diffs are physical gaps under the project's
-    # existing sample-period rule and start fresh segments.
-    index = pd.DatetimeIndex(
-        [
-            "2026-01-01 00:00",
-            "2026-01-01 00:04",
-            "2026-01-01 00:06",
-            "2026-01-01 00:10",
-            "2026-01-01 00:12",
-            "2026-01-01 00:16",
-        ]
+    # Adjacent intervals are 4/2/4/2/4 minutes. The nominal period is the
+    # 4-minute mode and the gap threshold is 1.5 * 4 = 6 minutes, so every
+    # interval stays in the same physical segment. Under the old rule the
+    # 2-minute diffs reset the state and this exact recurrence would fail.
+    frame = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]},
+        index=_timestamps_from_intervals([4, 2, 4, 2, 4]),
     )
-    frame = pd.DataFrame({"x": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]}, index=index)
+    assert sample_period_ns(frame) == 4 * MINUTE_NS
     tau = 5.0
 
     result = lowpass_filter_frame(frame, tau_minutes=tau)
 
     alpha4 = 1.0 - np.exp(-4.0 / tau)
-    expected = np.array(
-        [
-            0.0,
-            10.0 * alpha4,
-            20.0,
-            20.0 + 10.0 * alpha4,
-            40.0,
-            40.0 + 10.0 * alpha4,
-        ]
-    )
+    alpha2 = 1.0 - np.exp(-2.0 / tau)
+    y0 = 0.0
+    y1 = y0 + alpha4 * (10.0 - y0)
+    y2 = y1 + alpha2 * (20.0 - y1)
+    y3 = y2 + alpha4 * (30.0 - y2)
+    y4 = y3 + alpha2 * (40.0 - y3)
+    y5 = y4 + alpha4 * (50.0 - y4)
+    expected = np.array([y0, y1, y2, y3, y4, y5])
     np.testing.assert_allclose(result["x"].to_numpy(), expected, atol=1e-12)
+
+
+def test_interval_shorter_than_nominal_period_stays_contiguous():
+    frame = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals([4, 2, 4]),
+    )
+    assert sample_period_ns(frame) == 4 * MINUTE_NS
+    tau = 5.0
+
+    result = lowpass_filter_frame(frame, tau_minutes=tau)
+
+    alpha4 = 1.0 - np.exp(-4.0 / tau)
+    alpha2 = 1.0 - np.exp(-2.0 / tau)
+    y0 = 0.0
+    y1 = y0 + alpha4 * (10.0 - y0)
+    y2 = y1 + alpha2 * (20.0 - y1)
+    y3 = y2 + alpha4 * (30.0 - y2)
+    np.testing.assert_allclose(result["x"].to_numpy(), [y0, y1, y2, y3], atol=1e-12)
+
+
+def test_interval_within_gap_threshold_stays_contiguous():
+    frame = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals([4, 5, 4]),
+    )
+    assert sample_period_ns(frame) == 4 * MINUTE_NS
+    tau = 5.0
+
+    result = lowpass_filter_frame(frame, tau_minutes=tau)
+
+    alpha4 = 1.0 - np.exp(-4.0 / tau)
+    alpha5 = 1.0 - np.exp(-5.0 / tau)
+    y0 = 0.0
+    y1 = y0 + alpha4 * (10.0 - y0)
+    y2 = y1 + alpha5 * (20.0 - y1)
+    y3 = y2 + alpha4 * (30.0 - y2)
+    np.testing.assert_allclose(result["x"].to_numpy(), [y0, y1, y2, y3], atol=1e-12)
+
+
+def test_interval_beyond_gap_threshold_starts_new_segment():
+    frame = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals([4, 7, 4]),
+    )
+    assert sample_period_ns(frame) == 4 * MINUTE_NS
+    tau = 5.0
+
+    result = lowpass_filter_frame(frame, tau_minutes=tau)
+
+    alpha4 = 1.0 - np.exp(-4.0 / tau)
+    y0 = 0.0
+    y1 = y0 + alpha4 * (10.0 - y0)
+    # 7 minutes > 1.5 * 4 minutes: the third point starts a new segment and
+    # its raw value becomes the new state directly.
+    y2 = 20.0
+    y3 = y2 + alpha4 * (30.0 - y2)
+    np.testing.assert_allclose(result["x"].to_numpy(), [y0, y1, y2, y3], atol=1e-12)
+    assert result["x"].iloc[2] == 20.0
+
+
+def test_interval_equal_to_gap_threshold_stays_contiguous():
+    frame = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals([4, 6, 4]),
+    )
+    assert sample_period_ns(frame) == 4 * MINUTE_NS
+    tau = 5.0
+
+    result = lowpass_filter_frame(frame, tau_minutes=tau)
+
+    alpha4 = 1.0 - np.exp(-4.0 / tau)
+    alpha6 = 1.0 - np.exp(-6.0 / tau)
+    y0 = 0.0
+    y1 = y0 + alpha4 * (10.0 - y0)
+    y2 = y1 + alpha6 * (20.0 - y1)
+    y3 = y2 + alpha4 * (30.0 - y2)
+    np.testing.assert_allclose(result["x"].to_numpy(), [y0, y1, y2, y3], atol=1e-12)
 
 
 def test_physical_gap_resets_filter_state():

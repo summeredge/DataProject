@@ -9,6 +9,9 @@ from chem_ts_corr.config import NOT_IMPLEMENTED_PREPROCESS_MODES
 from chem_ts_corr.time_axis import infer_sample_period_ns, preserve_sample_period, sample_period_ns
 
 
+LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
+
+
 @dataclass(frozen=True)
 class FrameScaler:
     mean_: pd.Series
@@ -240,11 +243,13 @@ def lowpass_filter_frame(
     y(t) = y(t-1) + alpha * [x(t) - y(t-1)]
 
     dt is the physical time between adjacent valid samples of a column.
-    Each contiguous physical segment (based on the project's sample-period
-    semantics) filters independently: the first valid value of a segment is
-    the initial state, and segments never share state. Missing inputs stay
-    missing, are never backfilled or written as 0.0, and the filter state
-    carries across missing rows inside a segment.
+    Each contiguous physical segment filters independently: an interval only
+    starts a new segment when it exceeds LOWPASS_PHYSICAL_GAP_FACTOR times
+    the sample period, so irregular-but-contiguous sampling keeps one filter
+    state. The first valid value of a segment is the initial state, and
+    segments never share state. Missing inputs stay missing, are never
+    backfilled or written as 0.0, and the filter state carries across missing
+    rows inside a segment.
     """
     try:
         tau_minutes = float(tau_minutes)
@@ -261,7 +266,7 @@ def lowpass_filter_frame(
         )
 
     period_ns = sample_period_ns(frame)
-    segment_ids = _contiguous_segment_ids(frame.index, period_ns)
+    segment_ids = _lowpass_segment_ids(frame.index, period_ns)
     times_ns = frame.index.asi8
     filtered = pd.DataFrame(index=frame.index, columns=frame.columns, dtype=float)
     for column in frame.columns:
@@ -293,6 +298,19 @@ def lowpass_filter_frame(
         filtered[column] = output
     filtered.attrs = dict(frame.attrs)
     return preserve_sample_period(filtered, period_ns)
+
+
+def _lowpass_segment_ids(
+    index: pd.DatetimeIndex,
+    nominal_period_ns: int | None,
+) -> pd.Series:
+    if nominal_period_ns is None or len(index) < 2:
+        return pd.Series(0, index=index, dtype=int)
+    gap_threshold_ns = LOWPASS_PHYSICAL_GAP_FACTOR * float(nominal_period_ns)
+    diffs_ns = index.to_series().diff().dt.total_seconds().mul(1_000_000_000.0)
+    breaks = diffs_ns.gt(gap_threshold_ns)
+    breaks.iloc[0] = False
+    return breaks.cumsum().astype(int)
 
 
 def detrend_moving_average(

@@ -87,3 +87,21 @@
 - `transform_frame()` 的基础能力不得自动进入评分、排序、候选池；
 - 旧模式（`detrend`、`diff`、`detrend_diff`）保持兼容，且不被映射为新模式；
 - 新增字段和模式不得进入评分、排序、候选池或默认执行流程。
+
+## 单分支初筛 Runner 测试边界
+
+- `run_initial_screening_branch()` 一次调用只执行一个分支，不自动执行另一分支；
+- `branch=raw` 只允许 `preprocess_mode=raw`；
+- `branch=processed` 只允许 `lowpass` / `lowpass_detrend` / `lowpass_diff`；
+- 非法 branch 或 branch/mode 不匹配必须明确 `ValueError`，不得静默纠正；
+- `raw` 分支输出隔离到 `screening_branches/raw/`，`processed` 分支输出隔离到
+  `screening_branches/processed/`；
+- 分支 runner 不得向运行根目录发布正式初筛文件；
+- Raw 分支结果与正式 `analyze_numeric_frame()` / `run_analysis()` 的 Raw 结果
+  一致；
+- `lowpass_tau_minutes` 与 `diff_interval_minutes` 必须真实传入
+  `transform_frame()`；
+- 正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝三个 `lowpass*` 模式；
+- 两个分支输出互不覆盖，同分支重跑只覆盖自身分支；
+- 不生成 `preprocessing_comparison.csv`、`preprocessing_context.json`；
+- 不实现 confirmation / promotion。

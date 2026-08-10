@@ -80,6 +80,28 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
             f"Preprocess mode {config.preprocess_mode!r} is not wired into the "
             "analysis/screening flow yet"
         )
+    return _analyze_numeric_frame_core(frame, config, progress_callback=progress_callback)
+
+
+def analyze_initial_screening_branch_frame(
+    frame: pd.DataFrame,
+    config: AnalysisConfig,
+    progress_callback=None,
+) -> AnalysisTables:
+    """Branch-runner-only internal entry that shares the screening core.
+
+    Only the single-branch runner calls this after it has validated the
+    branch/mode pair. The formal ``analyze_numeric_frame()`` guard remains
+    enforced for all other callers.
+    """
+    return _analyze_numeric_frame_core(frame, config, progress_callback=progress_callback)
+
+
+def _analyze_numeric_frame_core(
+    frame: pd.DataFrame,
+    config: AnalysisConfig,
+    progress_callback=None,
+) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,
         diagnostics,
@@ -126,6 +148,8 @@ def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_
         config.detrend_window,
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
+        lowpass_tau_minutes=config.lowpass_tau_minutes,
+        diff_interval_minutes=config.diff_interval_minutes,
     )
     target_mask = segment_mask.reindex(transformed.index).fillna(False).astype(bool)
     analysis_target_mask = None if bool(target_mask.all()) else target_mask

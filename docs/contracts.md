@@ -113,11 +113,17 @@ detrend_diff
    - `lowpass_diff`
 
 3. `analyze_numeric_frame()` / 正式初筛流程尚未接入上述三个模式，必须明确拒绝。
+   `run_analysis()` 同样必须拒绝。
 
 4. Web / CLI / API / 双分支正式运行尚未接入。
 
 5. 不得因为 `transform_frame()` / `transform_frame_causal()` 已具备基础能力，
    就绕过 raw + processed 双分支比较和人工确认流程。
+
+6. 当前已具备单 branch 初筛执行能力：`run_initial_screening_branch()` 一次调用
+   只执行一个分支（`raw` 或 `processed`），结果写入
+   `screening_branches/raw/` 或 `screening_branches/processed/`，不发布到运行
+   根目录。
 
 causal 组合固定为：
 
@@ -219,7 +225,16 @@ run_directory/
 - 不得按变量选择两个分支中较高的分数；
 - 不得生成新的综合评分。
 
-当前阶段不创建这些目录或文件。
+当前阶段（PR-6）事实：
+
+- 已具备单 branch 初筛执行能力，一次调用只执行一个分支，不自动执行另一分支；
+- `raw` 分支输出隔离到 `screening_branches/raw/`，`processed` 分支输出隔离到
+  `screening_branches/processed/`；
+- 分支输出不得发布到运行根目录；
+- 未实现双分支 orchestration；
+- 未实现 `preprocessing_comparison.csv`；
+- 未实现 confirmation / promotion；
+- 正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝三个 `lowpass*` 模式。
 
 ## preprocessing_comparison.csv 契约
 

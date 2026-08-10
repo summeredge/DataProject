@@ -11,7 +11,7 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.screening import residual_corr_scores
-from chem_ts_corr.service import analyze_numeric_frame
+from chem_ts_corr.service import _analyze_numeric_frame_core, analyze_numeric_frame
 from chem_ts_corr.web import _build_result_payload
 
 
@@ -93,7 +93,7 @@ def test_residual_hints_do_not_change_simultaneous_control_or_full_scan():
 
     service_source = Path("chem_ts_corr/service.py").read_text(encoding="utf-8")
     assert 'best_lags = raw_ranked.set_index("variable")["lag"].to_dict()' not in service_source
-    residual_call = inspect.getsource(analyze_numeric_frame).split("residual_output = residual_corr_scores(", 1)[1].split(")\n", 1)[0]
+    residual_call = inspect.getsource(_analyze_numeric_frame_core).split("residual_output = residual_corr_scores(", 1)[1].split(")\n", 1)[0]
     assert "best_lags=" not in residual_call
     assert '["condition_number"]' not in inspect.getsource(screening.risk_flags)
 

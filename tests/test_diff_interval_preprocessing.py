@@ -310,6 +310,40 @@ def test_empty_frame_returns_consistent_empty_frame():
     assert result.columns.tolist() == ["x"]
 
 
+def test_empty_frame_with_explicit_interval_returns_empty_frame():
+    index = pd.DatetimeIndex([])
+    frame = pd.DataFrame(index=index, columns=["x"], dtype=float)
+    frame.attrs["custom_attr"] = "keep"
+    snapshot = frame.copy(deep=True)
+    snapshot.attrs = dict(frame.attrs)
+
+    result = difference_by_physical_interval(frame, 5.0)
+
+    assert result.empty
+    assert result.index.equals(index)
+    assert result.columns.tolist() == ["x"]
+    assert result.attrs["custom_attr"] == "keep"
+    pd.testing.assert_frame_equal(frame, snapshot)
+
+
+@pytest.mark.parametrize(
+    "bad_interval",
+    [0, -1.0, float("nan"), float("inf"), -float("inf"), "abc"],
+)
+def test_empty_frame_rejects_invalid_diff_interval_minutes(bad_interval):
+    frame = pd.DataFrame(index=pd.DatetimeIndex([]), columns=["x"], dtype=float)
+
+    with pytest.raises(ValueError, match="diff_interval_minutes"):
+        difference_by_physical_interval(frame, bad_interval)
+
+
+def test_resolve_diff_interval_still_requires_period_for_explicit_interval_on_empty_frame():
+    frame = pd.DataFrame(index=pd.DatetimeIndex([]), columns=["x"], dtype=float)
+
+    with pytest.raises(ValueError, match="sampling period"):
+        resolve_diff_interval(frame, 5.0)
+
+
 def test_zero_column_frame_keeps_index():
     index = pd.date_range("2026-01-01", periods=5, freq="1min")
     frame = pd.DataFrame(index=index)

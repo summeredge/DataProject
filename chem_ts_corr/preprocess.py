@@ -350,18 +350,9 @@ def difference_by_contiguous_segment(frame: pd.DataFrame) -> pd.DataFrame:
     return preserve_sample_period(frame.groupby(groups).diff(), period_ns)
 
 
-def resolve_diff_interval(
-    frame: pd.DataFrame,
+def _validate_diff_interval_minutes(
     diff_interval_minutes: float | None,
-) -> tuple[int, float]:
-    """Resolve a requested difference interval into fixed diff parameters.
-
-    Returns (effective_diff_points, effective_diff_interval_minutes). None
-    means one analysis sampling period; a specified interval is converted
-    with max(1, round(diff_interval_minutes / sampling_interval_minutes)) and
-    the effective interval is always an exact multiple of the sampling
-    interval.
-    """
+) -> float | None:
     if diff_interval_minutes is not None:
         try:
             diff_interval_minutes = float(diff_interval_minutes)
@@ -374,6 +365,22 @@ def resolve_diff_interval(
                 "diff_interval_minutes must be a finite value greater than 0; "
                 "use None for automatic interval"
             )
+    return diff_interval_minutes
+
+
+def resolve_diff_interval(
+    frame: pd.DataFrame,
+    diff_interval_minutes: float | None,
+) -> tuple[int, float]:
+    """Resolve a requested difference interval into fixed diff parameters.
+
+    Returns (effective_diff_points, effective_diff_interval_minutes). None
+    means one analysis sampling period; a specified interval is converted
+    with max(1, round(diff_interval_minutes / sampling_interval_minutes)) and
+    the effective interval is always an exact multiple of the sampling
+    interval.
+    """
+    diff_interval_minutes = _validate_diff_interval_minutes(diff_interval_minutes)
     if not isinstance(frame.index, pd.DatetimeIndex):
         raise ValueError("resolve_diff_interval requires a DatetimeIndex")
     if not frame.index.is_monotonic_increasing or not frame.index.is_unique:
@@ -413,9 +420,14 @@ def difference_by_physical_interval(
     borrows history from an earlier segment. Missing inputs and uncomputable
     positions stay missing and are never filled with 0.0.
     """
+    diff_interval_minutes = _validate_diff_interval_minutes(diff_interval_minutes)
+    if len(frame) == 0:
+        result = frame.copy()
+        result.attrs = dict(frame.attrs)
+        return result
     effective_diff_points, _ = resolve_diff_interval(frame, diff_interval_minutes)
     period_ns = sample_period_ns(frame)
-    if len(frame) == 0 or len(frame.columns) == 0:
+    if len(frame.columns) == 0:
         result = frame.copy()
         result.attrs = dict(frame.attrs)
         return preserve_sample_period(result, period_ns)

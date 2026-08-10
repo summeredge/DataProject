@@ -252,21 +252,28 @@ def test_config_rejects_unknown_preprocess_mode():
 
 
 @pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))
-def test_unimplemented_modes_are_rejected_by_transform_frames(mode: str):
+def test_lowpass_modes_run_in_transform_frame_but_stay_rejected_by_causal_path(
+    mode: str,
+):
     frame = _raw_frame().iloc[:20]
 
-    with pytest.raises(ValueError, match="not implemented"):
-        transform_frame(frame, mode, 24)
+    transformed = transform_frame(frame, mode, 24)
+
+    assert transformed.columns.tolist() == frame.columns.tolist()
+    assert not transformed.empty
     with pytest.raises(ValueError, match="not implemented"):
         transform_frame_causal(frame, mode, 24)
 
 
 @pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))
-def test_unimplemented_modes_do_not_enter_analysis_flow(tmp_path: Path, mode: str):
-    config = _raw_config(tmp_path, preprocess_mode=mode)
+def test_lowpass_modes_are_not_exposed_by_official_web_or_cli(mode: str):
+    from chem_ts_corr import cli, web
 
-    with pytest.raises(ValueError, match="not implemented"):
-        analyze_numeric_frame(_raw_frame(), config)
+    web_source = Path(web.__file__).read_text(encoding="utf-8")
+    cli_source = Path(cli.__file__).read_text(encoding="utf-8")
+
+    assert f'<option value="{mode}">' not in web_source
+    assert f'"{mode}"' not in cli_source
 
 
 def test_raw_main_screening_regression_baseline(tmp_path: Path):

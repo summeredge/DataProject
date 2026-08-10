@@ -185,8 +185,36 @@ def transform_frame(
     detrend_window: int,
     max_interpolate_gap_points: int = 5,
     interpolate_limit_area: str = "inside",
+    lowpass_tau_minutes: float = 5.0,
+    diff_interval_minutes: float | None = None,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
+    if mode == "lowpass":
+        return lowpass_filter_frame(
+            frame,
+            tau_minutes=lowpass_tau_minutes,
+        )
+    if mode == "lowpass_detrend":
+        smoothed = lowpass_filter_frame(
+            frame,
+            tau_minutes=lowpass_tau_minutes,
+        )
+        return detrend_moving_average(
+            smoothed,
+            detrend_window,
+            max_interpolate_gap_points,
+            interpolate_limit_area,
+        )
+    if mode == "lowpass_diff":
+        smoothed = lowpass_filter_frame(
+            frame,
+            tau_minutes=lowpass_tau_minutes,
+        )
+        transformed = difference_by_physical_interval(
+            smoothed,
+            diff_interval_minutes=diff_interval_minutes,
+        ).dropna()
+        return preserve_sample_period(transformed, period_ns)
     if mode in NOT_IMPLEMENTED_PREPROCESS_MODES:
         raise ValueError(
             f"Preprocess mode {mode!r} is defined in the contract but is not implemented yet"

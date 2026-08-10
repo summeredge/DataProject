@@ -421,10 +421,14 @@ def test_all_missing_column_stays_missing_without_dropping_other_columns():
 
 
 @pytest.mark.parametrize("mode", ["lowpass", "lowpass_detrend", "lowpass_diff"])
-def test_lowpass_modes_remain_unimplemented_in_execution_paths(mode: str):
+def test_lowpass_modes_run_in_transform_frame_but_stay_rejected_by_causal_path(
+    mode: str,
+):
     frame = _regular_frame(20)
 
-    with pytest.raises(ValueError, match="not implemented"):
-        transform_frame(frame, mode, 24)
+    transformed = transform_frame(frame, mode, 24)
+
+    assert transformed.columns.tolist() == frame.columns.tolist()
+    assert not transformed.empty
     with pytest.raises(ValueError, match="not implemented"):
         transform_frame_causal(frame, mode, 24)

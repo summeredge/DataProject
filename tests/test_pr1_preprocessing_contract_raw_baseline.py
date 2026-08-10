@@ -276,6 +276,14 @@ def test_lowpass_modes_are_not_exposed_by_official_web_or_cli(mode: str):
     assert f'"{mode}"' not in cli_source
 
 
+@pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))
+def test_lowpass_modes_do_not_enter_analysis_flow(tmp_path: Path, mode: str):
+    config = _raw_config(tmp_path, preprocess_mode=mode)
+
+    with pytest.raises(ValueError, match="analysis/screening flow"):
+        analyze_numeric_frame(_raw_frame(), config)
+
+
 def test_raw_main_screening_regression_baseline(tmp_path: Path):
     config = _raw_config(tmp_path)
     tables = analyze_numeric_frame(_raw_frame(), config)

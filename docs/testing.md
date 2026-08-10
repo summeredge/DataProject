@@ -78,6 +78,11 @@
 - `diff_interval_minutes <= 0` 被明确拒绝，`None` 合法；
 - 四种契约模式（`raw`、`lowpass`、`lowpass_detrend`、`lowpass_diff`）可被配置对象
   表示；
-- 未实现的 `lowpass*` 模式进入执行流程时被明确拒绝，不得静默回退到 `raw`；
+- `transform_frame()` 支持 `lowpass*`；
+- `transform_frame_causal()` 当前仍拒绝 `lowpass*`；
+- `analyze_numeric_frame()` 当前仍拒绝 `lowpass*`；
+- Web/CLI 当前不得暴露 `lowpass*` 正式运行入口；
+- Raw 和旧模式保持回归不变；
+- `transform_frame()` 的基础能力不得自动进入评分、排序、候选池；
 - 旧模式（`detrend`、`diff`、`detrend_diff`）保持兼容，且不被映射为新模式；
 - 新增字段和模式不得进入评分、排序、候选池或默认执行流程。

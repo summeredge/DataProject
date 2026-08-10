@@ -99,9 +99,25 @@ detrend_diff
 - `detrend` 不得映射为 `lowpass_detrend`；
 - `diff` 不得映射为 `lowpass_diff`；
 - 旧模式的处理逻辑、旧配置文件和旧调用方兼容行为不得修改；
-- `lowpass`、`lowpass_detrend`、`lowpass_diff` 目前仅存在于配置与文档契约，
-  尚未实现；配置对象可以表示这些模式，但任何实际执行必须被明确拒绝并报
-  “暂未实现”，不得静默回退到 `raw`。
+
+当前阶段：
+
+1. `transform_frame()` 已支持：
+   - `lowpass`
+   - `lowpass_detrend`
+   - `lowpass_diff`
+
+2. `transform_frame_causal()` 尚未支持上述三个模式，必须明确拒绝。
+
+3. `analyze_numeric_frame()` / 正式初筛流程尚未接入上述三个模式，必须明确拒绝。
+
+4. Web / CLI / API / 双分支正式运行尚未接入。
+
+5. 不得因为 `transform_frame()` 已具备基础能力，就绕过 raw + processed
+   双分支比较和人工确认流程。
+
+新模式不得自动进入评分、排序、候选池；非 Raw 正式初筛必须等待后续
+双分支和确认机制。
 
 ## 预处理配置字段
 

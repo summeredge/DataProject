@@ -8,7 +8,9 @@ from pathlib import Path
 # 预处理模式契约：
 # - 新模式（raw/lowpass/lowpass_detrend/lowpass_diff）语义固定，见 docs/contracts.md；
 # - 旧模式（detrend/diff/detrend_diff）继续保留兼容，不映射为新模式；
-# - lowpass* 模式只允许在配置对象中表示，实际执行前必须被明确拒绝（暂未实现）。
+# - lowpass* 已具备 transform_frame() 和 transform_frame_causal() 基础执行能力；
+# - 尚未接入 analyze_numeric_frame() / 正式 screening flow；
+# - 正式流程仍由 NOT_WIRED_ANALYSIS_PREPROCESS_MODES 拦截。
 SUPPORTED_PREPROCESS_MODES = frozenset(
     {"raw", "detrend", "diff", "detrend_diff", "lowpass", "lowpass_detrend", "lowpass_diff"}
 )

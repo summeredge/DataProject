@@ -515,3 +515,115 @@ def test_causal_legacy_modes_are_unaffected_by_new_parameters(mode: str):
     )
 
     pd.testing.assert_frame_equal(baseline, varied)
+
+
+def test_causal_lowpass_timeline_prefix_invariance():
+    # The 4/7/4 prefix has a 4-minute nominal mode; appending 7/7 flips the
+    # global mode to 7 minutes. The causal run must keep the historical 4.
+    intervals = [4, 7, 4, 7, 7]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:4]
+    assert sample_period_ns(prefix) == 4 * MINUTE_NS
+    assert sample_period_ns(full) == 7 * MINUTE_NS
+
+    prefix_result = transform_frame_causal(
+        prefix, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+    full_result = transform_frame_causal(
+        full, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    # 7 minutes > 1.5 * 4 minutes stays a real physical gap in the full run:
+    # the post-gap row still starts a new segment with its raw value.
+    assert prefix_result.loc[prefix.index[2], "x"] == 20.0
+    assert full_result.loc[prefix.index[2], "x"] == 20.0
+
+
+def test_causal_lowpass_detrend_timeline_prefix_invariance():
+    intervals = [4, 7, 4, 7, 7]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:4]
+    assert sample_period_ns(prefix) == 4 * MINUTE_NS
+    assert sample_period_ns(full) == 7 * MINUTE_NS
+
+    prefix_result = transform_frame_causal(
+        prefix, "lowpass_detrend", 4, lowpass_tau_minutes=5.0
+    )
+    full_result = transform_frame_causal(
+        full, "lowpass_detrend", 4, lowpass_tau_minutes=5.0
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    # lowpass -> trailing detrend: the prefix rows survive from the two
+    # 4-minute segments and never borrow future rows.
+    assert prefix_result.index.tolist() == [prefix.index[1], prefix.index[3]]
+
+
+def test_causal_lowpass_diff_timeline_prefix_invariance_and_effective_points():
+    # Historical nominal is 4 minutes -> 8 minutes means a 2-point difference.
+    # A future-flipped 7-minute nominal would wrongly collapse it to 1 point.
+    intervals = [4, 7, 4, 4, 4, 7, 7, 7, 7, 7, 7]
+    full = pd.DataFrame(
+        {"x": np.arange(len(intervals) + 1, dtype=float) * 10.0},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:6]
+    assert sample_period_ns(prefix) == 4 * MINUTE_NS
+    assert sample_period_ns(full) == 7 * MINUTE_NS
+
+    prefix_result = transform_frame_causal(
+        prefix,
+        "lowpass_diff",
+        24,
+        lowpass_tau_minutes=5.0,
+        diff_interval_minutes=8.0,
+    )
+    full_result = transform_frame_causal(
+        full,
+        "lowpass_diff",
+        24,
+        lowpass_tau_minutes=5.0,
+        diff_interval_minutes=8.0,
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    smoothed = lowpass_filter_frame(prefix, tau_minutes=5.0)
+    # t4 compares against t2 and t5 against t3 (2 points), not 1 point.
+    assert prefix_result.index.tolist() == [prefix.index[4], prefix.index[5]]
+    assert prefix_result["x"].iloc[0] == pytest.approx(
+        smoothed["x"].iloc[4] - smoothed["x"].iloc[2], abs=1e-12
+    )
+    assert prefix_result["x"].iloc[1] == pytest.approx(
+        smoothed["x"].iloc[5] - smoothed["x"].iloc[3], abs=1e-12
+    )
+    # The first two rows of the new segment stay missing: the 7-minute gap is
+    # still a real physical gap and the difference never borrows pre-gap rows.
+    assert prefix.index[2] not in prefix_result.index
+    assert prefix.index[3] not in prefix_result.index
+
+
+def test_causal_period_prefers_stored_sample_period_attr():
+    intervals = [4, 7, 4, 7, 7]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0, 40.0, 50.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:4].copy()
+    prefix.attrs["lag_sample_period_ns"] = 4 * MINUTE_NS
+    full.attrs["lag_sample_period_ns"] = 4 * MINUTE_NS
+
+    prefix_result = transform_frame_causal(
+        prefix, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+    full_result = transform_frame_causal(
+        full, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)

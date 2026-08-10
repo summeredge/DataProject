@@ -3,13 +3,23 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import NOT_IMPLEMENTED_PREPROCESS_MODES
-from chem_ts_corr.time_axis import infer_sample_period_ns, preserve_sample_period, sample_period_ns
+from chem_ts_corr.time_axis import (
+    SAMPLE_PERIOD_NS_ATTR,
+    infer_sample_period_ns,
+    preserve_sample_period,
+    sample_period_ns,
+)
 
 
 LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
+# Causal nominal period falls back to the mode of the earliest observed
+# intervals only, so future timestamps can never redefine the period used for
+# already-produced prefix results.
+CAUSAL_PERIOD_PREFIX_INTERVALS = 3
 
 
 @dataclass(frozen=True)
@@ -236,6 +246,46 @@ def transform_frame(
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
 
+def resolve_causal_sample_period_ns(frame: pd.DataFrame) -> int | None:
+    """Resolve a fixed nominal period for a causal transformation.
+
+    A valid stored ``lag_sample_period_ns`` wins. Without a stored period the
+    nominal period is inferred only from the earliest observed intervals, so
+    timestamps appended after the call can never change the period that was
+    already used for earlier results.
+    """
+    stored = frame.attrs.get(SAMPLE_PERIOD_NS_ATTR)
+    try:
+        stored_int = int(stored)
+    except (TypeError, ValueError, OverflowError):
+        stored_int = 0
+    if stored_int > 0:
+        return stored_int
+    if not isinstance(frame.index, pd.DatetimeIndex) or len(frame.index) < 2:
+        return None
+    positive = np.diff(frame.index.asi8)
+    positive = positive[positive > 0]
+    if not len(positive):
+        return None
+    return _earliest_mode_int(positive[:CAUSAL_PERIOD_PREFIX_INTERVALS])
+
+
+def _earliest_mode_int(values: np.ndarray) -> int:
+    counts: dict[int, int] = {}
+    first_seen: list[int] = []
+    for raw in values:
+        value = int(raw)
+        if value not in counts:
+            counts[value] = 0
+            first_seen.append(value)
+        counts[value] += 1
+    best = first_seen[0]
+    for value in first_seen:
+        if counts[value] > counts[best]:
+            best = value
+    return best
+
+
 def transform_frame_causal(
     frame: pd.DataFrame,
     mode: str,
@@ -244,32 +294,38 @@ def transform_frame_causal(
     diff_interval_minutes: float | None = None,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
+    causal_period_ns = resolve_causal_sample_period_ns(frame)
     if mode == "lowpass":
         return lowpass_filter_frame(
             frame,
             tau_minutes=lowpass_tau_minutes,
+            nominal_period_ns=causal_period_ns,
         )
     if mode == "lowpass_detrend":
         smoothed = lowpass_filter_frame(
             frame,
             tau_minutes=lowpass_tau_minutes,
+            nominal_period_ns=causal_period_ns,
         )
         return detrend_trailing_average(
             smoothed,
             detrend_window,
+            nominal_period_ns=causal_period_ns,
         )
     if mode == "lowpass_diff":
         smoothed = lowpass_filter_frame(
             frame,
             tau_minutes=lowpass_tau_minutes,
+            nominal_period_ns=causal_period_ns,
         )
         transformed = difference_by_physical_interval(
             smoothed,
             diff_interval_minutes=diff_interval_minutes,
+            nominal_period_ns=causal_period_ns,
         )
         return preserve_sample_period(
             transformed.dropna(how="all"),
-            period_ns,
+            causal_period_ns,
         )
     if mode == "raw":
         return preserve_sample_period(frame, period_ns)
@@ -289,6 +345,7 @@ def transform_frame_causal(
 def lowpass_filter_frame(
     frame: pd.DataFrame,
     tau_minutes: float,
+    nominal_period_ns: int | None = None,
 ) -> pd.DataFrame:
     """Apply a time-aware first-order low-pass filter to every column.
 
@@ -318,7 +375,10 @@ def lowpass_filter_frame(
             "with unique timestamps"
         )
 
-    period_ns = sample_period_ns(frame)
+    if nominal_period_ns is not None:
+        period_ns = int(nominal_period_ns)
+    else:
+        period_ns = sample_period_ns(frame)
     segment_ids = _physical_segment_ids(frame.index, period_ns)
     times_ns = frame.index.asi8
     filtered = pd.DataFrame(index=frame.index, columns=frame.columns, dtype=float)
@@ -382,8 +442,15 @@ def detrend_moving_average(
     return preserve_sample_period(transformed, period_ns)
 
 
-def detrend_trailing_average(frame: pd.DataFrame, window: int) -> pd.DataFrame:
-    period_ns = sample_period_ns(frame)
+def detrend_trailing_average(
+    frame: pd.DataFrame,
+    window: int,
+    nominal_period_ns: int | None = None,
+) -> pd.DataFrame:
+    if nominal_period_ns is not None:
+        period_ns = int(nominal_period_ns)
+    else:
+        period_ns = sample_period_ns(frame)
     window = max(3, int(window))
     min_periods = max(2, window // 4)
     groups = _contiguous_segment_ids(frame.index, period_ns)
@@ -424,6 +491,7 @@ def _validate_diff_interval_minutes(
 def resolve_diff_interval(
     frame: pd.DataFrame,
     diff_interval_minutes: float | None,
+    nominal_period_ns: int | None = None,
 ) -> tuple[int, float]:
     """Resolve a requested difference interval into fixed diff parameters.
 
@@ -442,7 +510,10 @@ def resolve_diff_interval(
             "DatetimeIndex with unique timestamps"
         )
 
-    period_ns = sample_period_ns(frame)
+    if nominal_period_ns is not None:
+        period_ns = int(nominal_period_ns)
+    else:
+        period_ns = sample_period_ns(frame)
     if period_ns is None:
         if len(frame) < 2 and diff_interval_minutes is None:
             return (1, float("nan"))
@@ -465,6 +536,7 @@ def resolve_diff_interval(
 def difference_by_physical_interval(
     frame: pd.DataFrame,
     diff_interval_minutes: float | None,
+    nominal_period_ns: int | None = None,
 ) -> pd.DataFrame:
     """Difference every column by a fixed physical interval within segments.
 
@@ -478,8 +550,15 @@ def difference_by_physical_interval(
         result = frame.copy()
         result.attrs = dict(frame.attrs)
         return result
-    effective_diff_points, _ = resolve_diff_interval(frame, diff_interval_minutes)
-    period_ns = sample_period_ns(frame)
+    effective_diff_points, _ = resolve_diff_interval(
+        frame,
+        diff_interval_minutes,
+        nominal_period_ns=nominal_period_ns,
+    )
+    if nominal_period_ns is not None:
+        period_ns = int(nominal_period_ns)
+    else:
+        period_ns = sample_period_ns(frame)
     if len(frame.columns) == 0:
         result = frame.copy()
         result.attrs = dict(frame.attrs)

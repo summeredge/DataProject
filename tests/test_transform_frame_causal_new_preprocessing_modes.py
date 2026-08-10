@@ -15,6 +15,7 @@ from chem_ts_corr.preprocess import (
     detrend_trailing_average,
     difference_by_physical_interval,
     lowpass_filter_frame,
+    resolve_causal_sample_period_ns,
     transform_frame_causal,
 )
 from chem_ts_corr.service import analyze_numeric_frame
@@ -627,3 +628,138 @@ def test_causal_period_prefers_stored_sample_period_attr():
     )
 
     pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+
+
+def test_resolve_causal_period_prefers_stored_attr():
+    frame = pd.DataFrame(
+        {"x": [0.0, 1.0]},
+        index=_timestamps_from_intervals([7]),
+    )
+    frame.attrs["lag_sample_period_ns"] = 5 * MINUTE_NS
+
+    assert resolve_causal_sample_period_ns(frame) == 5 * MINUTE_NS
+
+
+def test_resolve_causal_period_uses_first_positive_interval():
+    frame = pd.DataFrame(
+        {"x": [0.0, 1.0]},
+        index=_timestamps_from_intervals([7]),
+    )
+
+    assert resolve_causal_sample_period_ns(frame) == 7 * MINUTE_NS
+
+
+def test_resolve_causal_period_short_prefix_and_full_agree():
+    prefix = pd.DataFrame(
+        {"x": [0.0, 1.0]},
+        index=_timestamps_from_intervals([7]),
+    )
+    full = pd.DataFrame(
+        {"x": [0.0, 1.0, 2.0, 3.0]},
+        index=_timestamps_from_intervals([7, 4, 4]),
+    )
+
+    assert resolve_causal_sample_period_ns(prefix) == 7 * MINUTE_NS
+    assert resolve_causal_sample_period_ns(full) == 7 * MINUTE_NS
+
+
+def test_resolve_causal_period_first_interval_is_fixed_source():
+    frame = pd.DataFrame(
+        {"x": np.arange(6, dtype=float)},
+        index=_timestamps_from_intervals([4, 7, 7, 7, 7]),
+    )
+    # The global axis mode is 7 minutes; the causal period must stay 4.
+    assert sample_period_ns(frame) == 7 * MINUTE_NS
+
+    assert resolve_causal_sample_period_ns(frame) == 4 * MINUTE_NS
+
+
+def test_resolve_causal_period_returns_none_when_undeterminable():
+    single = pd.DataFrame(
+        {"x": [1.0]},
+        index=pd.DatetimeIndex(["2026-01-01 00:00"]),
+    )
+    non_datetime = pd.DataFrame({"x": [1.0, 2.0]}, index=pd.RangeIndex(2))
+
+    assert resolve_causal_sample_period_ns(single) is None
+    assert resolve_causal_sample_period_ns(non_datetime) is None
+
+
+def test_causal_lowpass_short_prefix_timeline_prefix_invariance():
+    # The two-point prefix only has one 7-minute interval; appending 4/4 flips
+    # the global mode to 4 minutes, which must not redefine the past period.
+    intervals = [7, 4, 4]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:2]
+    assert sample_period_ns(prefix) == 7 * MINUTE_NS
+    assert sample_period_ns(full) == 4 * MINUTE_NS
+
+    prefix_result = transform_frame_causal(
+        prefix, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+    full_result = transform_frame_causal(
+        full, "lowpass", 24, lowpass_tau_minutes=5.0
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    # The past 7-minute interval stays contiguous (7 <= 1.5 * 7); the future
+    # 4-minute intervals must not turn it into a gap.
+    alpha7 = 1.0 - np.exp(-7.0 / 5.0)
+    assert prefix_result["x"].iloc[1] == pytest.approx(alpha7 * 10.0, abs=1e-12)
+    assert full_result["x"].iloc[1] == pytest.approx(alpha7 * 10.0, abs=1e-12)
+
+
+def test_causal_lowpass_detrend_short_prefix_timeline_prefix_invariance():
+    intervals = [7, 4, 4]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:2]
+
+    prefix_result = transform_frame_causal(
+        prefix, "lowpass_detrend", 4, lowpass_tau_minutes=5.0
+    )
+    full_result = transform_frame_causal(
+        full, "lowpass_detrend", 4, lowpass_tau_minutes=5.0
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    assert prefix_result.index.tolist() == [prefix.index[1]]
+
+
+def test_causal_lowpass_diff_short_prefix_timeline_prefix_invariance():
+    intervals = [7, 4, 4]
+    full = pd.DataFrame(
+        {"x": [0.0, 10.0, 20.0, 30.0]},
+        index=_timestamps_from_intervals(intervals),
+    )
+    prefix = full.iloc[:2]
+
+    prefix_result = transform_frame_causal(
+        prefix,
+        "lowpass_diff",
+        24,
+        lowpass_tau_minutes=5.0,
+        diff_interval_minutes=7.0,
+    )
+    full_result = transform_frame_causal(
+        full,
+        "lowpass_diff",
+        24,
+        lowpass_tau_minutes=5.0,
+        diff_interval_minutes=7.0,
+    )
+
+    pd.testing.assert_frame_equal(full_result.loc[prefix_result.index], prefix_result)
+    # Historical nominal = 7 min keeps requested 7 min a 1-point difference;
+    # a future-flipped 4-min nominal would wrongly make it 2 points.
+    smoothed = lowpass_filter_frame(prefix, tau_minutes=5.0)
+    assert prefix_result.index.tolist() == [prefix.index[1]]
+    assert prefix_result["x"].iloc[0] == pytest.approx(
+        smoothed["x"].iloc[1] - smoothed["x"].iloc[0],
+        abs=1e-12,
+    )

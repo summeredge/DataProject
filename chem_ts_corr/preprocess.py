@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import NOT_IMPLEMENTED_PREPROCESS_MODES
@@ -16,10 +15,6 @@ from chem_ts_corr.time_axis import (
 
 
 LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
-# Causal nominal period falls back to the mode of the earliest observed
-# intervals only, so future timestamps can never redefine the period used for
-# already-produced prefix results.
-CAUSAL_PERIOD_PREFIX_INTERVALS = 3
 
 
 @dataclass(frozen=True)
@@ -250,9 +245,9 @@ def resolve_causal_sample_period_ns(frame: pd.DataFrame) -> int | None:
     """Resolve a fixed nominal period for a causal transformation.
 
     A valid stored ``lag_sample_period_ns`` wins. Without a stored period the
-    nominal period is inferred only from the earliest observed intervals, so
-    timestamps appended after the call can never change the period that was
-    already used for earlier results.
+    nominal period is the first positive time interval of the axis and is
+    never recomputed, so timestamps appended after the call can never redefine
+    the period that was already used for earlier results.
     """
     stored = frame.attrs.get(SAMPLE_PERIOD_NS_ATTR)
     try:
@@ -263,27 +258,12 @@ def resolve_causal_sample_period_ns(frame: pd.DataFrame) -> int | None:
         return stored_int
     if not isinstance(frame.index, pd.DatetimeIndex) or len(frame.index) < 2:
         return None
-    positive = np.diff(frame.index.asi8)
-    positive = positive[positive > 0]
-    if not len(positive):
-        return None
-    return _earliest_mode_int(positive[:CAUSAL_PERIOD_PREFIX_INTERVALS])
-
-
-def _earliest_mode_int(values: np.ndarray) -> int:
-    counts: dict[int, int] = {}
-    first_seen: list[int] = []
-    for raw in values:
-        value = int(raw)
-        if value not in counts:
-            counts[value] = 0
-            first_seen.append(value)
-        counts[value] += 1
-    best = first_seen[0]
-    for value in first_seen:
-        if counts[value] > counts[best]:
-            best = value
-    return best
+    timestamps_ns = frame.index.asi8
+    for i in range(1, len(timestamps_ns)):
+        delta_ns = int(timestamps_ns[i]) - int(timestamps_ns[i - 1])
+        if delta_ns > 0:
+            return delta_ns
+    return None
 
 
 def transform_frame_causal(

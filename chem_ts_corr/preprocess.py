@@ -266,7 +266,7 @@ def lowpass_filter_frame(
         )
 
     period_ns = sample_period_ns(frame)
-    segment_ids = _lowpass_segment_ids(frame.index, period_ns)
+    segment_ids = _physical_segment_ids(frame.index, period_ns)
     times_ns = frame.index.asi8
     filtered = pd.DataFrame(index=frame.index, columns=frame.columns, dtype=float)
     for column in frame.columns:
@@ -300,7 +300,7 @@ def lowpass_filter_frame(
     return preserve_sample_period(filtered, period_ns)
 
 
-def _lowpass_segment_ids(
+def _physical_segment_ids(
     index: pd.DatetimeIndex,
     nominal_period_ns: int | None,
 ) -> pd.Series:
@@ -348,6 +348,83 @@ def difference_by_contiguous_segment(frame: pd.DataFrame) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     groups = _contiguous_segment_ids(frame.index, period_ns)
     return preserve_sample_period(frame.groupby(groups).diff(), period_ns)
+
+
+def resolve_diff_interval(
+    frame: pd.DataFrame,
+    diff_interval_minutes: float | None,
+) -> tuple[int, float]:
+    """Resolve a requested difference interval into fixed diff parameters.
+
+    Returns (effective_diff_points, effective_diff_interval_minutes). None
+    means one analysis sampling period; a specified interval is converted
+    with max(1, round(diff_interval_minutes / sampling_interval_minutes)) and
+    the effective interval is always an exact multiple of the sampling
+    interval.
+    """
+    if diff_interval_minutes is not None:
+        try:
+            diff_interval_minutes = float(diff_interval_minutes)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "diff_interval_minutes must be a finite value greater than 0"
+            ) from exc
+        if not math.isfinite(diff_interval_minutes) or diff_interval_minutes <= 0:
+            raise ValueError(
+                "diff_interval_minutes must be a finite value greater than 0; "
+                "use None for automatic interval"
+            )
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("resolve_diff_interval requires a DatetimeIndex")
+    if not frame.index.is_monotonic_increasing or not frame.index.is_unique:
+        raise ValueError(
+            "resolve_diff_interval requires a monotonically increasing "
+            "DatetimeIndex with unique timestamps"
+        )
+
+    period_ns = sample_period_ns(frame)
+    if period_ns is None:
+        if len(frame) < 2 and diff_interval_minutes is None:
+            return (1, float("nan"))
+        raise ValueError(
+            "resolve_diff_interval could not determine a valid positive "
+            "sampling period for the given time axis"
+        )
+    sampling_interval_minutes = period_ns / 60_000_000_000.0
+    if diff_interval_minutes is None:
+        return (1, float(sampling_interval_minutes))
+    effective_diff_points = max(
+        1, round(diff_interval_minutes / sampling_interval_minutes)
+    )
+    return (
+        effective_diff_points,
+        float(effective_diff_points * sampling_interval_minutes),
+    )
+
+
+def difference_by_physical_interval(
+    frame: pd.DataFrame,
+    diff_interval_minutes: float | None,
+) -> pd.DataFrame:
+    """Difference every column by a fixed physical interval within segments.
+
+    difference(t) = x(t) - x(t - effective_diff_points), computed
+    independently inside each contiguous physical segment so a real gap never
+    borrows history from an earlier segment. Missing inputs and uncomputable
+    positions stay missing and are never filled with 0.0.
+    """
+    effective_diff_points, _ = resolve_diff_interval(frame, diff_interval_minutes)
+    period_ns = sample_period_ns(frame)
+    if len(frame) == 0 or len(frame.columns) == 0:
+        result = frame.copy()
+        result.attrs = dict(frame.attrs)
+        return preserve_sample_period(result, period_ns)
+    segment_ids = _physical_segment_ids(frame.index, period_ns)
+    result = frame.groupby(segment_ids, sort=False).diff(
+        periods=effective_diff_points
+    )
+    result.attrs = dict(frame.attrs)
+    return preserve_sample_period(result, period_ns)
 
 
 def _contiguous_segment_ids(index: pd.Index, period_ns: int | None) -> pd.Series:

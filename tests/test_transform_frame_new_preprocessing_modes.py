@@ -282,8 +282,10 @@ def test_invalid_diff_interval_minutes_fails_in_lowpass_diff(bad_interval: objec
     "mode",
     ["lowpass", "lowpass_detrend", "lowpass_diff"],
 )
-def test_causal_entry_still_rejects_lowpass_modes(mode: str):
+def test_causal_entry_supports_lowpass_modes(mode: str):
     frame = _regular_frame(10)
 
-    with pytest.raises(ValueError, match="not implemented"):
-        transform_frame_causal(frame, mode, 24)
+    result = transform_frame_causal(frame, mode, 24)
+
+    assert result.columns.tolist() == frame.columns.tolist()
+    assert not result.empty

@@ -13,7 +13,13 @@ SUPPORTED_PREPROCESS_MODES = frozenset(
     {"raw", "detrend", "diff", "detrend_diff", "lowpass", "lowpass_detrend", "lowpass_diff"}
 )
 CONTRACT_PREPROCESS_MODES = frozenset({"raw", "lowpass", "lowpass_detrend", "lowpass_diff"})
-NOT_IMPLEMENTED_PREPROCESS_MODES = frozenset({"lowpass", "lowpass_detrend", "lowpass_diff"})
+# 新模式已具备 transform_frame() / transform_frame_causal() 基础执行能力，
+# 但尚未接入正式 analysis/screening 流程。
+NOT_WIRED_ANALYSIS_PREPROCESS_MODES = frozenset(
+    {"lowpass", "lowpass_detrend", "lowpass_diff"}
+)
+# 兼容别名：旧测试/旧代码仍可导入旧名称，但新代码不得依赖它表达阶段语义。
+NOT_IMPLEMENTED_PREPROCESS_MODES = NOT_WIRED_ANALYSIS_PREPROCESS_MODES
 
 
 @dataclass(frozen=True)

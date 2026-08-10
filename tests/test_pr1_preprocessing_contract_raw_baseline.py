@@ -9,6 +9,7 @@ import pytest
 from chem_ts_corr.config import (
     CONTRACT_PREPROCESS_MODES,
     NOT_IMPLEMENTED_PREPROCESS_MODES,
+    NOT_WIRED_ANALYSIS_PREPROCESS_MODES,
     SUPPORTED_PREPROCESS_MODES,
     AnalysisConfig,
 )
@@ -251,18 +252,17 @@ def test_config_rejects_unknown_preprocess_mode():
         )
 
 
-@pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))
-def test_lowpass_modes_run_in_transform_frame_but_stay_rejected_by_causal_path(
-    mode: str,
-):
+@pytest.mark.parametrize("mode", sorted(NOT_WIRED_ANALYSIS_PREPROCESS_MODES))
+def test_lowpass_modes_run_in_transform_frame_and_causal_paths(mode: str):
     frame = _raw_frame().iloc[:20]
 
     transformed = transform_frame(frame, mode, 24)
+    causal = transform_frame_causal(frame, mode, 24)
 
     assert transformed.columns.tolist() == frame.columns.tolist()
     assert not transformed.empty
-    with pytest.raises(ValueError, match="not implemented"):
-        transform_frame_causal(frame, mode, 24)
+    assert causal.columns.tolist() == frame.columns.tolist()
+    assert not causal.empty
 
 
 @pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))

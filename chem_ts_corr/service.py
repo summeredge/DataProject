@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from chem_ts_corr.config import AnalysisConfig, NOT_IMPLEMENTED_PREPROCESS_MODES
+from chem_ts_corr.config import AnalysisConfig, NOT_WIRED_ANALYSIS_PREPROCESS_MODES
 from chem_ts_corr.data import select_numeric_frame
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
 from chem_ts_corr.preprocess import (
@@ -75,7 +75,7 @@ def run_xgb_analysis(
 
 
 def analyze_numeric_frame(frame: pd.DataFrame, config: AnalysisConfig, progress_callback=None) -> AnalysisTables:
-    if config.preprocess_mode in NOT_IMPLEMENTED_PREPROCESS_MODES:
+    if config.preprocess_mode in NOT_WIRED_ANALYSIS_PREPROCESS_MODES:
         raise ValueError(
             f"Preprocess mode {config.preprocess_mode!r} is not wired into the "
             "analysis/screening flow yet"

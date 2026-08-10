@@ -107,14 +107,29 @@ detrend_diff
    - `lowpass_detrend`
    - `lowpass_diff`
 
-2. `transform_frame_causal()` 尚未支持上述三个模式，必须明确拒绝。
+2. `transform_frame_causal()` 已支持：
+   - `lowpass`
+   - `lowpass_detrend`
+   - `lowpass_diff`
 
 3. `analyze_numeric_frame()` / 正式初筛流程尚未接入上述三个模式，必须明确拒绝。
 
 4. Web / CLI / API / 双分支正式运行尚未接入。
 
-5. 不得因为 `transform_frame()` 已具备基础能力，就绕过 raw + processed
-   双分支比较和人工确认流程。
+5. 不得因为 `transform_frame()` / `transform_frame_causal()` 已具备基础能力，
+   就绕过 raw + processed 双分支比较和人工确认流程。
+
+causal 组合固定为：
+
+```text
+lowpass_detrend
+= lowpass → trailing detrend
+
+lowpass_diff
+= lowpass → historical multi-point diff
+```
+
+causal 路径全部只允许当前及历史数据，不得使用未来样本。
 
 新模式不得自动进入评分、排序、候选池；非 Raw 正式初筛必须等待后续
 双分支和确认机制。

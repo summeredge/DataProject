@@ -79,7 +79,8 @@
 - 四种契约模式（`raw`、`lowpass`、`lowpass_detrend`、`lowpass_diff`）可被配置对象
   表示；
 - `transform_frame()` 支持 `lowpass*`；
-- `transform_frame_causal()` 当前仍拒绝 `lowpass*`；
+- `transform_frame_causal()` 支持 `lowpass*`；
+- causal 新模式不得使用未来样本；
 - `analyze_numeric_frame()` 当前仍拒绝 `lowpass*`；
 - Web/CLI 当前不得暴露 `lowpass*` 正式运行入口；
 - Raw 和旧模式保持回归不变；

@@ -128,3 +128,54 @@
 - 任一分支失败时不得生成半成品 comparison；
 - 不生成 `preprocessing_context.json`，不向运行根目录发布正式初筛结果；
 - 不实现 confirmation / promotion / Web / API / CLI 交互。
+
+## 统一 workflow 与 branch confirmation 测试边界
+
+- `run_initial_screening_workflow()` 只允许 `raw` / `lowpass` /
+  `lowpass_detrend` / `lowpass_diff`，旧模式必须明确 `ValueError` 且不得清理
+  已有 context / root / comparison；
+- 已存在 `screening_downstream.lock` 时再次启动 workflow 必须拒绝
+  （`initial_screening_run_locked`），现有运行文件不得改变；
+- `raw` workflow 只运行 raw branch，不运行 processed，不生成
+  `preprocessing_comparison.csv`；raw 自动 promotion 到正式 root，context
+  状态为 `not_required`，active branch/mode 均为 `raw`；
+- 非 Raw workflow 复用 `run_initial_screening_comparison()` 运行 raw +
+  processed 双分支并生成 comparison，context 状态为
+  `awaiting_confirmation`，active branch/mode 在 JSON 中必须真实为 `null`，
+  正式 root 初筛文件不得存在；
+- `preprocessing_context.json` 字段集合固定为冻结契约，不新增评分、排序或
+  自动推荐字段；
+- `lowpass*` 的 `lowpass_tau_minutes` 记录用户配置；差分字段为 `null`；
+- `lowpass_diff` 的 requested/effective diff 参数复用 `resolve_diff_interval()`
+  与现有采样周期 / resample 规则：1 min 数据、`diff_interval_minutes=5` 得
+  requested `5.0` / points `5` / interval `5.0`；`None` 得 requested `null` /
+  points `1` / interval `1.0`；
+- `resample_rule` 记录真实配置；
+- `confirm_initial_screening_branch()` 只允许 `raw` / `processed`，必须读取
+  context；确认 raw 后 `active_preprocessing_mode = raw`，确认 processed 后
+  `active_preprocessing_mode` 为 selected `lowpass*`，
+  `selected_preprocessing_mode` 不得改写；
+- confirmation 不得调用 `run_initial_screening_branch()` /
+  `run_initial_screening_comparison()` / `analyze_initial_screening_branch_frame()`
+  （确认 ≠ 重新运行）；
+- 同 branch 重复确认必须幂等（成功返回、状态不变、不重新分析、不创建重复
+  文件）；
+- downstream 开始前允许 `confirm raw → confirm processed` 切换，root 最终
+  必须精确等于新 branch；
+- branch 缺少 9 个必需正式文件时 confirmation 必须失败
+  （`initial_screening_branch_output_incomplete`），context 保持原状态，root
+  不得出现半成品；
+- promotion 是文件级发布：staging → backup → replace → context 更新，任一
+  replace / context 写入失败必须回滚原 root 文件与原 context，不允许
+  Raw/Processed 混合 root；
+- 新 branch 缺少 `residual_corr_scores.csv` 时，旧 root 的可选文件残留必须被
+  删除且进入 rollback 事务；
+- `begin_downstream_stage()` 读取 context：缺失
+  `initial_screening_context_missing`、非法 `initial_screening_context_invalid`、
+  `awaiting_confirmation` 时 `initial_screening_branch_not_confirmed`（不得创建
+  lock）；`confirmed` / `not_required` 通过并创建 `screening_downstream.lock`；
+- lock 后切换到另一 branch 必须拒绝（`initial_screening_branch_locked`），
+  root / context 不得改变；lock 后同 branch 确认允许 no-op；
+- 未锁定目录重新用于非 Raw workflow 时，上一轮正式 root 文件与旧 context
+  必须失效，新 comparison 完成后不得继续暴露上一轮 `ranked_features.csv` /
+  `recommended_candidates.csv`。

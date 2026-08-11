@@ -87,6 +87,23 @@ run_initial_screening_comparison():
 
 双分支执行不决定采用哪个分支。
 
+统一 workflow 已实现：
+
+```text
+run_initial_screening_workflow():
+  preprocess_mode 只能为 raw / lowpass / lowpass_detrend / lowpass_diff
+  旧模式（detrend / diff / detrend_diff）必须明确拒绝
+  → raw:
+      仅运行 raw branch
+      → 事务性 promotion 到正式 root
+      → preprocessing_context.json 状态 not_required
+  → lowpass*:
+      复用 run_initial_screening_comparison()
+      → raw + selected processed 双分支 + preprocessing_comparison.csv
+      → preprocessing_context.json 状态 awaiting_confirmation
+      → 正式 root 初筛文件不得存在
+```
+
 ## 初筛双分支
 
 第一阶段分支产物目标目录：
@@ -113,13 +130,25 @@ run_directory/
 - 单 branch 独立运行（`run_initial_screening_branch()`）；
 - 非 Raw 双 branch orchestration（`run_initial_screening_comparison()`）；
 - `preprocessing_comparison.csv` 对比产物；
+- `run_initial_screening_workflow()` 统一 workflow 与
+  `preprocessing_context.json`（raw `not_required` / 非 Raw
+  `awaiting_confirmation` / `confirmed`）；
+- 人工 branch confirmation（`confirm_initial_screening_branch()`）：只读取并
+  验证已有 branch 文件后 promotion，确认 ≠ 重新运行初筛；
+- 事务性 promotion：staging → backup → replace → context 更新，失败回滚，
+  不产生 Raw/Processed 混合 root；
+- downstream gate / lock：`begin_downstream_stage()` 读取 context，
+  `awaiting_confirmation` 明确拒绝，`confirmed` / `not_required` 允许，首次
+  通过后创建 `screening_downstream.lock`，lock 后禁止切换 branch；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
-- branch runner 不向运行根目录发布正式初筛文件。
+- branch runner 不向运行根目录发布正式初筛文件；
+- 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
+  context，避免暴露上一轮正式结果。
 
 当前尚未实现：
 
-- `preprocessing_context.json`；
-- branch confirmation；
-- active branch / promotion 到正式 root 输出；
-- 下游阶段 gate；
+- Web / API / CLI confirmation UI；
+- enhanced screening / Granger / RF-SHAP / conditional Granger / XGBoost 的
+  gate 接入（PR-9～PR-12 分别在各后续阶段入口调用
+  `begin_downstream_stage()`）；
 - Web / API / CLI 双分支交互。

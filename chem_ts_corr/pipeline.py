@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 import time
 
 import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.data import drop_excluded_columns, load_timeseries_csv
+from chem_ts_corr.data import (
+    drop_excluded_columns,
+    load_timeseries_csv,
+    select_numeric_frame,
+)
+from chem_ts_corr.preprocess import preprocess_frame, resolve_diff_interval
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze_numeric_frame
 
@@ -15,6 +25,38 @@ from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze
 SCREENING_BRANCH_NAMES = frozenset({"raw", "processed"})
 PROCESSED_BRANCH_PREPROCESS_MODES = frozenset(
     {"lowpass", "lowpass_detrend", "lowpass_diff"}
+)
+WORKFLOW_PREPROCESS_MODES = frozenset(
+    {"raw", "lowpass", "lowpass_detrend", "lowpass_diff"}
+)
+CONTEXT_FILENAME = "preprocessing_context.json"
+DOWNSTREAM_LOCK_FILENAME = "screening_downstream.lock"
+DOWNSTREAM_LOCK_CONTENT = "downstream-locked"
+CONTEXT_FIELDS = [
+    "selected_preprocessing_mode",
+    "active_screening_branch",
+    "active_preprocessing_mode",
+    "lowpass_tau_minutes",
+    "requested_diff_interval_minutes",
+    "effective_diff_points",
+    "effective_diff_interval_minutes",
+    "resample_rule",
+    "branch_selection_status",
+]
+REQUIRED_FORMAL_SCREENING_FILES = [
+    "ranked_features.csv",
+    "recommended_candidates.csv",
+    "causal_review_candidates.csv",
+    "lag_scores.csv",
+    "near_miss_candidates.csv",
+    "diagnostics.csv",
+    "risk_flags.csv",
+    "lag_peak_quality.csv",
+    "summary.md",
+]
+OPTIONAL_FORMAL_SCREENING_FILES = ["residual_corr_scores.csv"]
+FORMAL_SCREENING_FILES = (
+    REQUIRED_FORMAL_SCREENING_FILES + OPTIONAL_FORMAL_SCREENING_FILES
 )
 
 
@@ -399,6 +441,493 @@ def _validate_comparison_mode(preprocess_mode: str) -> None:
             "run_initial_screening_comparison requires preprocess_mode in "
             f"{sorted(PROCESSED_BRANCH_PREPROCESS_MODES)}, got {preprocess_mode!r}"
         )
+
+
+def run_initial_screening_workflow(
+    config: AnalysisConfig,
+    *,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run the unified initial-screening workflow with branch state.
+
+    ``raw`` runs only the raw branch, transactionally promotes it to the
+    formal root and writes a ``not_required`` context. Each ``lowpass*`` mode
+    runs raw + selected processed branches and the comparison CSV via
+    ``run_initial_screening_comparison()``, then writes an
+    ``awaiting_confirmation`` context while leaving the formal root empty.
+    The mode is validated and locked runs are rejected before any previous
+    formal state is cleared.
+    """
+    _validate_workflow_mode(config.preprocess_mode)
+    _reject_locked_run(config.output_dir)
+    _clear_previous_formal_state(
+        config.output_dir, preprocess_mode=config.preprocess_mode
+    )
+    if config.preprocess_mode == "raw":
+        timings = run_initial_screening_branch(
+            config, branch="raw", progress_callback=progress_callback
+        )
+        context = _build_preprocessing_context(
+            config,
+            active_screening_branch="raw",
+            active_preprocessing_mode="raw",
+            branch_selection_status="not_required",
+        )
+        _promote_screening_branch(
+            config.output_dir, branch="raw", new_context=context
+        )
+        return {
+            "branch": "raw",
+            "timings": timings,
+            "context_path": Path(config.output_dir) / CONTEXT_FILENAME,
+        }
+    comparison = run_initial_screening_comparison(
+        config, progress_callback=progress_callback
+    )
+    context = _build_preprocessing_context(
+        config,
+        active_screening_branch=None,
+        active_preprocessing_mode=None,
+        branch_selection_status="awaiting_confirmation",
+    )
+    context_path = _write_context(config.output_dir, context)
+    return {**comparison, "context_path": context_path}
+
+
+def confirm_initial_screening_branch(
+    run_dir: Path,
+    *,
+    branch: str,
+) -> None:
+    """Publish an existing branch as the formal screening result.
+
+    Confirmation never re-runs screening: it reads the existing
+    ``preprocessing_context.json``, validates the selected branch outputs and
+    transactionally promotes them to the run root. Confirming the active
+    branch is an idempotent no-op; switching to the other branch is allowed
+    only until a downstream stage has started.
+    """
+    run_dir = Path(run_dir)
+    if branch not in SCREENING_BRANCH_NAMES:
+        raise ValueError(
+            f"Unknown screening branch: {branch!r}; expected one of "
+            f"{sorted(SCREENING_BRANCH_NAMES)}"
+        )
+    context = _read_preprocessing_context(run_dir)
+    if (run_dir / DOWNSTREAM_LOCK_FILENAME).exists():
+        if context["active_screening_branch"] == branch:
+            return
+        raise ValueError(
+            "initial_screening_branch_locked: cannot switch the active "
+            "screening branch after a downstream stage has started"
+        )
+
+    status = context["branch_selection_status"]
+    if status == "confirmed":
+        if context["active_screening_branch"] == branch:
+            return
+        active_mode = _active_mode_for_branch(context, branch)
+        _promote_screening_branch(
+            run_dir,
+            branch=branch,
+            new_context=_confirmed_context(context, branch, active_mode),
+        )
+        return
+    if status == "not_required":
+        if branch == "raw":
+            return
+        raise ValueError(
+            "initial_screening_branch_unavailable: the processed branch was "
+            "not run in the raw-only workflow"
+        )
+    if status == "awaiting_confirmation":
+        active_mode = _active_mode_for_branch(context, branch)
+        _promote_screening_branch(
+            run_dir,
+            branch=branch,
+            new_context=_confirmed_context(context, branch, active_mode),
+        )
+        return
+    raise ValueError(
+        f"initial_screening_context_invalid: unknown branch_selection_status "
+        f"{status!r}"
+    )
+
+
+def begin_downstream_stage(run_dir: Path) -> None:
+    """Gate a downstream stage behind a confirmed screening branch.
+
+    Reads ``preprocessing_context.json`` and creates
+    ``screening_downstream.lock`` on first success. The lock only prevents
+    switching the formal screening branch after downstream has started; it
+    never enters scoring, CSV, reports or the comparison.
+    """
+    run_dir = Path(run_dir)
+    context = _read_preprocessing_context(run_dir)
+    status = context["branch_selection_status"]
+    if status == "awaiting_confirmation":
+        raise ValueError(
+            "initial_screening_branch_not_confirmed: a downstream stage "
+            "cannot start until raw or processed is confirmed"
+        )
+    if status not in {"confirmed", "not_required"}:
+        raise ValueError(
+            f"initial_screening_context_invalid: unknown branch_selection_status "
+            f"{status!r}"
+        )
+    (run_dir / DOWNSTREAM_LOCK_FILENAME).write_text(
+        DOWNSTREAM_LOCK_CONTENT, encoding="utf-8"
+    )
+
+
+def _validate_workflow_mode(preprocess_mode: str) -> None:
+    if preprocess_mode not in WORKFLOW_PREPROCESS_MODES:
+        raise ValueError(
+            "run_initial_screening_workflow requires preprocess_mode in "
+            f"{sorted(WORKFLOW_PREPROCESS_MODES)}, got {preprocess_mode!r}"
+        )
+
+
+def _reject_locked_run(run_dir: Path) -> None:
+    if (Path(run_dir) / DOWNSTREAM_LOCK_FILENAME).exists():
+        raise ValueError(
+            "initial_screening_run_locked: the screening branch is locked "
+            "because a downstream stage has started; use a new analysis/run "
+            "directory"
+        )
+
+
+def _clear_previous_formal_state(run_dir: Path, *, preprocess_mode: str) -> None:
+    run_dir = Path(run_dir)
+    for name in FORMAL_SCREENING_FILES:
+        (run_dir / name).unlink(missing_ok=True)
+    (run_dir / CONTEXT_FILENAME).unlink(missing_ok=True)
+    if preprocess_mode == "raw":
+        (run_dir / "preprocessing_comparison.csv").unlink(missing_ok=True)
+
+
+def _build_preprocessing_context(
+    config: AnalysisConfig,
+    *,
+    active_screening_branch: str | None,
+    active_preprocessing_mode: str | None,
+    branch_selection_status: str,
+) -> dict[str, object]:
+    mode = config.preprocess_mode
+    requested_diff_interval_minutes = None
+    effective_diff_points = None
+    effective_diff_interval_minutes = None
+    if mode == "lowpass_diff":
+        if config.diff_interval_minutes is not None:
+            requested_diff_interval_minutes = float(config.diff_interval_minutes)
+        effective_diff_points, effective_diff_interval_minutes = (
+            _effective_diff_params(config)
+        )
+    return {
+        "selected_preprocessing_mode": mode,
+        "active_screening_branch": active_screening_branch,
+        "active_preprocessing_mode": active_preprocessing_mode,
+        "lowpass_tau_minutes": (
+            float(config.lowpass_tau_minutes)
+            if mode in PROCESSED_BRANCH_PREPROCESS_MODES
+            else None
+        ),
+        "requested_diff_interval_minutes": requested_diff_interval_minutes,
+        "effective_diff_points": effective_diff_points,
+        "effective_diff_interval_minutes": effective_diff_interval_minutes,
+        "resample_rule": config.resample_rule,
+        "branch_selection_status": branch_selection_status,
+    }
+
+
+def _effective_diff_params(config: AnalysisConfig) -> tuple[int, float]:
+    frame = _load_cleaned_frame(config)
+    effective_points, effective_interval_minutes = resolve_diff_interval(
+        frame,
+        config.diff_interval_minutes,
+    )
+    return int(effective_points), float(effective_interval_minutes)
+
+
+def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
+    raw = load_timeseries_csv(
+        config.input_path, config.time_column, encoding=config.encoding
+    )
+    raw = drop_excluded_columns(
+        raw,
+        config.excluded_columns,
+        protected_columns=[
+            config.time_column,
+            config.target,
+            config.segment_column,
+            *(config.capacity_columns or []),
+            *(config.residual_control_columns or []),
+            *(config.force_include_variables or []),
+        ],
+    )
+    numeric = select_numeric_frame(raw, config.target)
+    protected = [
+        config.target,
+        config.segment_column,
+        *(config.capacity_columns or []),
+        *(config.residual_control_columns or []),
+        *(config.force_include_variables or []),
+    ]
+    return preprocess_frame(
+        numeric,
+        config.target,
+        config.resample_rule,
+        config.min_valid_ratio,
+        protected_columns=[column for column in protected if column],
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        interpolate_limit_area=config.interpolate_limit_area,
+    )
+
+
+def _write_context(run_dir: Path, context: dict[str, object]) -> Path:
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    target = run_dir / CONTEXT_FILENAME
+    descriptor, tmp_name = tempfile.mkstemp(
+        prefix=".preprocessing_context_", suffix=".tmp", dir=str(run_dir)
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(context, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(tmp_name, target)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+    return target
+
+
+def _read_preprocessing_context(run_dir: Path) -> dict[str, object]:
+    path = Path(run_dir) / CONTEXT_FILENAME
+    if not path.exists():
+        raise ValueError(f"initial_screening_context_missing: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"initial_screening_context_invalid: {path}"
+        ) from exc
+    _validate_context(data)
+    return data
+
+
+def _validate_context(data: object) -> None:
+    prefix = "initial_screening_context_invalid: preprocessing_context.json"
+    if not isinstance(data, dict):
+        raise ValueError(prefix)
+    missing = [field for field in CONTEXT_FIELDS if field not in data]
+    if missing:
+        raise ValueError(f"{prefix} missing fields {missing}")
+
+    status = data["branch_selection_status"]
+    selected = data["selected_preprocessing_mode"]
+    active_branch = data["active_screening_branch"]
+    active_mode = data["active_preprocessing_mode"]
+    if status not in {"not_required", "awaiting_confirmation", "confirmed"}:
+        raise ValueError(f"{prefix} unknown branch_selection_status {status!r}")
+    if selected not in WORKFLOW_PREPROCESS_MODES:
+        raise ValueError(
+            f"{prefix} unknown selected_preprocessing_mode {selected!r}"
+        )
+    if active_branch is not None and active_branch not in SCREENING_BRANCH_NAMES:
+        raise ValueError(
+            f"{prefix} unknown active_screening_branch {active_branch!r}"
+        )
+    if active_mode is not None and active_mode not in WORKFLOW_PREPROCESS_MODES:
+        raise ValueError(
+            f"{prefix} unknown active_preprocessing_mode {active_mode!r}"
+        )
+    if status == "awaiting_confirmation":
+        if (
+            selected not in PROCESSED_BRANCH_PREPROCESS_MODES
+            or active_branch is not None
+            or active_mode is not None
+        ):
+            raise ValueError(
+                f"{prefix} awaiting_confirmation requires a lowpass* selected "
+                "mode and null active fields"
+            )
+    elif status == "not_required":
+        if selected != "raw" or active_branch != "raw" or active_mode != "raw":
+            raise ValueError(
+                f"{prefix} not_required must describe the raw-only workflow"
+            )
+    elif active_branch is None or active_mode is None:
+        raise ValueError(f"{prefix} confirmed requires active branch and mode")
+    elif active_branch == "raw" and active_mode != "raw":
+        raise ValueError(f"{prefix} confirmed raw branch must use raw mode")
+    elif active_branch == "processed" and (
+        selected not in PROCESSED_BRANCH_PREPROCESS_MODES
+        or active_mode != selected
+    ):
+        raise ValueError(
+            f"{prefix} confirmed processed branch must use the selected "
+            "lowpass* mode"
+        )
+
+    for field in (
+        "lowpass_tau_minutes",
+        "requested_diff_interval_minutes",
+        "effective_diff_interval_minutes",
+    ):
+        value = data[field]
+        if value is not None and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not float(value) > 0
+        ):
+            raise ValueError(f"{prefix} field {field} must be null or positive")
+    value = data["effective_diff_points"]
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not float(value) > 0
+        or float(value) != int(float(value))
+    ):
+        raise ValueError(
+            f"{prefix} effective_diff_points must be null or a positive integer"
+        )
+    resample_rule = data["resample_rule"]
+    if resample_rule is not None and not isinstance(resample_rule, str):
+        raise ValueError(f"{prefix} resample_rule must be null or a string")
+
+
+def _active_mode_for_branch(
+    context: dict[str, object], branch: str
+) -> str:
+    if branch == "raw":
+        return "raw"
+    selected = context["selected_preprocessing_mode"]
+    if selected not in PROCESSED_BRANCH_PREPROCESS_MODES:
+        raise ValueError(
+            "initial_screening_context_invalid: processed confirmation "
+            f"requires a lowpass* selected mode, got {selected!r}"
+        )
+    return selected
+
+
+def _confirmed_context(
+    context: dict[str, object],
+    branch: str,
+    active_mode: str,
+) -> dict[str, object]:
+    updated = dict(context)
+    updated["active_screening_branch"] = branch
+    updated["active_preprocessing_mode"] = active_mode
+    updated["branch_selection_status"] = "confirmed"
+    return updated
+
+
+def _validate_branch_output_complete(run_dir: Path, branch: str) -> None:
+    branch_dir = Path(run_dir) / "screening_branches" / branch
+    missing = [
+        name
+        for name in REQUIRED_FORMAL_SCREENING_FILES
+        if not (branch_dir / name).exists()
+    ]
+    if missing:
+        raise ValueError(
+            "initial_screening_branch_output_incomplete: "
+            f"branch={branch!r} missing {missing}"
+        )
+
+
+def _promote_screening_branch(
+    run_dir: Path,
+    *,
+    branch: str,
+    new_context: dict[str, object],
+) -> None:
+    """Transactionally publish one branch as the formal screening result.
+
+    The branch is validated first, current root formal files are backed up,
+    files are replaced via ``os.replace``, optional-file residue is removed,
+    and only then is ``preprocessing_context.json`` updated. Any failure
+    restores the previous root files and context so a mixed Raw/Processed
+    root can never survive.
+    """
+    run_dir = Path(run_dir)
+    _validate_branch_output_complete(run_dir, branch)
+    branch_dir = run_dir / "screening_branches" / branch
+    staged_names = [
+        name
+        for name in FORMAL_SCREENING_FILES
+        if (branch_dir / name).exists()
+    ]
+    context_path = run_dir / CONTEXT_FILENAME
+    original_context_bytes = (
+        context_path.read_bytes() if context_path.exists() else None
+    )
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=".screening_promote_", dir=str(run_dir))
+    )
+    backup_dir = Path(
+        tempfile.mkdtemp(prefix=".screening_backup_", dir=str(run_dir))
+    )
+    try:
+        for name in staged_names:
+            shutil.copy2(branch_dir / name, staging_dir / name)
+        for name in FORMAL_SCREENING_FILES:
+            root_file = run_dir / name
+            if root_file.exists():
+                shutil.copy2(root_file, backup_dir / name)
+        for name in staged_names:
+            os.replace(staging_dir / name, run_dir / name)
+        for name in FORMAL_SCREENING_FILES:
+            if name not in staged_names:
+                (run_dir / name).unlink(missing_ok=True)
+        _write_context(run_dir, new_context)
+    except Exception:
+        _restore_promotion(
+            run_dir,
+            backup_dir,
+            staged_names=staged_names,
+            original_context_bytes=original_context_bytes,
+        )
+        raise
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _restore_promotion(
+    run_dir: Path,
+    backup_dir: Path,
+    *,
+    staged_names: list[str],
+    original_context_bytes: bytes | None,
+) -> None:
+    for name in FORMAL_SCREENING_FILES:
+        backup_file = backup_dir / name
+        if backup_file.exists():
+            shutil.copy2(backup_file, run_dir / name)
+        elif name in staged_names:
+            (run_dir / name).unlink(missing_ok=True)
+    context_path = run_dir / CONTEXT_FILENAME
+    if original_context_bytes is None:
+        context_path.unlink(missing_ok=True)
+        return
+    descriptor, tmp_name = tempfile.mkstemp(
+        prefix=".preprocessing_context_restore_", suffix=".tmp", dir=str(run_dir)
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(original_context_bytes)
+        os.replace(tmp_name, context_path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _progress(progress_callback, message: str) -> None:

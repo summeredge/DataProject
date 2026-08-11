@@ -115,7 +115,7 @@ detrend_diff
 3. `analyze_numeric_frame()` / 正式初筛流程尚未接入上述三个模式，必须明确拒绝。
    `run_analysis()` 同样必须拒绝。
 
-4. Web / CLI / API / 双分支正式运行尚未接入。
+4. Web / CLI / API 双分支交互尚未接入。
 
 5. 不得因为 `transform_frame()` / `transform_frame_causal()` 已具备基础能力，
    就绕过 raw + processed 双分支比较和人工确认流程。
@@ -128,7 +128,21 @@ detrend_diff
 7. 非 Raw 模式已具备双分支对比执行能力：`run_initial_screening_comparison()`
    对同一输入分别执行 raw 与 selected processed 两个独立分支，并生成
    `preprocessing_comparison.csv`；该入口只允许 `lowpass*`，不决定采用哪个
-   分支。
+   分支，本身不承担 confirmation。
+
+8. `run_initial_screening_workflow()` 已实现统一 workflow：
+   - `raw` 只运行 raw 分支，事务性发布为正式 root 结果，状态为
+     `not_required`，不需要人工确认；
+   - `lowpass` / `lowpass_detrend` / `lowpass_diff` 复用
+     `run_initial_screening_comparison()` 执行 raw + selected processed
+     双分支并生成 `preprocessing_comparison.csv`，随后写入
+     `preprocessing_context.json`，状态为 `awaiting_confirmation`；
+   - 旧模式（`detrend`、`diff`、`detrend_diff`）必须被明确拒绝，且不得清理
+     已有运行文件。
+
+9. 已实现 `preprocessing_context.json`、人工 branch confirmation（复用已有
+   branch 结果，禁止重新运行初筛）、事务 promotion（失败回滚）、downstream
+   gate / lock 基础机制。
 
 causal 组合固定为：
 
@@ -206,7 +220,21 @@ branch_selection_status
 
 缺失值不得使用空字符串、`false` 或 `0.0` 代替。
 
-当前阶段只定义状态契约，不实现状态流转。
+当前阶段（PR-8）事实：
+
+- `run_initial_screening_workflow()` 写入 `preprocessing_context.json`：
+  - raw workflow 为 `not_required`，active branch/mode 均为 `raw`；
+  - 非 Raw 双分支完成后为 `awaiting_confirmation`，active branch/mode 为
+    JSON `null`；
+- `confirm_initial_screening_branch()` 将状态更新为 `confirmed`：
+  - 确认 `raw` 时 `active_preprocessing_mode = raw`；
+  - 确认 `processed` 时 `active_preprocessing_mode` 为 selected 的
+    `lowpass*` 模式；
+  - `selected_preprocessing_mode` 始终为用户最初用于比较的模式，不得改写；
+- 同 branch 重复确认是幂等 no-op；downstream 开始前允许切换到另一已存在
+  branch；`screening_downstream.lock` 创建后禁止切换 branch；
+- 缺失值必须真实写成 JSON `null`，不得使用 `""`、`false`、`0` 或 `0.0`
+  代替。
 
 ## 分支产物目录契约
 
@@ -230,17 +258,30 @@ run_directory/
 - 不得按变量选择两个分支中较高的分数；
 - 不得生成新的综合评分。
 
-当前阶段（PR-7）事实：
+当前阶段（PR-8）事实：
 
 - 已具备单 branch 初筛执行能力，一次调用只执行一个分支，不自动执行另一分支；
 - `raw` 分支输出隔离到 `screening_branches/raw/`，`processed` 分支输出隔离到
   `screening_branches/processed/`；
 - 非 Raw 模式通过 `run_initial_screening_comparison()` 执行 raw + processed
   双分支，双分支均成功后生成 `preprocessing_comparison.csv`；
-- 分支输出不得发布到运行根目录；
-- 双分支执行不决定采用哪个分支，不发布正式 root 初筛结果；
-- 未实现 `preprocessing_context.json`；
-- 未实现 confirmation / promotion；
+- 统一 workflow 通过 `run_initial_screening_workflow()` 完成状态闭环：raw
+  自动发布，非 Raw 等待确认；
+- `confirm_initial_screening_branch()` 只读取并验证已有 branch 文件后事务性
+  promotion，确认 ≠ 重新运行初筛；
+- promotion 前必须验证 9 个必需正式文件齐全，缺失时报
+  `initial_screening_branch_output_incomplete`；
+- promotion 使用 staging + backup + replace + context 更新的事务流程，任一
+  步骤失败恢复原 root 文件与原 context，不会出现一半 Raw + 一半 Processed；
+- 新 branch 缺少 `residual_corr_scores.csv` 时，旧 root 的可选文件残留必须
+  被删除并进入 rollback 事务；
+- `begin_downstream_stage()` 读取 context 作为 gate：`awaiting_confirmation`
+  明确拒绝（`initial_screening_branch_not_confirmed`），`confirmed` /
+  `not_required` 允许；首次通过后创建 `screening_downstream.lock`；
+- lock 后禁止切换 branch，同 branch 确认为 no-op，lock 后再次启动 workflow
+  必须拒绝（`initial_screening_run_locked`）；
+- 未锁定的目录重新用于新 workflow 时，先校验 mode，再清理旧 root 正式文件
+  与旧 context（raw 还清理旧 comparison）；
 - 正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝三个 `lowpass*` 模式。
 
 ## preprocessing_comparison.csv 契约
@@ -326,4 +367,20 @@ branch_selection_status
 - `active_preprocessing_mode` 表示正式进入后续阶段的模式；
 - 两者不得混为一个字段。
 
-当前阶段不生成该文件。
+字段语义（PR-8 冻结）：
+
+- `lowpass_tau_minutes`：`raw` 为 `null`；`lowpass*` 记录
+  `config.lowpass_tau_minutes`；
+- `requested_diff_interval_minutes`：仅 `lowpass_diff` 有值，记录用户配置
+  （`None` 时保持 `null`）；
+- `effective_diff_points` / `effective_diff_interval_minutes`：仅
+  `lowpass_diff` 计算，必须复用 `resolve_diff_interval()` 及现有采样周期 /
+  resample 规则，不得重新实现 round / sampling interval / effective points
+  数学规则；
+- `resample_rule`：记录真实配置，无配置为 `null`；
+- 不适用、尚未计算、尚未确认的字段统一使用 JSON `null`，禁止用 `0`、
+  `0.0`、`false`、`""` 代替缺失；真实有效 `0.0` 不得被转换为缺失。
+
+当前阶段（PR-8）已生成该文件，写入方式为临时文件 → 完整写入 →
+`os.replace`，编码 UTF-8（`ensure_ascii=False`、`indent=2`），不得引入第三
+方依赖；不得新增评分、排序或自动推荐字段。

@@ -557,6 +557,46 @@ def test_rerun_non_raw_clears_previous_formal_root(tmp_path):
     _assert_root_has_no_formal_files(tmp_path)
 
 
+def test_workflow_rerun_without_residual_controls_does_not_publish_old_optional_file(
+    tmp_path,
+):
+    first_config = _raw_config(tmp_path, preprocess_mode="lowpass")
+    _write_input(first_config, _raw_frame())
+    run_initial_screening_workflow(first_config)
+    processed_dir = tmp_path / "screening_branches" / "processed"
+    assert (processed_dir / "residual_corr_scores.csv").exists()
+
+    rerun_config = _raw_config(
+        tmp_path, preprocess_mode="lowpass", residual_control_columns=[]
+    )
+    run_initial_screening_workflow(rerun_config)
+    confirm_initial_screening_branch(tmp_path, branch="processed")
+
+    assert not (processed_dir / "residual_corr_scores.csv").exists()
+    assert not (tmp_path / "residual_corr_scores.csv").exists()
+    _assert_root_equals_branch(tmp_path, "processed")
+
+
+def test_raw_workflow_rerun_without_residual_controls_clears_old_optional_file(
+    tmp_path,
+):
+    first_config = _raw_config(tmp_path, preprocess_mode="raw")
+    _write_input(first_config, _raw_frame())
+    run_initial_screening_workflow(first_config)
+    raw_dir = tmp_path / "screening_branches" / "raw"
+    assert (raw_dir / "residual_corr_scores.csv").exists()
+    assert (tmp_path / "residual_corr_scores.csv").exists()
+
+    rerun_config = _raw_config(
+        tmp_path, preprocess_mode="raw", residual_control_columns=[]
+    )
+    run_initial_screening_workflow(rerun_config)
+
+    assert not (raw_dir / "residual_corr_scores.csv").exists()
+    assert not (tmp_path / "residual_corr_scores.csv").exists()
+    _assert_root_equals_branch(tmp_path, "raw")
+
+
 # --- Test 22: invalid mode has no side effects --------------------------
 
 

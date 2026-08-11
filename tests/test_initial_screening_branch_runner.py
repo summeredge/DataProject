@@ -287,6 +287,74 @@ def test_raw_and_processed_branch_outputs_do_not_overwrite_each_other(tmp_path):
     ).read_bytes() == processed_ranked_bytes
 
 
+def test_raw_branch_rerun_clears_stale_optional_file(tmp_path):
+    config = _raw_config(tmp_path, preprocess_mode="raw")
+    _write_input(config, _raw_frame())
+    run_initial_screening_branch(config, branch="raw")
+    residual = tmp_path / "screening_branches" / "raw" / "residual_corr_scores.csv"
+    assert residual.exists()
+
+    rerun_config = _raw_config(
+        tmp_path, preprocess_mode="raw", residual_control_columns=[]
+    )
+    run_initial_screening_branch(rerun_config, branch="raw")
+
+    assert not residual.exists()
+    assert (tmp_path / "screening_branches" / "raw" / "ranked_features.csv").exists()
+
+
+@pytest.mark.parametrize("mode", ["lowpass", "lowpass_detrend", "lowpass_diff"])
+def test_processed_branch_rerun_clears_stale_optional_file(tmp_path, mode: str):
+    config = _raw_config(tmp_path, preprocess_mode=mode)
+    _write_input(config, _raw_frame())
+    run_initial_screening_branch(config, branch="processed")
+    residual = (
+        tmp_path / "screening_branches" / "processed" / "residual_corr_scores.csv"
+    )
+    assert residual.exists()
+
+    rerun_config = _raw_config(
+        tmp_path, preprocess_mode=mode, residual_control_columns=[]
+    )
+    run_initial_screening_branch(rerun_config, branch="processed")
+
+    assert not residual.exists()
+    assert (
+        tmp_path / "screening_branches" / "processed" / "ranked_features.csv"
+    ).exists()
+
+
+@pytest.mark.parametrize(
+    ("rerun_branch", "mode"), [("raw", "raw"), ("processed", "lowpass")]
+)
+def test_rerun_one_branch_does_not_touch_the_other(
+    tmp_path, rerun_branch: str, mode: str
+):
+    raw_config = _raw_config(tmp_path, preprocess_mode="raw")
+    processed_config = _raw_config(tmp_path, preprocess_mode="lowpass")
+    _write_input(raw_config, _raw_frame())
+    run_initial_screening_branch(raw_config, branch="raw")
+    run_initial_screening_branch(processed_config, branch="processed")
+
+    other_branch = "processed" if rerun_branch == "raw" else "raw"
+    other_dir = tmp_path / "screening_branches" / other_branch
+    other_before = {
+        path.name: path.read_bytes() for path in other_dir.iterdir() if path.is_file()
+    }
+    assert other_before, f"{other_branch} branch must already have outputs"
+
+    rerun_config = _raw_config(tmp_path, preprocess_mode=mode)
+    run_initial_screening_branch(rerun_config, branch=rerun_branch)
+
+    assert (
+        tmp_path / "screening_branches" / rerun_branch / "ranked_features.csv"
+    ).exists()
+    assert other_dir.exists()
+    assert {
+        path.name: path.read_bytes() for path in other_dir.iterdir() if path.is_file()
+    } == other_before
+
+
 def test_branch_runner_creates_no_comparison_or_context_files(tmp_path):
     config = _raw_config(tmp_path, preprocess_mode="lowpass")
     _write_input(config, _raw_frame())

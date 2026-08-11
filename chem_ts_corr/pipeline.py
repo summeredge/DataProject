@@ -128,6 +128,7 @@ def run_initial_screening_branch(
     """
     _validate_screening_branch(branch, config.preprocess_mode)
     branch_dir = config.output_dir / "screening_branches" / branch
+    _clear_branch_formal_outputs(branch_dir)
     pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
@@ -604,6 +605,17 @@ def _clear_previous_formal_state(run_dir: Path, *, preprocess_mode: str) -> None
     (run_dir / CONTEXT_FILENAME).unlink(missing_ok=True)
     if preprocess_mode == "raw":
         (run_dir / "preprocessing_comparison.csv").unlink(missing_ok=True)
+
+
+def _clear_branch_formal_outputs(branch_dir: Path) -> None:
+    """Remove a branch's previous formal screening outputs before a re-run.
+
+    Only files in the formal screening set inside the current branch
+    directory are removed; the branch directory itself, other branches and
+    run-root files are never touched.
+    """
+    for name in FORMAL_SCREENING_FILES:
+        (branch_dir / name).unlink(missing_ok=True)
 
 
 def _build_preprocessing_context(

@@ -105,3 +105,26 @@
 - 两个分支输出互不覆盖，同分支重跑只覆盖自身分支；
 - 不生成 `preprocessing_comparison.csv`、`preprocessing_context.json`；
 - 不实现 confirmation / promotion。
+
+## 双分支 comparison runner 测试边界
+
+- `run_initial_screening_comparison()` 只允许 `lowpass` / `lowpass_detrend` /
+  `lowpass_diff`，`raw` 与旧模式必须明确拒绝；
+- 一次调用分别独立执行 raw 与 selected processed 两个分支，且不改写调用方
+  `AnalysisConfig`；
+- 两个分支仍输出到 `screening_branches/raw/` 与 `screening_branches/processed/`，
+  不创建按 processed mode 命名的第三层目录；
+- 双分支均成功后生成且只生成一个 `preprocessing_comparison.csv`（utf-8-sig），
+  字段与顺序完全符合冻结契约；
+- `variable` 为两个 `ranked_features` 的有序并集（raw 顺序 + 仅 processed 变量按
+  processed 顺序）；
+- `final_score_delta = processed - raw`，`rank_delta = raw_rank - processed_rank`；
+- lag 保持正负方向，`lag_direction_changed` 按 negative/zero/positive 区分，
+  任一侧缺失时保持缺失；
+- Top-K 与 candidate membership 分别按各分支独立计算；
+- risk 直接来自各分支 `risk_flags`，变量不存在侧保持缺失，不得用空字符串冒充
+  无风险；comparison CSV 中缺失侧为 `NaN`，变量存在但无风险时为空字符串；
+- comparison 不修改任何 branch 结果、不合并候选池、不产生推荐分支；
+- 任一分支失败时不得生成半成品 comparison；
+- 不生成 `preprocessing_context.json`，不向运行根目录发布正式初筛结果；
+- 不实现 confirmation / promotion / Web / API / CLI 交互。

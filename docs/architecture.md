@@ -76,6 +76,17 @@ run_directory/
    └─ processed/
 ```
 
+非 Raw 双分支对比入口已实现：
+
+```text
+run_initial_screening_comparison():
+  preprocess_mode 只能为 lowpass / lowpass_detrend / lowpass_diff
+  → raw branch + selected processed branch 独立执行
+  → 双分支均成功后生成 run_directory/preprocessing_comparison.csv
+```
+
+双分支执行不决定采用哪个分支。
+
 ## 初筛双分支
 
 第一阶段分支产物目标目录：
@@ -100,13 +111,15 @@ run_directory/
 当前已实现：
 
 - 单 branch 独立运行（`run_initial_screening_branch()`）；
+- 非 Raw 双 branch orchestration（`run_initial_screening_comparison()`）；
+- `preprocessing_comparison.csv` 对比产物；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件。
 
 当前尚未实现：
 
-- Raw + Processed 自动双分支 orchestration；
-- `preprocessing_comparison.csv`；
 - `preprocessing_context.json`；
 - branch confirmation；
-- promotion 到正式 root 输出。
+- active branch / promotion 到正式 root 输出；
+- 下游阶段 gate；
+- Web / API / CLI 双分支交互。

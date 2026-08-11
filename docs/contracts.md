@@ -125,6 +125,11 @@ detrend_diff
    `screening_branches/raw/` 或 `screening_branches/processed/`，不发布到运行
    根目录。
 
+7. 非 Raw 模式已具备双分支对比执行能力：`run_initial_screening_comparison()`
+   对同一输入分别执行 raw 与 selected processed 两个独立分支，并生成
+   `preprocessing_comparison.csv`；该入口只允许 `lowpass*`，不决定采用哪个
+   分支。
+
 causal 组合固定为：
 
 ```text
@@ -225,14 +230,16 @@ run_directory/
 - 不得按变量选择两个分支中较高的分数；
 - 不得生成新的综合评分。
 
-当前阶段（PR-6）事实：
+当前阶段（PR-7）事实：
 
 - 已具备单 branch 初筛执行能力，一次调用只执行一个分支，不自动执行另一分支；
 - `raw` 分支输出隔离到 `screening_branches/raw/`，`processed` 分支输出隔离到
   `screening_branches/processed/`；
+- 非 Raw 模式通过 `run_initial_screening_comparison()` 执行 raw + processed
+  双分支，双分支均成功后生成 `preprocessing_comparison.csv`；
 - 分支输出不得发布到运行根目录；
-- 未实现双分支 orchestration；
-- 未实现 `preprocessing_comparison.csv`；
+- 双分支执行不决定采用哪个分支，不发布正式 root 初筛结果；
+- 未实现 `preprocessing_context.json`；
 - 未实现 confirmation / promotion；
 - 正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝三个 `lowpass*` 模式。
 
@@ -289,7 +296,11 @@ raw_rank - processed_rank
 - 不得使用 `abs(lag)` 或 `abs(best_lag)` 判断方向；
 - 对比文件只用于展示差异，不参与评分、排序或候选生成。
 
-当前阶段不生成该文件。
+当前阶段（PR-7）：该文件由 `run_initial_screening_comparison()` 在 raw 与
+processed 两个分支均成功后生成，编码沿用项目 CSV 约定（utf-8-sig）；字段顺序、
+缺失语义与 delta 计算规则按上文冻结；缺失侧单元格以 `NaN` 明确标记，变量存在但
+无风险时 `*_risk_tags` 保持空字符串，两者在文件中可区分；不得新增推荐分支或综合
+评分字段。
 
 ## preprocessing_context.json 契约
 

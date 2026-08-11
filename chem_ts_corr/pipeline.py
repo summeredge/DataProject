@@ -343,9 +343,13 @@ def run_initial_screening_comparison(
 
     Only non-raw processed modes are allowed and the caller's config is never
     modified. ``preprocessing_comparison.csv`` is written only after both
-    branches succeed and never recommends a branch.
+    branches succeed and never recommends a branch. Any previous comparison
+    file is cleared before branches start so a failed re-run never leaves
+    stale results behind.
     """
     _validate_comparison_mode(config.preprocess_mode)
+    comparison_path = config.output_dir / "preprocessing_comparison.csv"
+    comparison_path.unlink(missing_ok=True)
     raw_config = replace(config, preprocess_mode="raw")
     processed_config = replace(config, preprocess_mode=config.preprocess_mode)
     raw_timings = run_initial_screening_branch(
@@ -376,7 +380,6 @@ def run_initial_screening_comparison(
         processed_mode=config.preprocess_mode,
         top_k=config.top_k,
     )
-    comparison_path = config.output_dir / "preprocessing_comparison.csv"
     comparison.to_csv(
         comparison_path,
         index=False,

@@ -12,6 +12,7 @@ from chem_ts_corr.pipeline import (
     COMPARISON_COLUMNS,
     build_preprocessing_comparison,
     run_initial_screening_comparison,
+    _validate_comparison_mode,
 )
 
 
@@ -538,3 +539,64 @@ def test_branch_failure_skips_comparison_write(monkeypatch, tmp_path, failing_br
         run_initial_screening_comparison(config)
 
     assert not (tmp_path / "preprocessing_comparison.csv").exists()
+
+
+@pytest.mark.parametrize("failing_branch", ["raw", "processed"])
+def test_failed_rerun_clears_stale_comparison(monkeypatch, tmp_path, failing_branch):
+    config = _raw_config(tmp_path, preprocess_mode="lowpass")
+    _write_input(config, _raw_frame())
+    comparison_path = tmp_path / "preprocessing_comparison.csv"
+    comparison_path.write_text("old-comparison\n", encoding="utf-8")
+    original = pipeline.run_initial_screening_branch
+
+    def spy(config_arg, *, branch, progress_callback=None):
+        if branch == failing_branch:
+            raise RuntimeError("synthetic branch failure")
+        return original(config_arg, branch=branch, progress_callback=progress_callback)
+
+    monkeypatch.setattr(pipeline, "run_initial_screening_branch", spy)
+
+    with pytest.raises(RuntimeError, match="synthetic branch failure"):
+        run_initial_screening_comparison(config)
+
+    assert not comparison_path.exists()
+
+
+def test_successful_rerun_replaces_stale_comparison(tmp_path):
+    config = _raw_config(tmp_path, preprocess_mode="lowpass_diff")
+    _write_input(config, _raw_frame())
+    comparison_path = tmp_path / "preprocessing_comparison.csv"
+    comparison_path.write_text("old-comparison\n", encoding="utf-8")
+
+    run_initial_screening_comparison(config)
+
+    assert comparison_path.exists()
+    assert "old-comparison" not in comparison_path.read_text(encoding="utf-8-sig")
+    comparison = pd.read_csv(
+        comparison_path,
+        encoding="utf-8-sig",
+        keep_default_na=False,
+    )
+    assert comparison["processed_mode"].eq("lowpass_diff").all()
+
+
+def test_invalid_mode_does_not_delete_existing_comparison(tmp_path):
+    config = _raw_config(tmp_path, preprocess_mode="raw")
+    comparison_path = tmp_path / "preprocessing_comparison.csv"
+    comparison_path.write_text("old-comparison\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        run_initial_screening_comparison(config)
+
+    assert comparison_path.exists()
+    assert comparison_path.read_text(encoding="utf-8") == "old-comparison\n"
+
+
+def test_validate_comparison_mode_rejects_raw_without_side_effects(tmp_path):
+    comparison_path = tmp_path / "preprocessing_comparison.csv"
+    comparison_path.write_text("old-comparison\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        _validate_comparison_mode("raw")
+
+    assert comparison_path.exists()

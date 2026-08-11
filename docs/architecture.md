@@ -29,7 +29,7 @@
 
 ## 预处理模式
 
-当前实际执行模式：
+正式 `analyze_numeric_frame()` / `run_analysis()` 当前实际执行模式：
 
 ```text
 raw
@@ -38,7 +38,17 @@ diff
 detrend_diff
 ```
 
-契约新模式（仅定义，暂未实现，不得进入执行流程）：
+预处理基础能力：
+
+```text
+transform_frame():
+  支持 lowpass / lowpass_detrend / lowpass_diff
+
+transform_frame_causal():
+  支持 lowpass / lowpass_detrend / lowpass_diff
+```
+
+正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝：
 
 ```text
 lowpass
@@ -47,11 +57,28 @@ lowpass_diff
 ```
 
 模式语义与配置字段约束见 `docs/contracts.md`。`lowpass*` 模式可在配置对象中表示，
-但执行前必须被明确拒绝，不得静默回退到 `raw`。
+但正式分析入口执行前必须被明确拒绝，不得静默回退到 `raw`。
 
-## 初筛双分支（规划中）
+单 branch 初筛 runner 已实现：
 
-非 Raw 初筛将按两个独立分支分别运行第一阶段，产物存放在独立子目录：
+```text
+run_initial_screening_branch():
+  branch=raw       → preprocess_mode 必须为 raw
+  branch=processed → preprocess_mode 只能为 lowpass / lowpass_detrend / lowpass_diff
+```
+
+一次调用只执行一个分支，结果写入：
+
+```text
+run_directory/
+└─ screening_branches/
+   ├─ raw/
+   └─ processed/
+```
+
+## 初筛双分支
+
+第一阶段分支产物目标目录：
 
 ```text
 run_directory/
@@ -70,4 +97,16 @@ run_directory/
 - 未确认前不得在运行根目录发布正式初筛文件；
 - 确认后只发布选定分支的结果。
 
-当前阶段只冻结目录与状态契约，不实现双分支执行、分支确认或对比文件生成。
+当前已实现：
+
+- 单 branch 独立运行（`run_initial_screening_branch()`）；
+- branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
+- branch runner 不向运行根目录发布正式初筛文件。
+
+当前尚未实现：
+
+- Raw + Processed 自动双分支 orchestration；
+- `preprocessing_comparison.csv`；
+- `preprocessing_context.json`；
+- branch confirmation；
+- promotion 到正式 root 输出。

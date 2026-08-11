@@ -252,7 +252,11 @@ def _innovation_evidence(
         return pd.DataFrame(columns=INNOVATION_COLUMNS)
 
     rows: list[dict[str, object]] = []
-    already_differenced = preprocess_mode in {"diff", "detrend_diff"}
+    already_differenced = preprocess_mode in {
+        "diff",
+        "detrend_diff",
+        "lowpass_diff",
+    }
     innovation_frame = (
         frame
         if already_differenced

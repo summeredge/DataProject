@@ -13,7 +13,10 @@ from chem_ts_corr.preprocess import (
     difference_by_physical_interval,
     lowpass_filter_frame,
 )
-from chem_ts_corr.service import analyze_numeric_frame
+from chem_ts_corr.service import (
+    analyze_initial_screening_branch_frame,
+    analyze_numeric_frame,
+)
 
 
 ROOT_LEVEL_SCREENING_FILES = [
@@ -295,3 +298,78 @@ def test_branch_runner_creates_no_comparison_or_context_files(tmp_path):
     processed_dir = tmp_path / "screening_branches" / "processed"
     assert not (processed_dir / "preprocessing_comparison.csv").exists()
     assert not (processed_dir / "preprocessing_context.json").exists()
+
+
+def _assert_already_differenced_innovation(ranked: pd.DataFrame) -> None:
+    assert "innovation_status" in ranked.columns
+    assert ranked["innovation_status"].eq("innovation_verified").all()
+    pd.testing.assert_series_equal(
+        ranked["innovation_lag"].astype(int),
+        ranked["lag"].astype(int),
+        check_names=False,
+    )
+    merged = ranked[["innovation_score", "raw_corr"]].dropna()
+    assert merged["innovation_score"].to_numpy() == pytest.approx(
+        merged["raw_corr"].to_numpy(), rel=0, abs=1e-9
+    )
+
+
+def test_lowpass_diff_innovation_evidence_skips_second_difference(monkeypatch, tmp_path):
+    config = _raw_config(tmp_path, preprocess_mode="lowpass_diff")
+    calls: list[pd.DataFrame] = []
+    original = service.difference_by_contiguous_segment
+
+    def spy(frame):
+        calls.append(frame)
+        return original(frame)
+
+    monkeypatch.setattr(service, "difference_by_contiguous_segment", spy)
+    tables = analyze_initial_screening_branch_frame(_raw_frame(), config)
+
+    assert calls == []
+    _assert_already_differenced_innovation(tables.ranked_features)
+
+
+@pytest.mark.parametrize("mode", ["diff", "detrend_diff"])
+def test_legacy_diff_modes_remain_already_differenced(monkeypatch, tmp_path, mode: str):
+    config = _raw_config(tmp_path, preprocess_mode=mode)
+    calls: list[pd.DataFrame] = []
+    original = service.difference_by_contiguous_segment
+
+    def spy(frame):
+        calls.append(frame)
+        return original(frame)
+
+    monkeypatch.setattr(service, "difference_by_contiguous_segment", spy)
+    tables = analyze_numeric_frame(_raw_frame(), config)
+
+    assert calls == []
+    _assert_already_differenced_innovation(tables.ranked_features)
+
+
+@pytest.mark.parametrize("mode", ["raw", "lowpass", "lowpass_detrend"])
+def test_non_differenced_modes_still_use_innovation_difference(
+    monkeypatch, tmp_path, mode: str
+):
+    config = _raw_config(tmp_path, preprocess_mode=mode)
+    calls: list[pd.DataFrame] = []
+    original = service.difference_by_contiguous_segment
+
+    def spy(frame):
+        calls.append(frame)
+        return original(frame)
+
+    monkeypatch.setattr(service, "difference_by_contiguous_segment", spy)
+    tables = analyze_initial_screening_branch_frame(_raw_frame(), config)
+
+    assert calls, "non-differenced modes must still use the innovation difference path"
+    ranked = tables.ranked_features
+    assert "innovation_status" in ranked.columns
+    assert ranked["innovation_status"].isin(
+        [
+            "innovation_verified",
+            "innovation_lag_conflict",
+            "innovation_sign_conflict",
+            "innovation_sign_unknown",
+        ]
+    ).all()

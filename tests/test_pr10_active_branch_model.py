@@ -223,9 +223,6 @@ def _spy_scaled_config(monkeypatch, run_dir: Path) -> dict[str, object]:
         captured["config"] = config
         return frame
 
-    monkeypatch.setattr(
-        web, "_save_secondary_candidate_context", lambda output_dir, variables: None
-    )
     monkeypatch.setattr(web, "_scaled_frame_for_secondary", capture_scaled)
     monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
     return captured
@@ -559,7 +556,62 @@ def test_model_generates_three_outputs_only(tmp_path, monkeypatch):
 
     after = {path.name for path in tmp_path.glob("*.csv")}
     assert after - before == set(MODEL_OUTPUT_FILES)
+    assert "secondary_candidate_context.csv" not in after
     _assert_model_outputs(tmp_path)
+
+
+# --- Model must not touch the shared secondary candidate context ----------
+
+
+def test_existing_secondary_candidate_context_stays_byte_identical(
+    tmp_path, monkeypatch
+):
+    config = _make_raw_run(tmp_path)
+    secondary_path = tmp_path / "secondary_candidate_context.csv"
+    secondary_path.write_text(
+        "variable\nexisting_secondary_only_candidate\n", encoding="utf-8-sig"
+    )
+    before = secondary_path.read_bytes()
+
+    _spy_scaled_config(monkeypatch, tmp_path)
+    _patch_model_core(monkeypatch)
+    run_model_for_active_branch(tmp_path, base_config=config)
+
+    assert secondary_path.exists()
+    assert secondary_path.read_bytes() == before
+
+
+def test_model_does_not_create_secondary_candidate_context(tmp_path, monkeypatch):
+    config = _make_raw_run(tmp_path)
+    assert not (tmp_path / "secondary_candidate_context.csv").exists()
+
+    _spy_scaled_config(monkeypatch, tmp_path)
+    _patch_model_core(monkeypatch)
+    run_model_for_active_branch(tmp_path, base_config=config)
+
+    assert not (tmp_path / "secondary_candidate_context.csv").exists()
+    _assert_model_outputs(tmp_path)
+
+
+def test_secondary_candidate_context_read_stays_original_after_model(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    config = _make_raw_run(tmp_path)
+    (tmp_path / "secondary_candidate_context.csv").write_text(
+        "variable\nsecondary_candidate_A\nsecondary_candidate_B\n",
+        encoding="utf-8-sig",
+    )
+
+    _spy_scaled_config(monkeypatch, tmp_path)
+    _patch_model_core(monkeypatch)
+    run_model_for_active_branch(tmp_path, base_config=config)
+
+    assert web._load_secondary_candidate_context(tmp_path) == [
+        "secondary_candidate_A",
+        "secondary_candidate_B",
+    ]
 
 
 # --- Test 11: formal root screening files stay byte-identical -------------
@@ -823,3 +875,4 @@ def test_pr10_runner_source_preserves_direction_and_candidate_source():
     assert "screening_branches" not in body
     assert "preprocessing_comparison.csv" not in body
     assert "final_score >= 0.30" not in body
+    assert "_save_secondary_candidate_context" not in body

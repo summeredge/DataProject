@@ -1193,7 +1193,6 @@ def run_model_for_active_branch(
 
     ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
     variables = web_module._secondary_variables_from_ranked(ranked, config)
-    web_module._save_secondary_candidate_context(run_dir, variables)
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行模型解释的候选变量")
 

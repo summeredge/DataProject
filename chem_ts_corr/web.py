@@ -1619,6 +1619,8 @@ def _prepared_frame_for_secondary(
         config.detrend_window,
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
+        lowpass_tau_minutes=config.lowpass_tau_minutes,
+        diff_interval_minutes=config.diff_interval_minutes,
     )
     transformed.attrs[TARGET_SEGMENT_MASK_ATTR] = target_mask.reindex(
         transformed.index
@@ -1701,6 +1703,8 @@ def _scaled_frame_cache_key(
         config.interpolate_limit_area,
         config.preprocess_mode,
         config.detrend_window,
+        config.lowpass_tau_minutes,
+        config.diff_interval_minutes,
     )
 
 

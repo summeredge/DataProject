@@ -140,6 +140,15 @@ run_directory/
 - downstream gate / lock：`begin_downstream_stage()` 读取 context，
   `awaiting_confirmation` 明确拒绝，`confirmed` / `not_required` 允许，首次
   通过后创建 `screening_downstream.lock`，lock 后禁止切换 branch；
+- 增强筛选正式 branch/context 接入
+  （`run_enhanced_screening_for_active_branch()`）：只消费正式 root 初筛结果
+  与 `preprocessing_context.json` 的 active 预处理配置，`awaiting_confirmation`
+  / 缺 context / 缺正式 root 输入时明确失败且不生成阶段结果，首次成功进入
+  downstream 时创建 lock，lock 后其他 downstream stage 仍可继续；
+- 普通 Granger 正式 branch/context 接入
+  （`run_granger_for_active_branch()`）：与增强筛选相同的 context gate /
+  lock 语义，只运行 ordinary/bivariate Granger 并沿用现有
+  `granger_tests.csv` 输出；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件；
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
@@ -148,7 +157,8 @@ run_directory/
 当前尚未实现：
 
 - Web / API / CLI confirmation UI；
-- enhanced screening / Granger / RF-SHAP / conditional Granger / XGBoost 的
-  gate 接入（PR-9～PR-12 分别在各后续阶段入口调用
-  `begin_downstream_stage()`）；
+- RF / SHAP / model discovery 正式 branch/context 接入（PR-10）；
+- conditional Granger / causal review / final review 正式 context 接入
+  （PR-11）；
+- XGBoost preprocessing consistency（PR-12）；
 - Web / API / CLI 双分支交互。

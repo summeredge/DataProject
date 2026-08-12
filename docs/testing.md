@@ -179,3 +179,41 @@
 - 未锁定目录重新用于非 Raw workflow 时，上一轮正式 root 文件与旧 context
   必须失效，新 comparison 完成后不得继续暴露上一轮 `ranked_features.csv` /
   `recommended_candidates.csv`。
+
+## PR-9 增强筛选 / 普通 Granger 正式 branch/context 测试边界
+
+`tests/test_pr9_active_branch_downstream.py` 覆盖正式 downstream 入口
+（`run_enhanced_screening_for_active_branch()` /
+`run_granger_for_active_branch()`）：
+
+- `awaiting_confirmation` 时两个入口都必须拒绝
+  `initial_screening_branch_not_confirmed`，不生成阶段结果、不创建
+  `screening_downstream.lock`；
+- `selected_preprocessing_mode = lowpass_diff` 但确认 Raw 时，两个入口实际
+  收到 `preprocess_mode = raw`，不得使用 selected 模式；
+- 确认 Processed（`lowpass_diff`）时，`preprocess_mode`、
+  `lowpass_tau_minutes`、`diff_interval_minutes`、`resample_rule` 必须与
+  context 一致；
+- Raw workflow（`not_required`）下两个入口可直接运行并使用 `raw`；
+- context 是 source of truth：调用方传入冲突的 `preprocess_mode` /
+  `lowpass_tau_minutes` / `diff_interval_minutes` 不得覆盖
+  `active_preprocessing_mode` 与 context 参数；
+- 候选只来自正式 root：非 active branch（如 `screening_branches/processed/`）
+  中的 sentinel 变量不得进入后续分析；
+- 增强筛选 / Granger 运行前后 `ranked_features.csv`、
+  `recommended_candidates.csv`、`causal_review_candidates.csv` 必须
+  byte-identical，`final_score` / `driver_rank` / 候选顺序不得改变；
+- 第一个 downstream stage 创建 `screening_downstream.lock`；增强筛选创建
+  lock 后普通 Granger 仍可继续运行，不得报
+  `initial_screening_run_locked`；
+- context 已确认但正式 root 缺少 `recommended_candidates.csv` 等必要输入时，
+  两个入口都必须失败 `initial_screening_formal_output_missing`，不创建
+  lock，不得读取 branch 目录补救；
+- context 缺失 / JSON 非法 / 状态非法分别失败
+  `initial_screening_context_missing` / `initial_screening_context_invalid`，
+  不得 fallback；
+- 普通 Granger 保留 signed lag：正式 runner 源码不得使用
+  `abs(lag)` / `abs(best_lag)` / `abs(granger_lag)`，输出
+  `best_granger_lag` 保持真实正滞后；
+- 只执行增强筛选 / Granger 时不得自动生成 conditional Granger、causal
+  review、RF/SHAP/model discovery、XGBoost 结果文件。

@@ -58,6 +58,10 @@ OPTIONAL_FORMAL_SCREENING_FILES = ["residual_corr_scores.csv"]
 FORMAL_SCREENING_FILES = (
     REQUIRED_FORMAL_SCREENING_FILES + OPTIONAL_FORMAL_SCREENING_FILES
 )
+DOWNSTREAM_FORMAL_INPUT_FILES = [
+    "ranked_features.csv",
+    "recommended_candidates.csv",
+]
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
@@ -945,3 +949,265 @@ def _restore_promotion(
 def _progress(progress_callback, message: str) -> None:
     if progress_callback is not None:
         progress_callback(message)
+
+
+def prepare_downstream_analysis_context(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    required_formal_files: list[str] | None = None,
+) -> tuple[dict[str, object], AnalysisConfig]:
+    """Resolve the frozen formal branch and preprocessing config.
+
+    Reads ``preprocessing_context.json`` through the PR-8 reader (missing /
+    invalid contexts raise their frozen errors), rejects
+    ``awaiting_confirmation``, validates that the promoted formal root
+    screening inputs exist, and builds a downstream ``AnalysisConfig`` whose
+    preprocessing fields come exclusively from the context. Only then does it
+    open the downstream stage via ``begin_downstream_stage()``, which creates
+    ``screening_downstream.lock`` on first success. Returns the context and
+    the downstream config.
+    """
+    run_dir = Path(run_dir)
+    context = _read_preprocessing_context(run_dir)
+    status = context["branch_selection_status"]
+    if status == "awaiting_confirmation":
+        raise ValueError(
+            "initial_screening_branch_not_confirmed: a downstream stage "
+            "cannot start until raw or processed is confirmed"
+        )
+    if status not in {"confirmed", "not_required"}:
+        raise ValueError(
+            "initial_screening_context_invalid: unknown "
+            f"branch_selection_status {status!r}"
+        )
+    missing = _missing_formal_screening_outputs(
+        run_dir, required_formal_files=required_formal_files
+    )
+    if missing:
+        raise ValueError(
+            "initial_screening_formal_output_missing: "
+            f"{run_dir} is missing formal screening inputs {missing}"
+        )
+    base = _resolve_base_config(run_dir, base_config)
+    downstream_config = _downstream_config_from_context(base, context)
+    begin_downstream_stage(run_dir)
+    return context, downstream_config
+
+
+def run_enhanced_screening_for_active_branch(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run enhanced screening on the active formal screening branch.
+
+    The formal ``preprocessing_context.json`` is the only source of truth for
+    the branch and its preprocessing parameters; the existing enhanced
+    screening helpers are reused unchanged and the promoted root screening
+    files are never rewritten.
+    """
+    run_dir = Path(run_dir)
+    context, config = prepare_downstream_analysis_context(
+        run_dir,
+        base_config=base_config,
+        required_formal_files=DOWNSTREAM_FORMAL_INPUT_FILES,
+    )
+    base = _resolve_base_config(run_dir, base_config)
+    _progress(progress_callback, "正在运行增强筛选（正式 branch）")
+    from chem_ts_corr import web as web_module
+    from chem_ts_corr.screening import (
+        model_lift_scores,
+        prepare_best_lag_evidence,
+        rolling_corr_scores,
+    )
+
+    ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    web_module._save_secondary_candidate_context(run_dir, variables)
+    if not variables:
+        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
+
+    scaled = web_module._scaled_frame_for_secondary(config)
+    target_mask = web_module._target_segment_mask(scaled)
+    variables = [
+        variable
+        for variable in variables
+        if variable in scaled.columns and variable != config.target
+    ]
+    if not variables:
+        raise ValueError(
+            "二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。"
+        )
+
+    lag_search_changed = web_module._secondary_lag_search_changed(base, config)
+    ranked_source_scaled = None
+    if not lag_search_changed:
+        ranked_source_scaled = web_module._scaled_frame_for_secondary(config)
+    best_lag_evidence, _ = prepare_best_lag_evidence(
+        scaled,
+        config.target,
+        variables,
+        config.max_lag,
+        ranked=ranked,
+        ranked_source_frame=ranked_source_scaled,
+        allow_ranked_reuse=not lag_search_changed,
+        target_mask=target_mask,
+    )
+    best_lags = {
+        variable: evidence["best_lag"]
+        for variable, evidence in best_lag_evidence.items()
+        if evidence["best_lag"] is not None
+    }
+    lift = model_lift_scores(
+        scaled,
+        config.target,
+        variables,
+        config.max_lag,
+        best_lags=best_lags,
+        target_mask=target_mask,
+    )
+    rolling = rolling_corr_scores(
+        scaled,
+        config.target,
+        variables,
+        config.max_lag,
+        best_lag_evidence=best_lag_evidence,
+        target_mask=target_mask,
+    )
+    enhanced = web_module._enhanced_validation_summary(ranked, lift, rolling)
+
+    lift.to_csv(run_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
+    rolling.to_csv(
+        run_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig"
+    )
+    enhanced.to_csv(
+        run_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig"
+    )
+    _progress(progress_callback, "增强筛选完成")
+    return {
+        "run_dir": run_dir,
+        "active_screening_branch": context["active_screening_branch"],
+        "active_preprocessing_mode": context["active_preprocessing_mode"],
+        "config": config,
+        "model_lift_scores_path": run_dir / "model_lift_scores.csv",
+        "rolling_corr_scores_path": run_dir / "rolling_corr_scores.csv",
+        "enhanced_validation_summary_path": run_dir / "enhanced_validation_summary.csv",
+    }
+
+
+def run_granger_for_active_branch(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run ordinary bivariate Granger on the active formal screening branch.
+
+    The formal ``preprocessing_context.json`` is the only source of truth for
+    the branch and its preprocessing parameters; the existing ordinary Granger
+    service is reused unchanged and the promoted root screening files are
+    never rewritten.
+    """
+    run_dir = Path(run_dir)
+    context, config = prepare_downstream_analysis_context(
+        run_dir,
+        base_config=base_config,
+        required_formal_files=DOWNSTREAM_FORMAL_INPUT_FILES,
+    )
+    _progress(progress_callback, "正在运行普通 Granger（正式 branch）")
+    from chem_ts_corr import causality as causality_module
+    from chem_ts_corr import web as web_module
+
+    ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    web_module._save_secondary_candidate_context(run_dir, variables)
+    if not variables:
+        raise ValueError("ranked_features.csv 中没有可运行 Granger 的候选变量")
+
+    scaled = web_module._scaled_frame_for_secondary(config)
+    target_mask = web_module._target_segment_mask(scaled)
+    variables = [
+        variable
+        for variable in variables
+        if variable in scaled.columns and variable != config.target
+    ]
+    if not variables:
+        raise ValueError(
+            "二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。"
+        )
+
+    granger = causality_module.run_granger_tests(
+        scaled,
+        target=config.target,
+        variables=variables,
+        maxlag=max(1, config.max_lag),
+        target_mask=target_mask,
+    )
+    granger.to_csv(run_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
+    _progress(progress_callback, "普通 Granger 完成")
+    return {
+        "run_dir": run_dir,
+        "active_screening_branch": context["active_screening_branch"],
+        "active_preprocessing_mode": context["active_preprocessing_mode"],
+        "config": config,
+        "granger_tests_path": run_dir / "granger_tests.csv",
+    }
+
+
+def _resolve_base_config(
+    run_dir: Path, base_config: AnalysisConfig | None
+) -> AnalysisConfig:
+    if base_config is not None:
+        return base_config
+    return _load_run_config(run_dir)
+
+
+def _load_run_config(run_dir: Path) -> AnalysisConfig:
+    path = Path(run_dir) / "run_config.json"
+    if not path.exists():
+        raise ValueError(f"initial_screening_config_missing: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"initial_screening_config_invalid: {path}") from exc
+    data["input_path"] = Path(data["input_path"])
+    data["output_dir"] = Path(run_dir)
+    data["roles_path"] = (
+        Path(data["roles_path"]) if data.get("roles_path") else None
+    )
+    data.pop("file_id", None)
+    return AnalysisConfig(**data)
+
+
+def _missing_formal_screening_outputs(
+    run_dir: Path,
+    *,
+    required_formal_files: list[str] | None,
+) -> list[str]:
+    names = list(required_formal_files or DOWNSTREAM_FORMAL_INPUT_FILES)
+    return [name for name in names if not (Path(run_dir) / name).exists()]
+
+
+def _downstream_config_from_context(
+    base_config: AnalysisConfig,
+    context: dict[str, object],
+) -> AnalysisConfig:
+    lowpass_tau_minutes = context["lowpass_tau_minutes"]
+    requested_diff_interval_minutes = context["requested_diff_interval_minutes"]
+    return replace(
+        base_config,
+        preprocess_mode=str(context["active_preprocessing_mode"]),
+        lowpass_tau_minutes=(
+            float(lowpass_tau_minutes)
+            if lowpass_tau_minutes is not None
+            else base_config.lowpass_tau_minutes
+        ),
+        diff_interval_minutes=(
+            float(requested_diff_interval_minutes)
+            if requested_diff_interval_minutes is not None
+            else None
+        ),
+        resample_rule=context["resample_rule"],
+    )

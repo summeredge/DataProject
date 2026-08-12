@@ -384,3 +384,61 @@ branch_selection_status
 当前阶段（PR-8）已生成该文件，写入方式为临时文件 → 完整写入 →
 `os.replace`，编码 UTF-8（`ensure_ascii=False`、`indent=2`），不得引入第三
 方依赖；不得新增评分、排序或自动推荐字段。
+
+## 后续阶段正式 branch/context 契约（PR-9）
+
+增强筛选与普通 Granger 的正式 backend 入口（`pipeline.py`）：
+
+```python
+prepare_downstream_analysis_context(run_dir, ...)
+run_enhanced_screening_for_active_branch(run_dir, ...)
+run_granger_for_active_branch(run_dir, ...)
+```
+
+执行顺序固定：
+
+```text
+读取并验证 preprocessing_context.json
+→ 验证正式 root 初筛输入
+→ 解析 active preprocessing 配置
+→ begin_downstream_stage(run_dir)（首次通过创建 screening_downstream.lock）
+→ 调用现有增强筛选 / 普通 Granger service
+→ 写出现有阶段结果文件
+```
+
+约束：
+
+- 后续阶段只能消费正式 root 的 `ranked_features.csv` /
+  `recommended_candidates.csv` 等已 promotion 初筛文件；禁止读取
+  `screening_branches/raw/`、`screening_branches/processed/` 或
+  `preprocessing_comparison.csv` 构造候选，禁止 Raw ∪ Processed 合并；
+- 预处理参数以 context 为准：`active_preprocessing_mode` 覆盖调用方
+  `config.preprocess_mode`；`lowpass_tau_minutes` 来自
+  `context.lowpass_tau_minutes`；`diff_interval_minutes` 来自
+  `context.requested_diff_interval_minutes`（`null` 时沿用现有
+  `None` 语义）；`resample_rule` 来自 `context.resample_rule`；
+  `selected_preprocessing_mode` 只表示用户最初选择，不得覆盖
+  `active_preprocessing_mode`；
+- 构造正式 downstream config 必须通过 `dataclasses.replace`，不得原地修改
+  调用方 config；
+- `branch_selection_status = awaiting_confirmation` 时两个正式入口必须拒绝：
+  `initial_screening_branch_not_confirmed`；context 缺失 / 非法：
+  `initial_screening_context_missing` / `initial_screening_context_invalid`；
+- 正式 root 缺少必要初筛输入（如 `ranked_features.csv`、
+  `recommended_candidates.csv`）时必须失败：
+  `initial_screening_formal_output_missing`，且该检查在创建 downstream lock
+  之前完成，不得回退到 branch 目录；
+- 第一个成功进入 downstream 的 stage 创建 `screening_downstream.lock`；
+  lock 已存在表示 branch 已冻结，不得阻止其他后续 stage；
+- 增强筛选 / Granger 不得改写正式初筛文件：
+  `ranked_features.csv`、`recommended_candidates.csv`、
+  `causal_review_candidates.csv` 在运行前后必须保持一致；
+- 阶段输出沿用现有契约：增强筛选写
+  `model_lift_scores.csv`、`rolling_corr_scores.csv`、
+  `enhanced_validation_summary.csv`（及 `secondary_candidate_context.csv`），
+  普通 Granger 写 `granger_tests.csv`，不得新增综合评分 CSV；
+- 普通 Granger 保留 signed lag，不得使用 `abs(lag)` / `abs(best_lag)` /
+  `abs(granger_lag)` 决定时间方向；输出不得表述为确定性因果；
+- PR-9 只接入 ordinary/bivariate Granger；conditional Granger、causal
+  review、final review、RF/SHAP/model discovery、XGBoost 与 Web/API/CLI
+  总接入不在本阶段范围。

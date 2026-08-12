@@ -67,6 +67,12 @@ MODEL_DOWNSTREAM_FORMAL_INPUT_FILES = [
     "recommended_candidates.csv",
     "risk_flags.csv",
 ]
+CAUSAL_REVIEW_FORMAL_INPUT_FILES = [
+    "ranked_features.csv",
+    "recommended_candidates.csv",
+    "causal_review_candidates.csv",
+    "risk_flags.csv",
+]
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
@@ -1264,6 +1270,114 @@ def run_model_for_active_branch(
         "model_variable_importance_path": run_dir / "model_variable_importance.csv",
         "model_discovered_candidates_path": run_dir / "model_discovered_candidates.csv",
         "model_metrics": metrics,
+    }
+
+
+def run_causal_review_for_active_branch(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    control_columns: list[str] | None = None,
+    maxlag: int | None = None,
+    min_rows: int = 60,
+    top_n: int | None = None,
+    conditional_lag_mode: str = "ranked_window",
+    conditional_lag_window: int = 5,
+    conditional_fallback_maxlag: int = 24,
+    conditional_baseline_maxlag: int | None = 24,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run the three-tier causal review on the active formal screening branch.
+
+    The formal ``preprocessing_context.json`` is the only source of truth for
+    the branch and its preprocessing parameters. The existing
+    ``run_causal_review_stage()`` is reused unchanged and the formal review
+    candidates come exclusively from the promoted root
+    ``causal_review_candidates.csv``; the promoted root screening files are
+    never rewritten.
+    """
+    run_dir = Path(run_dir)
+    context, config = prepare_downstream_analysis_context(
+        run_dir,
+        base_config=base_config,
+        required_formal_files=CAUSAL_REVIEW_FORMAL_INPUT_FILES,
+    )
+    _progress(progress_callback, "正在运行三级复核（正式 branch）")
+    from chem_ts_corr import web as web_module
+    from chem_ts_corr.causal_review_runner import run_causal_review_stage
+
+    ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+    causal_candidates = pd.read_csv(
+        run_dir / "causal_review_candidates.csv", encoding="utf-8-sig"
+    )
+    risk = pd.read_csv(run_dir / "risk_flags.csv", encoding="utf-8-sig")
+    resolved_control_columns = (
+        control_columns
+        if control_columns is not None
+        else config.residual_control_columns
+        or config.capacity_columns
+        or []
+    )
+    web_module._ensure_columns_not_excluded(
+        config, resolved_control_columns, "三层复核控制列"
+    )
+    resolved_maxlag = (
+        config.resolved_granger_maxlag() if maxlag is None else maxlag
+    )
+    if control_columns is not None:
+        scaled = web_module._scaled_frame_for_secondary(
+            config, protected_columns=resolved_control_columns
+        )
+    else:
+        scaled = web_module._scaled_frame_for_secondary(config)
+    target_mask = web_module._target_segment_mask(scaled)
+    result = run_causal_review_stage(
+        frame=scaled,
+        target=config.target,
+        ranked_features=ranked,
+        causal_review_candidates=causal_candidates,
+        risk_flags=risk,
+        output_dir=run_dir,
+        control_columns=resolved_control_columns,
+        maxlag=resolved_maxlag,
+        min_rows=min_rows,
+        top_n=top_n,
+        conditional_lag_mode=conditional_lag_mode,
+        conditional_lag_window=conditional_lag_window,
+        conditional_fallback_maxlag=conditional_fallback_maxlag,
+        conditional_baseline_maxlag=conditional_baseline_maxlag,
+        target_mask=target_mask,
+    )
+    result["conditional_granger_scores"].to_csv(
+        run_dir / "conditional_granger_scores.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    result["causal_review_report"].to_csv(
+        run_dir / "causal_review_report.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    result["causal_review_evidence"].to_csv(
+        run_dir / "causal_review_evidence.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    result["final_review_summary"].to_csv(
+        run_dir / "final_review_summary.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    _progress(progress_callback, "三级复核完成")
+    return {
+        "run_dir": run_dir,
+        "active_screening_branch": context["active_screening_branch"],
+        "active_preprocessing_mode": context["active_preprocessing_mode"],
+        "config": config,
+        "conditional_granger_scores_path": run_dir / "conditional_granger_scores.csv",
+        "causal_review_report_path": run_dir / "causal_review_report.csv",
+        "causal_review_evidence_path": run_dir / "causal_review_evidence.csv",
+        "final_review_summary_path": run_dir / "final_review_summary.csv",
     }
 
 

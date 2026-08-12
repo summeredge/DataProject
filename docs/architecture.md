@@ -155,6 +155,14 @@ run_directory/
   `risk_flags.csv` 等输入，生成 `shap_or_importance.csv`、
   `model_variable_importance.csv`、`model_discovered_candidates.csv`
   三个模型解释输出，不自动运行其他 downstream stage；
+- conditional Granger / causal review / final review 正式 branch/context 接入
+  （`run_causal_review_for_active_branch()`）：与增强筛选相同的 context
+  gate / lock 语义，只消费正式 root 的 `ranked_features.csv`、
+  `recommended_candidates.csv`、`causal_review_candidates.csv`、
+  `risk_flags.csv`，复用现有 `run_causal_review_stage()`，生成
+  `conditional_granger_scores.csv`、`causal_review_report.csv`、
+  `causal_review_evidence.csv`、`final_review_summary.csv` 四个三级复核
+  输出，不自动运行其他 downstream stage；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件；
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
@@ -163,7 +171,5 @@ run_directory/
 当前尚未实现：
 
 - Web / API / CLI confirmation UI；
-- conditional Granger / causal review / final review 正式 context 接入
-  （PR-11）；
 - XGBoost preprocessing consistency（PR-12）；
-- Web / API / CLI 双分支交互。
+- Web / API / CLI 双分支工作流总接入（PR-13）。

@@ -260,3 +260,59 @@
   XGBoost 等未执行阶段文件；
 - 正式 runner 源码不得使用 `abs(lag)` / `abs(best_lag)`，不得读取
   `screening_branches/` 构造候选。
+
+## PR-11 Conditional Granger / Causal Review / Final Review 正式 branch/context 测试边界
+
+`tests/test_pr11_active_branch_causal_review.py` 覆盖正式三级复核 backend
+入口（`run_causal_review_for_active_branch()`）：
+
+- `awaiting_confirmation` 时拒绝 `initial_screening_branch_not_confirmed`，
+  不生成四个三级输出、不创建 `screening_downstream.lock`；
+- `selected_preprocessing_mode = lowpass_diff` 但确认 Raw 时三级实际收到
+  `preprocess_mode = raw`，不得使用 selected 模式；
+- 确认 Processed 时 `preprocess_mode` / `lowpass_tau_minutes` /
+  `diff_interval_minutes` / `resample_rule` 与 context 一致；
+- context 是 source of truth：调用方冲突的 preprocessing config 不得覆盖
+  active 模式与 context 参数；
+- 正式三级候选唯一来自 root `causal_review_candidates.csv`，不得从
+  ranked / secondary candidate context / 非 active branch /
+  model discovered candidates 重新生成或扩大；执行前后
+  `causal_review_candidates.csv` byte-identical；
+- `top_n=None` 默认覆盖完整正式候选集，包含 `final_score < 0.30` 但仍属
+  正式候选的变量；显式 `top_n` 保留原顺序传给 stage，由 stage 现有
+  `head(top_n)` 截断，不得重新排序；
+- control columns 解析优先级：显式 → `residual_control_columns` →
+  `capacity_columns` → `[]`；显式空列表不回退 config；显式控制列通过
+  `_scaled_frame_for_secondary(config, protected_columns=...)` 保护；
+- `target` / `control_columns` / `maxlag` / `min_rows` / `top_n` /
+  conditional 参数 / `target_mask` 全部完整透传现有
+  `run_causal_review_stage()`；`maxlag=None` 使用现有
+  `config.resolved_granger_maxlag()`；
+- signed lag 保持方向：`ranked_features.csv` 中负 lag 原样传入 stage，
+  正式 runner 源码不得使用 `abs(lag)` / `abs(best_lag)` /
+  `abs(granger_lag)`；
+- 运行前后 `ranked_features.csv` / `recommended_candidates.csv` /
+  `causal_review_candidates.csv` / `risk_flags.csv` byte-identical，
+  `final_score` / `driver_rank` / 候选顺序不变；
+- 成功执行只生成四个三级输出
+  （`conditional_granger_scores.csv`、`causal_review_report.csv`、
+  `causal_review_evidence.csv`、`final_review_summary.csv`），不新增综合
+  score/rank 文件，不生成其他阶段文件；
+- optional evidence 缺失时三级仍可执行，不自动运行对应前置阶段；已有
+  optional evidence（`enhanced_validation_summary.csv`、
+  `model_variable_importance.csv` 等）可被现有 stage 从 `output_dir`
+  读取，`pipeline.py` 不复制 optional evidence 读取逻辑；
+- 三级作为第一个 downstream stage 时创建 lock；已有 lock（增强筛选 /
+  Granger / Model 先运行）后三级仍可运行；三级运行后切换 branch 必须拒绝
+  `initial_screening_branch_locked`；
+- 正式 root 缺少四个必需输入中任一文件时失败
+  `initial_screening_formal_output_missing`，不创建 lock、不生成三级输出、
+  不读 branch 目录；context 缺失 / JSON 非法 / 状态非法分别失败
+  `initial_screening_context_missing` / `initial_screening_context_invalid`；
+- 只执行三级复核时不得自动生成 Enhanced / ordinary Granger / Model /
+  XGBoost 等未执行阶段文件；
+- 正式 runner 源码约束：不得包含 `_save_secondary_candidate_context` /
+  `_load_secondary_candidate_context` / `_build_causal_review_candidate_table`
+  / `build_causal_review_candidates` / `screening_branches` /
+  `preprocessing_comparison.csv` / `model_discovered_candidates` /
+  `final_score >= 0.30` / `abs(lag` / `abs(best_lag`。

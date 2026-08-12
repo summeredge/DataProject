@@ -149,6 +149,12 @@ run_directory/
   （`run_granger_for_active_branch()`）：与增强筛选相同的 context gate /
   lock 语义，只运行 ordinary/bivariate Granger 并沿用现有
   `granger_tests.csv` 输出；
+- RF / SHAP / model discovery 正式 branch/context 接入
+  （`run_model_for_active_branch()`）：与增强筛选相同的 context gate /
+  lock 语义，只消费正式 root 的 `ranked_features.csv` /
+  `risk_flags.csv` 等输入，生成 `shap_or_importance.csv`、
+  `model_variable_importance.csv`、`model_discovered_candidates.csv`
+  三个模型解释输出，不自动运行其他 downstream stage；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件；
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
@@ -157,7 +163,6 @@ run_directory/
 当前尚未实现：
 
 - Web / API / CLI confirmation UI；
-- RF / SHAP / model discovery 正式 branch/context 接入（PR-10）；
 - conditional Granger / causal review / final review 正式 context 接入
   （PR-11）；
 - XGBoost preprocessing consistency（PR-12）；

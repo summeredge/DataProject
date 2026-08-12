@@ -217,3 +217,46 @@
   `best_granger_lag` 保持真实正滞后；
 - 只执行增强筛选 / Granger 时不得自动生成 conditional Granger、causal
   review、RF/SHAP/model discovery、XGBoost 结果文件。
+
+## PR-10 RF / SHAP / Model Discovery 正式 branch/context 测试边界
+
+`tests/test_pr10_active_branch_model.py` 覆盖正式模型 backend 入口
+（`run_model_for_active_branch()`）：
+
+- `awaiting_confirmation` 时拒绝 `initial_screening_branch_not_confirmed`，
+  不生成模型输出、不创建 `screening_downstream.lock`；
+- `selected_preprocessing_mode = lowpass_diff` 但确认 Raw 时模型实际收到
+  `preprocess_mode = raw`，不得使用 selected 模式；
+- 确认 Processed 时 `preprocess_mode` / `lowpass_tau_minutes` /
+  `diff_interval_minutes` / `resample_rule` 与 context 一致；
+- Raw workflow（`not_required`）下可直接运行并使用 `raw`；
+- context 是 source of truth：调用方冲突的 preprocessing config 不得覆盖
+  active 模式与 context 参数；
+- 模型候选只来自正式 root `ranked_features.csv`，非 active branch 的
+  sentinel 变量不得传入 `fit_explainable_model()`；
+- 模型候选沿用 Top-K + force include 去重规则，不得重新出现
+  `final_score >= 0.30` 截断；
+- 模型复用现有 `fit_explainable_model()` / `build_model_variable_importance()`
+  / `build_model_discovered_candidates()`，参数（target、max_lag、
+  candidate_variables、max_features、random_state、best_lags、
+  `lag_mode = best_only`、target_mask）来自正式 downstream config；
+- 成功运行只生成 `shap_or_importance.csv`、`model_variable_importance.csv`、
+  `model_discovered_candidates.csv`，不新增综合评分 CSV；
+- 运行前后 `ranked_features.csv` / `recommended_candidates.csv` /
+  `causal_review_candidates.csv` byte-identical，`final_score` /
+  `driver_rank` / 变量顺序不变；
+- model discovery 不回写初筛；风险信息来自正式 root `risk_flags.csv`，
+  不使用非 active branch 风险；
+- 模型作为第一个 downstream stage 时创建 lock；已有 lock（增强筛选 /
+  Granger 先运行）后模型仍可运行；模型运行后切换 branch 必须拒绝
+  `initial_screening_branch_locked`；
+- 正式 root 缺少 `ranked_features.csv` / `risk_flags.csv` 时失败
+  `initial_screening_formal_output_missing`，不创建 lock、不读 branch 目录；
+- context 缺失 / JSON 非法 / 状态非法分别失败
+  `initial_screening_context_missing` / `initial_screening_context_invalid`；
+- SHAP 不可用时仍可运行并产出 `random_forest_feature_importance`，不得让
+  正式 runner 失败；
+- 只执行模型时不得自动生成 conditional Granger、causal/final review、
+  XGBoost 等未执行阶段文件；
+- 正式 runner 源码不得使用 `abs(lag)` / `abs(best_lag)`，不得读取
+  `screening_branches/` 构造候选。

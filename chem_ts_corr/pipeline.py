@@ -62,6 +62,11 @@ DOWNSTREAM_FORMAL_INPUT_FILES = [
     "ranked_features.csv",
     "recommended_candidates.csv",
 ]
+MODEL_DOWNSTREAM_FORMAL_INPUT_FILES = [
+    "ranked_features.csv",
+    "recommended_candidates.csv",
+    "risk_flags.csv",
+]
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
@@ -1153,6 +1158,113 @@ def run_granger_for_active_branch(
         "active_preprocessing_mode": context["active_preprocessing_mode"],
         "config": config,
         "granger_tests_path": run_dir / "granger_tests.csv",
+    }
+
+
+def run_model_for_active_branch(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run RF / SHAP model explanation on the active formal screening branch.
+
+    The formal ``preprocessing_context.json`` is the only source of truth for
+    the branch and its preprocessing parameters; the existing model helpers are
+    reused unchanged and the promoted root screening files are never rewritten.
+    This stage only produces the three model-explanation outputs and never
+    starts enhanced screening, Granger, conditional Granger, causal/final
+    review or XGBoost.
+    """
+    run_dir = Path(run_dir)
+    context, config = prepare_downstream_analysis_context(
+        run_dir,
+        base_config=base_config,
+        required_formal_files=MODEL_DOWNSTREAM_FORMAL_INPUT_FILES,
+    )
+    base = _resolve_base_config(run_dir, base_config)
+    _progress(progress_callback, "正在运行模型解释（正式 branch）")
+    from chem_ts_corr import web as web_module
+    from chem_ts_corr.model_discovery import (
+        build_model_discovered_candidates,
+        build_model_variable_importance,
+    )
+    from chem_ts_corr.modeling import fit_explainable_model
+
+    ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    web_module._save_secondary_candidate_context(run_dir, variables)
+    if not variables:
+        raise ValueError("ranked_features.csv 中没有可运行模型解释的候选变量")
+
+    scaled = web_module._scaled_frame_for_secondary(config)
+    target_mask = web_module._target_segment_mask(scaled)
+    variables = [
+        variable
+        for variable in variables
+        if variable in scaled.columns and variable != config.target
+    ]
+    if not variables:
+        raise ValueError(
+            "二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。"
+        )
+
+    lag_search_changed = web_module._secondary_lag_search_changed(base, config)
+    if lag_search_changed:
+        best_lags: dict[str, int] = {}
+    else:
+        best_lags = web_module._best_lags_from_ranked(ranked)
+    best_lags = web_module._secondary_best_lags_for_missing_variables(
+        scaled,
+        config.target,
+        variables,
+        best_lags,
+        config.max_lag,
+        recompute_limit=None if lag_search_changed else 20,
+        target_mask=target_mask,
+    )
+
+    importance, metrics = fit_explainable_model(
+        scaled,
+        target=config.target,
+        max_lag=config.max_lag,
+        candidate_variables=variables,
+        max_features=config.max_model_features,
+        random_state=config.random_state,
+        best_lags=best_lags,
+        lag_mode="best_only",
+        target_mask=target_mask,
+    )
+    risk = pd.read_csv(run_dir / "risk_flags.csv", encoding="utf-8-sig")
+    model_variable_importance = build_model_variable_importance(
+        importance, ranked, risk_flags=risk
+    )
+    model_discovered = build_model_discovered_candidates(
+        importance,
+        ranked,
+        risk_flags=risk,
+        screening_top_n=config.top_k,
+        max_lag=config.max_lag,
+    )
+    importance.to_csv(
+        run_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig"
+    )
+    model_variable_importance.to_csv(
+        run_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig"
+    )
+    model_discovered.to_csv(
+        run_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig"
+    )
+    _progress(progress_callback, "模型解释完成")
+    return {
+        "run_dir": run_dir,
+        "active_screening_branch": context["active_screening_branch"],
+        "active_preprocessing_mode": context["active_preprocessing_mode"],
+        "config": config,
+        "shap_or_importance_path": run_dir / "shap_or_importance.csv",
+        "model_variable_importance_path": run_dir / "model_variable_importance.csv",
+        "model_discovered_candidates_path": run_dir / "model_discovered_candidates.csv",
+        "model_metrics": metrics,
     }
 
 

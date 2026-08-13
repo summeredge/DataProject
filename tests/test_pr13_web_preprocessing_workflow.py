@@ -558,13 +558,56 @@ def test_download_rejects_branch_internal_and_traversal_paths(monkeypatch, tmp_p
 # --- Test 46: LLM/report gate ----------------------------------------------
 
 
-def test_llm_prompt_rejects_awaiting_branch(tmp_path, monkeypatch):
+@pytest.mark.parametrize("endpoint_name", ["_llm_prompt_response", "_llm_report_response"])
+def test_llm_outputs_reject_awaiting_branch(tmp_path, monkeypatch, endpoint_name):
     config, _ = _write_run(tmp_path, mode="lowpass")
     monkeypatch.setattr(
         web, "_multipart_form", lambda handler: {"run_id": config.output_dir.name}
     )
     with pytest.raises(ValueError, match="initial_screening_branch_not_confirmed"):
-        web._llm_prompt_response(object())
+        getattr(web, endpoint_name)(object())
+
+
+@pytest.mark.parametrize("endpoint_name", ["_llm_prompt_response", "_llm_report_response"])
+def test_llm_outputs_lock_confirmed_branch_before_generation(
+    tmp_path, monkeypatch, endpoint_name
+):
+    config, _ = _write_run(tmp_path, mode="lowpass")
+    _confirm_payload(tmp_path, "raw")
+    lock_path = tmp_path / "screening_downstream.lock"
+    ranked_path = tmp_path / "ranked_features.csv"
+    ranked_before = ranked_path.read_bytes()
+    assert not lock_path.exists()
+    monkeypatch.setattr(
+        web,
+        "_multipart_form",
+        lambda handler: {"run_id": config.output_dir.name, "api_key": "test-key"},
+    )
+    if endpoint_name == "_llm_prompt_response":
+        original_builder = web.build_llm_analysis_package
+
+        def build_locked_package(*args, **kwargs):
+            assert lock_path.exists()
+            return original_builder(*args, **kwargs)
+
+        monkeypatch.setattr(web, "build_llm_analysis_package", build_locked_package)
+    else:
+        def generate_locked_report(*args, **kwargs):
+            assert lock_path.exists()
+            return {"report": "report", "prompt": "prompt"}
+
+        monkeypatch.setattr(
+            web,
+            "generate_llm_report",
+            generate_locked_report,
+        )
+
+    getattr(web, endpoint_name)(object())
+
+    assert lock_path.exists()
+    assert ranked_path.read_bytes() == ranked_before
+    with pytest.raises(ValueError, match="initial_screening_branch_locked"):
+        confirm_initial_screening_branch(tmp_path, branch="processed")
 
 
 # --- Test 54: UI button gate (static) --------------------------------------

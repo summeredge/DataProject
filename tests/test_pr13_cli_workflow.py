@@ -231,7 +231,7 @@ def test_downstream_commands_call_formal_runners(
     def fake_runner(output_dir, **kwargs):
         captured["output_dir"] = output_dir
         captured.update(kwargs)
-        return {}
+        return {"status": "success"} if command == "run-xgb" else {}
 
     monkeypatch.setattr(cli, runner_name, fake_runner)
     monkeypatch.setattr(
@@ -253,6 +253,32 @@ def test_downstream_commands_call_formal_runners(
         assert captured["whitelist"] == ["w1", "w2"]
         assert captured["top_n"] == 6
         assert captured["max_lag"] == 12
+
+
+@pytest.mark.parametrize(
+    ("result", "expected", "unexpected"),
+    [
+        ({"status": "success"}, "XGB 四级验证完成。", "XGB 四级验证失败。"),
+        (
+            {"status": "invalid_input", "error_message": "bad input"},
+            "XGB 四级验证失败。\nstatus=invalid_input\nerror=bad input",
+            "XGB 四级验证完成。",
+        ),
+    ],
+)
+def test_run_xgb_cli_reports_runner_status(
+    monkeypatch, tmp_path, capsys, result, expected, unexpected
+):
+    monkeypatch.setattr(cli, "run_xgb_for_active_branch", lambda *args, **kwargs: result)
+    monkeypatch.setattr(
+        sys, "argv", _cli_args(["run-xgb", "--output", str(tmp_path)])
+    )
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert expected in output
+    assert unexpected not in output
 
 
 # --- 13. legacy enable flags on processed mode must not auto-select --------

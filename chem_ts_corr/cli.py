@@ -238,14 +238,19 @@ def main() -> None:
         )
         print("三级复核完成。")
     elif args.command == "run-xgb":
-        run_xgb_for_active_branch(
+        result = run_xgb_for_active_branch(
             args.output,
             control_columns=_split_csv(args.control_columns) or None,
             whitelist=_split_csv(args.whitelist) or None,
             top_n=args.top_n,
             max_lag=args.max_lag,
         )
-        print("XGB 四级验证完成。")
+        if result.get("status") == "success":
+            print("XGB 四级验证完成。")
+        else:
+            print("XGB 四级验证失败。")
+            print(f"status={result.get('status')}")
+            print(f"error={result.get('error_message')}")
     elif args.command == "serve":
         from chem_ts_corr.web import run_server
 

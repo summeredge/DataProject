@@ -31,6 +31,7 @@ from chem_ts_corr.data import (
 )
 from chem_ts_corr.pipeline import (
     _read_preprocessing_context,
+    begin_downstream_stage,
     confirm_initial_screening_branch,
     run_causal_review_for_active_branch,
     run_enhanced_screening_for_active_branch,
@@ -883,6 +884,13 @@ def _require_formal_branch(output_dir: Path) -> dict[str, Any] | None:
     return context
 
 
+def _lock_formal_branch_for_llm(output_dir: Path) -> None:
+    """Lock a confirmed PR-13 branch before writing LLM artifacts."""
+    context = _require_formal_branch(output_dir)
+    if context is not None:
+        begin_downstream_stage(output_dir)
+
+
 def _task_status_response(task_id: str) -> dict[str, Any]:
     with TASKS_LOCK:
         _cleanup_tasks_locked()
@@ -1277,7 +1285,7 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    _require_formal_branch(output_dir)
+    _lock_formal_branch_for_llm(output_dir)
     top_n = _int_field(form, "top_n", 20)
     report_type = _field(form, "report_type", "apc_advice")
     package = build_llm_analysis_package(output_dir, top_n=top_n)
@@ -1318,7 +1326,7 @@ def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     run_id = _field(form, "run_id")
     api_key = _field(form, "api_key")
     output_dir = _resolve_run_dir(run_id)
-    _require_formal_branch(output_dir)
+    _lock_formal_branch_for_llm(output_dir)
     config = LLMCallConfig(
         provider=_field(form, "provider", "deepseek"),
         base_url=_field(form, "base_url", "https://api.deepseek.com"),

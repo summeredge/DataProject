@@ -1044,7 +1044,7 @@ def run_enhanced_screening_for_active_branch(
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
 
-    scaled = web_module._scaled_frame_for_secondary(config)
+    scaled = web_module._scaled_frame_for_secondary_causal(config)
     target_mask = web_module._target_segment_mask(scaled)
     variables = [
         variable
@@ -1059,7 +1059,7 @@ def run_enhanced_screening_for_active_branch(
     lag_search_changed = web_module._secondary_lag_search_changed(base, config)
     ranked_source_scaled = None
     if not lag_search_changed:
-        ranked_source_scaled = web_module._scaled_frame_for_secondary(config)
+        ranked_source_scaled = web_module._scaled_frame_for_secondary_causal(config)
     best_lag_evidence, _ = prepare_best_lag_evidence(
         scaled,
         config.target,
@@ -1141,7 +1141,7 @@ def run_granger_for_active_branch(
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行 Granger 的候选变量")
 
-    scaled = web_module._scaled_frame_for_secondary(config)
+    scaled = web_module._scaled_frame_for_secondary_causal(config)
     target_mask = web_module._target_segment_mask(scaled)
     variables = [
         variable
@@ -1206,7 +1206,7 @@ def run_model_for_active_branch(
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行模型解释的候选变量")
 
-    scaled = web_module._scaled_frame_for_secondary(config)
+    scaled = web_module._scaled_frame_for_secondary_causal(config)
     target_mask = web_module._target_segment_mask(scaled)
     variables = [
         variable
@@ -1329,11 +1329,11 @@ def run_causal_review_for_active_branch(
         config.resolved_granger_maxlag() if maxlag is None else maxlag
     )
     if control_columns is not None:
-        scaled = web_module._scaled_frame_for_secondary(
+        scaled = web_module._scaled_frame_for_secondary_causal(
             config, protected_columns=resolved_control_columns
         )
     else:
-        scaled = web_module._scaled_frame_for_secondary(config)
+        scaled = web_module._scaled_frame_for_secondary_causal(config)
     target_mask = web_module._target_segment_mask(scaled)
     result = run_causal_review_stage(
         frame=scaled,

@@ -223,7 +223,7 @@ def _spy_scaled_config(monkeypatch, run_dir: Path) -> dict[str, object]:
         captured["config"] = config
         return frame
 
-    monkeypatch.setattr(web, "_scaled_frame_for_secondary", capture_scaled)
+    monkeypatch.setattr(web, "_scaled_frame_for_secondary_causal", capture_scaled)
     monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
     return captured
 

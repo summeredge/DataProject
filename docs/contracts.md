@@ -410,6 +410,7 @@ run_causal_review_for_active_branch(run_dir, ...)
 → 验证正式 root 初筛输入
 → 解析 active preprocessing 配置
 → begin_downstream_stage(run_dir)（首次通过创建 screening_downstream.lock）
+→ causal preprocessing / active causal transform / target mask / standardize
 → 调用现有增强筛选 / 普通 Granger / 模型 service
 → 写出现有阶段结果文件
 ```
@@ -430,6 +431,10 @@ run_causal_review_for_active_branch(run_dir, ...)
   `active_preprocessing_mode`；
 - 构造正式 downstream config 必须通过 `dataclasses.replace`，不得原地修改
   调用方 config；
+- 增强筛选、普通 Granger、RF/SHAP 与 conditional Granger/三级复核必须
+  使用 causal preprocessing；完整时间轴先变换，工况只作为 target mask，
+  standardization 仍以 target mask 拟合。初筛的历史筛查可继续使用回顾性
+  transform，XGBoost 继续使用独立的 fold-safe causal preprocessing；
 - `branch_selection_status = awaiting_confirmation` 时所有正式入口必须拒绝：
   `initial_screening_branch_not_confirmed`；context 缺失 / 非法：
   `initial_screening_context_missing` / `initial_screening_context_invalid`；
@@ -460,6 +465,12 @@ run_causal_review_for_active_branch(run_dir, ...)
   discovery，PR-11 接入 conditional Granger / causal review / final review；
   XGBoost（PR-12）接入 fold-safe 正式 runner；Web/API/CLI 正式总接入
   （PR-13）只改变入口 orchestration，不改变上述后端契约。
+
+趋势图与 XY 散点矩阵继续使用历史观察用途的回顾性 `transform_frame()`。
+正式 branch 已确定时，query 必须使用 active mode 及正式
+`lowpass_tau_minutes` / `diff_interval_minutes` / `detrend_window`；用户之后
+修改表单但未重新分析时不得覆盖 active context。`awaiting_confirmation` 或
+尚未分析时只允许按当前表单作为预览，不得据此确认 branch。
 
 ## 三级复核正式 branch/context 契约（PR-11）
 
@@ -518,9 +529,9 @@ run_causal_review_for_active_branch(
   context 的 `preprocess_mode`、`lowpass_tau_minutes`、
   `requested_diff_interval_minutes`、`resample_rule`，调用方 config 不得
   覆盖；
-- 复用现有 `_scaled_frame_for_secondary()` / `_target_segment_mask()`；
+- 复用统一 causal secondary frame helper / `_target_segment_mask()`；
   显式 `control_columns` 时以
-  `_scaled_frame_for_secondary(config, protected_columns=resolved_control_columns)`
+  causal helper 的 `protected_columns=resolved_control_columns`
   保护控制列，不修改其算法；
 - control columns 解析保持现有三级复核行为：显式 `control_columns` → 否则
   `config.residual_control_columns` → 否则 `config.capacity_columns` → 否则

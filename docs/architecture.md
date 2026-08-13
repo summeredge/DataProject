@@ -161,6 +161,9 @@ run_directory/
   `conditional_granger_scores.csv`、`causal_review_report.csv`、
   `causal_review_evidence.csv`、`final_review_summary.csv` 四个三级复核
   输出，不自动运行其他 downstream stage；
+- 初筛允许为历史筛查使用回顾性预处理；增强筛选、普通 Granger、RF/SHAP
+  与 conditional Granger/三级复核统一使用 causal preprocessing，禁止读取
+  未来过程值；XGBoost 保持独立的 fold-safe causal preprocessing；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件；
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
@@ -205,6 +208,9 @@ run_directory/
     `analysisContext.preprocess_mode` 表示 active 预处理模式，selected 模式
     单独保留；`awaiting_confirmation` 使用独立 pending payload，仅返回允许
     的对比/上下文下载；
+  - 正式 branch 确定后，趋势图与 XY 散点矩阵使用 active preprocessing
+    mode 及正式 `lowpass_tau_minutes` / `diff_interval_minutes` /
+    `detrend_window`；pending 或尚未分析时仍仅按当前表单作为预览；
   - 下载白名单加入 `preprocessing_comparison.csv` 与
     `preprocessing_context.json`，`screening_branches/raw/*` 与
     `screening_branches/processed/*` 不开放任意路径下载；

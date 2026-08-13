@@ -166,7 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/trend":
             try:
-                params = parse_qs(parsed.query)
+                params = parse_qs(parsed.query, keep_blank_values=True)
                 self._send_json(_trend_response(params))
             except Exception as exc:
                 if _is_client_disconnect(exc):
@@ -175,7 +175,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/scatter_matrix":
             try:
-                params = parse_qs(parsed.query)
+                params = parse_qs(parsed.query, keep_blank_values=True)
                 self._send_json(_scatter_matrix_response(params))
             except Exception as exc:
                 if _is_client_disconnect(exc):
@@ -736,9 +736,23 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         if context is not None
         else config.preprocess_mode
     )
+    analysis_context = {
+        "preprocess_mode": active_mode,
+        "lowpass_tau_minutes": (
+            context["lowpass_tau_minutes"]
+            if context is not None and context["lowpass_tau_minutes"] is not None
+            else config.lowpass_tau_minutes
+        ),
+        "diff_interval_minutes": (
+            context["requested_diff_interval_minutes"]
+            if context is not None
+            else config.diff_interval_minutes
+        ),
+        "detrend_window": config.detrend_window,
+    }
     return {
         "run_id": run_id,
-        "analysisContext": {"preprocess_mode": active_mode},
+        "analysisContext": analysis_context,
         "preprocessingContext": context,
         "preprocessingComparison": _records(comparison) if context is not None else [],
         "branchSelectionStatus": (
@@ -1595,6 +1609,55 @@ def _scaled_frame_for_secondary(
     return scaled.copy(deep=True)
 
 
+def _scaled_frame_for_secondary_causal(
+    config: AnalysisConfig, protected_columns: list[str] | None = None
+) -> pd.DataFrame:
+    from chem_ts_corr.preprocess import (
+        operating_segment_mask,
+        preprocess_frame_causal,
+        standardize_frame,
+        transform_frame_causal,
+    )
+
+    extra_protected = tuple(c for c in (protected_columns or []) if c)
+    cache_key = ("causal", *_scaled_frame_cache_key(config, extra_protected))
+    with SCALED_FRAME_CACHE_LOCK:
+        cached = SCALED_FRAME_CACHE.get(cache_key)
+        if cached is not None:
+            return cached.copy(deep=True)
+
+    numeric = _numeric_frame(config, protected_columns)
+    cleaned = preprocess_frame_causal(
+        numeric,
+        target=config.target,
+        resample_rule=config.resample_rule,
+        max_forward_fill_gap_points=config.max_interpolate_gap_points,
+    )
+    target_mask = operating_segment_mask(
+        cleaned,
+        config.segment_column,
+        config.segment_mode,
+        config.segment_min,
+        config.segment_max,
+    )
+    transformed = transform_frame_causal(
+        cleaned,
+        config.preprocess_mode,
+        config.detrend_window,
+        lowpass_tau_minutes=config.lowpass_tau_minutes,
+        diff_interval_minutes=config.diff_interval_minutes,
+    )
+    target_mask = target_mask.reindex(transformed.index).fillna(False).astype(bool)
+    scaled = standardize_frame(transformed, fit_mask=target_mask)
+    scaled.attrs[TARGET_SEGMENT_MASK_ATTR] = tuple(target_mask.tolist())
+    with SCALED_FRAME_CACHE_LOCK:
+        SCALED_FRAME_CACHE[cache_key] = scaled.copy(deep=True)
+        while len(SCALED_FRAME_CACHE) > MAX_SCALED_FRAME_CACHE:
+            oldest_key = next(iter(SCALED_FRAME_CACHE))
+            SCALED_FRAME_CACHE.pop(oldest_key, None)
+    return scaled.copy(deep=True)
+
+
 def _numeric_frame(
     config: AnalysisConfig, protected_columns: list[str] | None = None
 ) -> pd.DataFrame:
@@ -1673,6 +1736,9 @@ def _target_segment_mask(frame: pd.DataFrame) -> pd.Series | None:
     stored = frame.attrs.get(TARGET_SEGMENT_MASK_ATTR)
     if isinstance(stored, pd.Series):
         resolved = stored.reindex(frame.index).fillna(False).astype(bool)
+        return None if bool(resolved.all()) else resolved
+    if isinstance(stored, tuple) and len(stored) == len(frame):
+        resolved = pd.Series(stored, index=frame.index, dtype=bool)
         return None if bool(resolved.all()) else resolved
     return None
 
@@ -1822,10 +1888,18 @@ def _chart_frame_from_params(
         segment_min=_optional_query_float(params, "segment_min"),
         segment_max=_optional_query_float(params, "segment_max"),
     )
+    lowpass_tau_minutes = _positive_query_float(
+        params, "lowpass_tau_minutes", default=5.0
+    )
+    diff_interval_minutes = _optional_positive_query_float(
+        params, "diff_interval_minutes"
+    )
     transformed = transform_frame(
         segmented[columns],
         _single(params, "preprocess_mode", "raw"),
         int(_single(params, "detrend_window", "24") or 24),
+        lowpass_tau_minutes=lowpass_tau_minutes,
+        diff_interval_minutes=diff_interval_minutes,
     )
     raw_rows = len(transformed)
     if len(transformed) > max_points:
@@ -2350,6 +2424,36 @@ def _single(params: dict[str, list[str]], name: str, default: str = "") -> str:
 def _optional_query_float(params: dict[str, list[str]], name: str) -> float | None:
     value = _single(params, name, "")
     return float(value) if value else None
+
+
+def _positive_query_float(
+    params: dict[str, list[str]], name: str, *, default: float
+) -> float:
+    if name not in params:
+        return default
+    value = _single(params, name, "")
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite value greater than 0") from exc
+    if not math.isfinite(resolved) or resolved <= 0:
+        raise ValueError(f"{name} must be a finite value greater than 0")
+    return resolved
+
+
+def _optional_positive_query_float(
+    params: dict[str, list[str]], name: str
+) -> float | None:
+    value = _single(params, name, "")
+    if value == "":
+        return None
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite value greater than 0") from exc
+    if not math.isfinite(resolved) or resolved <= 0:
+        raise ValueError(f"{name} must be a finite value greater than 0")
+    return resolved
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -4564,6 +4668,10 @@ function updateAutoTrendTimeRange() {
 }
 
 function appendChartQueryParams(params) {
+  const activeMode = currentAnalysisContext.preprocess_mode;
+  const hasActiveContext = typeof activeMode === "string" && activeMode.length > 0;
+  const activeTau = currentAnalysisContext.lowpass_tau_minutes ?? el("lowpassTauMinutes").value;
+  const activeDetrendWindow = currentAnalysisContext.detrend_window ?? el("detrendWindow").value;
   params.set("file_id", fileId);
   params.set("encoding", "auto");
   params.set("time_column", el("timeColumn").value);
@@ -4574,8 +4682,10 @@ function appendChartQueryParams(params) {
   params.set("segment_mode", el("segmentMode").value);
   params.set("segment_min", el("segmentMin").value);
   params.set("segment_max", el("segmentMax").value);
-  params.set("preprocess_mode", el("preprocessMode").value);
-  params.set("detrend_window", el("detrendWindow").value);
+  params.set("preprocess_mode", hasActiveContext ? activeMode : el("preprocessMode").value);
+  params.set("lowpass_tau_minutes", hasActiveContext ? activeTau : el("lowpassTauMinutes").value);
+  params.set("diff_interval_minutes", hasActiveContext ? (currentAnalysisContext.diff_interval_minutes ?? "") : el("diffIntervalMinutes").value.trim());
+  params.set("detrend_window", hasActiveContext ? activeDetrendWindow : el("detrendWindow").value);
   params.set("excluded_columns", getExcludedColumnSelection().join(","));
 }
 

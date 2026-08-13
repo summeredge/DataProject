@@ -530,6 +530,50 @@ def test_payload_distinguishes_selected_and_active_modes(tmp_path):
     assert payload["activePreprocessingMode"] != payload["selectedPreprocessingMode"]
 
 
+def test_chart_query_uses_active_context_and_form_only_for_preview():
+    body = web.INDEX_HTML.split("function appendChartQueryParams", 1)[1].split(
+        "async function drawTrend", 1
+    )[0]
+
+    assert 'currentAnalysisContext.preprocess_mode' in body
+    assert 'currentAnalysisContext.lowpass_tau_minutes' in body
+    assert 'currentAnalysisContext.diff_interval_minutes' in body
+    assert 'currentAnalysisContext.detrend_window' in body
+    assert 'hasActiveContext ? activeMode : el("preprocessMode").value' in body
+
+
+def test_confirmed_payload_preserves_formal_chart_parameters(tmp_path):
+    _write_run(tmp_path, mode="lowpass_diff", tau=7.0, diff_interval=5.0)
+    payload = _confirm_payload(tmp_path, "processed")
+
+    assert payload["analysisContext"] == {
+        "preprocess_mode": "lowpass_diff",
+        "lowpass_tau_minutes": 7.0,
+        "diff_interval_minutes": 5.0,
+        "detrend_window": 24,
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("lowpass_tau_minutes", ""),
+        ("lowpass_tau_minutes", "0"),
+        ("lowpass_tau_minutes", "nan"),
+        ("diff_interval_minutes", "0"),
+        ("diff_interval_minutes", "nan"),
+    ],
+)
+def test_chart_rejects_invalid_positive_transform_parameters(name, value):
+    params = {name: [value]}
+    if name == "lowpass_tau_minutes":
+        with pytest.raises(ValueError, match=name):
+            web._positive_query_float(params, name, default=5.0)
+    else:
+        with pytest.raises(ValueError, match=name):
+            web._optional_positive_query_float(params, name)
+
+
 # --- Test 57: downloads ----------------------------------------------------
 
 

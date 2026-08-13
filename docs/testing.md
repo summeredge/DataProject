@@ -241,6 +241,10 @@
   branch，必须提示先 `confirm-branch`；Raw + enable 标志在 promotion 后调用
   对应正式 runner；
 - 测试不得实际训练 XGB。
+- 图表回归覆盖 selected processed / confirmed raw 使用 Raw，confirmed
+  processed 使用正式 tau/diff/detrend 参数，分析后修改表单不覆盖 active
+  context，pending 仍是预览且不产生 active branch；后端继续调用回顾性
+  `transform_frame()` 并明确拒绝非有限或非正 tau/diff。
 
 ## PR-9 增强筛选 / 普通 Granger 正式 branch/context 测试边界
 
@@ -256,6 +260,9 @@
 - 确认 Processed（`lowpass_diff`）时，`preprocess_mode`、
   `lowpass_tau_minutes`、`diff_interval_minutes`、`resample_rule` 必须与
   context 一致；
+- 四个 PR-9～PR-11 正式 runner 调用统一 causal secondary frame helper，
+  不调用 legacy 回顾性 helper；future suffix 变化不得改变既有 prefix，
+  predictor 缺失不得使用未来值做双向插值；
 - Raw workflow（`not_required`）下两个入口可直接运行并使用 `raw`；
 - context 是 source of truth：调用方传入冲突的 `preprocess_mode` /
   `lowpass_tau_minutes` / `diff_interval_minutes` 不得覆盖
@@ -345,7 +352,7 @@
   `head(top_n)` 截断，不得重新排序；
 - control columns 解析优先级：显式 → `residual_control_columns` →
   `capacity_columns` → `[]`；显式空列表不回退 config；显式控制列通过
-  `_scaled_frame_for_secondary(config, protected_columns=...)` 保护；
+  causal secondary frame helper 的 `protected_columns=...` 保护；
 - `target` / `control_columns` / `maxlag` / `min_rows` / `top_n` /
   conditional 参数 / `target_mask` 全部完整透传现有
   `run_causal_review_stage()`；`maxlag=None` 使用现有

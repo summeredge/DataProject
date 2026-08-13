@@ -182,7 +182,7 @@ def _spy_scaled_config(
     monkeypatch.setattr(
         web, "_save_secondary_candidate_context", lambda output_dir, variables: None
     )
-    monkeypatch.setattr(web, "_scaled_frame_for_secondary", capture_scaled)
+    monkeypatch.setattr(web, "_scaled_frame_for_secondary_causal", capture_scaled)
     monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
     return captured
 
@@ -403,7 +403,7 @@ def test_enhanced_screening_candidates_only_from_formal_root(tmp_path, monkeypat
     _inject_sentinel_into_processed_branch(tmp_path)
 
     monkeypatch.setattr(
-        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: _full_secondary_frame()
+        web, "_scaled_frame_for_secondary_causal", lambda config, protected_columns=None: _full_secondary_frame()
     )
     monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
     captured = _patch_enhanced_core(monkeypatch)
@@ -422,7 +422,7 @@ def test_granger_candidates_only_from_formal_root(tmp_path, monkeypatch):
     _inject_sentinel_into_processed_branch(tmp_path)
 
     monkeypatch.setattr(
-        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: _full_secondary_frame()
+        web, "_scaled_frame_for_secondary_causal", lambda config, protected_columns=None: _full_secondary_frame()
     )
     monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
     captured = _patch_granger_core(monkeypatch)

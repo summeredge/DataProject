@@ -433,6 +433,21 @@ def test_causal_review_uses_confirmed_raw_over_selected_mode(tmp_path, monkeypat
     assert captured["config"].preprocess_mode != "lowpass_diff"
 
 
+def test_causal_review_uses_in_memory_causal_ranked_lags(tmp_path, monkeypatch):
+    config = _make_raw_run(tmp_path)
+    ranked_path = tmp_path / "ranked_features.csv"
+    ranked_before = ranked_path.read_bytes()
+    _spy_scaled_config(monkeypatch, tmp_path)
+    captured = _patch_causal_review_stage(monkeypatch)
+
+    run_causal_review_for_active_branch(tmp_path, base_config=config)
+
+    ranked = pd.read_csv(ranked_path, encoding="utf-8-sig")
+    assert ranked_path.read_bytes() == ranked_before
+    assert captured["ranked_features"]["lag"].tolist() == [-config.max_lag] * len(ranked)
+    assert captured["ranked_features"]["final_score"].tolist() == ranked["final_score"].tolist()
+
+
 # --- Test 3: confirmed processed uses context parameters ------------------
 
 

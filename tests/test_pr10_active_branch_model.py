@@ -537,10 +537,29 @@ def test_model_calls_existing_core_with_downstream_parameters(
     assert captured["lag_mode"] == "best_only"
     assert captured["target_mask"] is None
     expected_best_lags = {
-        str(row["variable"]): int(row["lag"])
-        for _, row in ranked[["variable", "lag"]].dropna().iterrows()
+        variable: -config.max_lag for variable in expected_variables
     }
     assert captured["best_lags"] == expected_best_lags
+
+
+def test_model_recomputes_all_causal_lags_without_ranked_lag_helper(
+    tmp_path, monkeypatch
+):
+    from chem_ts_corr import web
+
+    config = _make_raw_run(tmp_path)
+    _spy_scaled_config(monkeypatch, tmp_path)
+    captured = _patch_model_core(monkeypatch)
+    monkeypatch.setattr(
+        web,
+        "_best_lags_from_ranked",
+        lambda ranked: pytest.fail("formal model must not reuse ranked lags"),
+    )
+
+    run_model_for_active_branch(tmp_path, base_config=config)
+
+    assert set(captured["best_lags"]) == set(captured["candidate_variables"])
+    assert set(captured["best_lags"].values()) == {-config.max_lag}
 
 
 # --- Test 10: exactly the three model outputs are generated ---------------

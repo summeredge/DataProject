@@ -164,6 +164,9 @@ run_directory/
 - 初筛允许为历史筛查使用回顾性预处理；增强筛选、普通 Granger、RF/SHAP
   与 conditional Granger/三级复核统一使用 causal preprocessing，禁止读取
   未来过程值；XGBoost 保持独立的 fold-safe causal preprocessing；
+- `ranked_features.lag` 继续只表示历史初筛证据；正式 Enhanced、RF/SHAP
+  与 conditional Granger 在 causal frame 上单独重算其 lag evidence，且只在
+  内存中使用，不回写初筛文件。普通 Granger 已在 causal frame 全扫描 lag；
 - branch 输出隔离到 `screening_branches/raw/` 或 `screening_branches/processed/`；
 - branch runner 不向运行根目录发布正式初筛文件；
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧

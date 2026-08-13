@@ -263,6 +263,9 @@
 - 四个 PR-9～PR-11 正式 runner 调用统一 causal secondary frame helper，
   不调用 legacy 回顾性 helper；future suffix 变化不得改变既有 prefix，
   predictor 缺失不得使用未来值做双向插值；
+- Enhanced 强制禁止复用 ranked lag evidence；Model 对全部实际候选重算
+  causal signed lag；三级复核只接收内存 causal ranked lag view，初筛 CSV
+  仍 byte-identical；
 - Raw workflow（`not_required`）下两个入口可直接运行并使用 `raw`；
 - context 是 source of truth：调用方传入冲突的 `preprocess_mode` /
   `lowpass_tau_minutes` / `diff_interval_minutes` 不得覆盖

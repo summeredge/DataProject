@@ -435,6 +435,11 @@ run_causal_review_for_active_branch(run_dir, ...)
   使用 causal preprocessing；完整时间轴先变换，工况只作为 target mask，
   standardization 仍以 target mask 拟合。初筛的历史筛查可继续使用回顾性
   transform，XGBoost 继续使用独立的 fold-safe causal preprocessing；
+- `ranked_features.csv::lag` 仅表示第一阶段历史筛查的 lag，不得作为正式
+  causal downstream 的有效 lag source。Enhanced、RF/SHAP 与 conditional
+  Granger 必须用同一 causal frame、`target_mask` 与 `config.max_lag` 重算
+  lag；重算结果只存在内存，不得写回 `ranked_features.csv` 或改变初筛排序。
+  Ordinary Granger 保持在 causal frame 上直接全扫描，不读取该初筛 lag；
 - `branch_selection_status = awaiting_confirmation` 时所有正式入口必须拒绝：
   `initial_screening_branch_not_confirmed`；context 缺失 / 非法：
   `initial_screening_context_missing` / `initial_screening_context_invalid`；

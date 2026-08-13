@@ -8,6 +8,7 @@ import pytest
 
 from chem_ts_corr import web
 from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.pipeline import _causal_best_lags
 
 
 def _config(tmp_path: Path, *, mode: str) -> AnalysisConfig:
@@ -92,3 +93,19 @@ def test_formal_runners_use_causal_helper_not_legacy_helper():
         body = source.split(f"def {name}", 1)[1].split("\ndef ", 1)[0]
         assert "_scaled_frame_for_secondary_causal(" in body
         assert "_scaled_frame_for_secondary(" not in body
+
+
+def test_causal_lag_recalculation_preserves_negative_direction():
+    index = pd.date_range("2026-01-01", periods=40, freq="min")
+    target = pd.Series(np.sin(np.arange(40) / 2.3), index=index)
+    frame = pd.DataFrame({"target": target, "predictor": target.shift(2)}, index=index)
+
+    best_lags = _causal_best_lags(
+        frame,
+        "target",
+        ["predictor"],
+        3,
+        target_mask=None,
+    )
+
+    assert best_lags["predictor"] == -2

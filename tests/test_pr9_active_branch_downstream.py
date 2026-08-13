@@ -194,6 +194,7 @@ def _patch_enhanced_core(monkeypatch) -> dict[str, object]:
 
     def capture_evidence(frame, target, variables, max_lag, **kwargs):
         captured["variables"] = list(variables)
+        captured["allow_ranked_reuse"] = kwargs["allow_ranked_reuse"]
         return {}, {}
 
     monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_evidence)
@@ -283,6 +284,17 @@ def test_enhanced_screening_uses_confirmed_raw_over_selected_mode(tmp_path, monk
 
     assert captured["config"].preprocess_mode == "raw"
     assert captured["config"].preprocess_mode != "lowpass_diff"
+
+
+def test_enhanced_screening_never_reuses_ranked_lag_evidence(tmp_path, monkeypatch):
+    config = _run_raw_workflow(tmp_path)
+    captured = _spy_scaled_config(monkeypatch)
+    evidence = _patch_enhanced_core(monkeypatch)
+
+    run_enhanced_screening_for_active_branch(tmp_path, base_config=config)
+
+    assert captured["config"].preprocess_mode == "raw"
+    assert evidence["allow_ranked_reuse"] is False
 
 
 # --- Test 4: selected processed but confirmed raw -> Granger raw ---------

@@ -1029,7 +1029,6 @@ def run_enhanced_screening_for_active_branch(
         base_config=base_config,
         required_formal_files=DOWNSTREAM_FORMAL_INPUT_FILES,
     )
-    base = _resolve_base_config(run_dir, base_config)
     _progress(progress_callback, "正在运行增强筛选（正式 branch）")
     from chem_ts_corr import web as web_module
     from chem_ts_corr.screening import (
@@ -1056,18 +1055,13 @@ def run_enhanced_screening_for_active_branch(
             "二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。"
         )
 
-    lag_search_changed = web_module._secondary_lag_search_changed(base, config)
-    ranked_source_scaled = None
-    if not lag_search_changed:
-        ranked_source_scaled = web_module._scaled_frame_for_secondary_causal(config)
     best_lag_evidence, _ = prepare_best_lag_evidence(
         scaled,
         config.target,
         variables,
         config.max_lag,
         ranked=ranked,
-        ranked_source_frame=ranked_source_scaled,
-        allow_ranked_reuse=not lag_search_changed,
+        allow_ranked_reuse=False,
         target_mask=target_mask,
     )
     best_lags = {
@@ -1192,7 +1186,6 @@ def run_model_for_active_branch(
         base_config=base_config,
         required_formal_files=MODEL_DOWNSTREAM_FORMAL_INPUT_FILES,
     )
-    base = _resolve_base_config(run_dir, base_config)
     _progress(progress_callback, "正在运行模型解释（正式 branch）")
     from chem_ts_corr import web as web_module
     from chem_ts_corr.model_discovery import (
@@ -1218,18 +1211,11 @@ def run_model_for_active_branch(
             "二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。"
         )
 
-    lag_search_changed = web_module._secondary_lag_search_changed(base, config)
-    if lag_search_changed:
-        best_lags: dict[str, int] = {}
-    else:
-        best_lags = web_module._best_lags_from_ranked(ranked)
-    best_lags = web_module._secondary_best_lags_for_missing_variables(
+    best_lags = _causal_best_lags(
         scaled,
         config.target,
         variables,
-        best_lags,
         config.max_lag,
-        recompute_limit=None if lag_search_changed else 20,
         target_mask=target_mask,
     )
 
@@ -1335,10 +1321,17 @@ def run_causal_review_for_active_branch(
     else:
         scaled = web_module._scaled_frame_for_secondary_causal(config)
     target_mask = web_module._target_segment_mask(scaled)
+    causal_ranked = _causal_ranked_lag_view(
+        scaled,
+        ranked,
+        target=config.target,
+        max_lag=resolved_maxlag,
+        target_mask=target_mask,
+    )
     result = run_causal_review_stage(
         frame=scaled,
         target=config.target,
-        ranked_features=ranked,
+        ranked_features=causal_ranked,
         causal_review_candidates=causal_candidates,
         risk_flags=risk,
         output_dir=run_dir,
@@ -1486,6 +1479,50 @@ def _resolve_base_config(
     if base_config is not None:
         return base_config
     return _load_run_config(run_dir)
+
+
+def _causal_best_lags(
+    frame: pd.DataFrame,
+    target: str,
+    variables: list[str],
+    max_lag: int,
+    *,
+    target_mask: pd.Series | None,
+) -> dict[str, int]:
+    from chem_ts_corr import web as web_module
+
+    return web_module._secondary_best_lags_for_missing_variables(
+        frame,
+        target,
+        variables,
+        {},
+        max_lag,
+        recompute_limit=None,
+        target_mask=target_mask,
+    )
+
+
+def _causal_ranked_lag_view(
+    frame: pd.DataFrame,
+    ranked_features: pd.DataFrame,
+    *,
+    target: str,
+    max_lag: int,
+    target_mask: pd.Series | None,
+) -> pd.DataFrame:
+    causal_ranked = ranked_features.copy(deep=True)
+    if "variable" not in causal_ranked.columns:
+        return causal_ranked
+    variables = causal_ranked["variable"].dropna().astype(str).tolist()
+    causal_lags = _causal_best_lags(
+        frame,
+        target,
+        variables,
+        max_lag,
+        target_mask=target_mask,
+    )
+    causal_ranked["lag"] = causal_ranked["variable"].astype(str).map(causal_lags)
+    return causal_ranked
 
 
 def _load_run_config(run_dir: Path) -> AnalysisConfig:

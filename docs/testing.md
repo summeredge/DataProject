@@ -82,7 +82,8 @@
 - `transform_frame_causal()` 支持 `lowpass*`；
 - causal 新模式不得使用未来样本；
 - `analyze_numeric_frame()` 当前仍拒绝 `lowpass*`；
-- Web/CLI 当前不得暴露 `lowpass*` 正式运行入口；
+- `run_initial_screening_workflow()` 接受 `raw` / `lowpass*`，旧模式明确
+  拒绝；Web/CLI 正式入口只暴露 `raw` / `lowpass*` 四种模式；
 - Raw 和旧模式保持回归不变；
 - `transform_frame()` 的基础能力不得自动进入评分、排序、候选池；
 - 旧模式（`detrend`、`diff`、`detrend_diff`）保持兼容，且不被映射为新模式；
@@ -179,6 +180,67 @@
 - 未锁定目录重新用于非 Raw workflow 时，上一轮正式 root 文件与旧 context
   必须失效，新 comparison 完成后不得继续暴露上一轮 `ranked_features.csv` /
   `recommended_candidates.csv`。
+
+## PR-13 Web / API / CLI 正式接入测试边界
+
+`tests/test_pr13_web_preprocessing_workflow.py` 与
+`tests/test_pr13_cli_workflow.py` 覆盖正式双分支工作流总接入：
+
+- Web 与 CLI 的预处理模式选择只包含 `raw` / `lowpass` / `lowpass_detrend` /
+  `lowpass_diff`，旧模式不再出现在正式选择中；
+- `lowpass_tau_minutes` 默认 `5.0`，随表单/CLI 参数传入 `AnalysisConfig`；
+  `diff_interval_minutes` 空值为 `None`，正数正常传递，非正数明确拒绝；
+- `/api/analyze` 与 CLI `analyze` 调用 `run_initial_screening_workflow()`，
+  正式入口不再调用 `run_analysis()`；
+- Raw 只运行 Raw 并自动 promotion，返回正式 payload，不生成 comparison；
+- 非 Raw 双分支完成后返回 pending payload：
+  `branchSelectionStatus = awaiting_confirmation`、
+  `activeScreeningBranch = null`、`activePreprocessingMode = null`、
+  `preprocessingComparison` 非空，正式 root 初筛文件不存在，且不把分支内部
+  文件包装为正式 `rankedFeatures`；
+- comparison 数据直接来自冻结 `preprocessing_comparison.csv`，不重新计算
+  delta / rank；
+- 确认 API（`POST /api/confirm_initial_screening_branch`）与 CLI
+  `confirm-branch` 只调用 `confirm_initial_screening_branch()`，执行期间
+  `run_initial_screening_workflow` / `run_initial_screening_branch` /
+  `run_initial_screening_comparison` 调用次数为 0；
+- 确认 raw / processed 后 payload 分别返回
+  `activeScreeningBranch = raw/processed`、
+  `activePreprocessingMode = raw/selected lowpass*`，且
+  `selectedPreprocessingMode` 保持最初比较模式；
+- downstream 开始前允许 raw → processed 切换；存在
+  `screening_downstream.lock` 后切换必须拒绝
+  `initial_screening_branch_locked`；
+- `awaiting_confirmation` 时增强筛选 / Granger / Model / 三级复核 /
+  XGBoost 五个 Web endpoint 全部明确阻断（`initial_screening_branch_not_confirmed`），
+  不得自动 Raw fallback；
+- 五个 downstream Web endpoint 与 CLI `run-*` 命令只调用对应
+  `run_*_for_active_branch()` 正式 runner；Web endpoint 源码不得包含
+  `run_analysis(` / `run_xgb_analysis(` / `run_causal_review_stage(` /
+  `fit_explainable_model(` / `run_granger_tests(` /
+  `_build_causal_review_candidate_table(` /
+  `_load_secondary_candidate_context(` 用于正式执行；
+- XGB Web API 走 `run_xgb_for_active_branch()` fold-safe 路径，不再使用
+  `_prepared_frame_for_validation() + run_xgb_analysis()`；
+- 三级复核运行前后 `causal_review_candidates.csv` byte-identical，
+  `risk_flag_filter` 只过滤展示结果；
+- UI 静态契约：`awaiting_confirmation` 时 downstream 按钮禁用并提示
+  “请先确认正式初筛分支。”；`confirmed/not_required` 时启用；
+  `screening_downstream.lock` 存在时另一分支确认按钮禁用并提示锁定文案；
+- payload 场景 `selected = lowpass_diff`、`confirmed = raw` 必须同时返回
+  `selectedPreprocessingMode = lowpass_diff` 与
+  `activePreprocessingMode = raw`（`analysisContext.preprocess_mode = raw`）；
+- `preprocessing_comparison.csv` 与 `preprocessing_context.json` 可合法下载，
+  `screening_branches/raw/*`、`screening_branches/processed/*` 与 `../*`
+  仍被拒绝；
+- LLM Prompt / 综合报告在 `awaiting_confirmation` 时拒绝
+  `initial_screening_branch_not_confirmed`；
+- CLI `run-*` 命令以 `--output RUN_DIR` 读取已有
+  `run_config.json` / `preprocessing_context.json` / formal root，不要求重传
+  初筛参数；processed + `--enable-granger/--enable-model` 不得自动选择
+  branch，必须提示先 `confirm-branch`；Raw + enable 标志在 promotion 后调用
+  对应正式 runner；
+- 测试不得实际训练 XGB。
 
 ## PR-9 增强筛选 / 普通 Granger 正式 branch/context 测试边界
 

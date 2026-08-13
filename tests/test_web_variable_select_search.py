@@ -25,7 +25,7 @@ def test_all_variable_single_and_multi_selectors_use_search():
         "scatterY3",
     ]:
         assert f'el("{select_id}")' in INDEX_HTML
-    assert INDEX_HTML.count("searchableMultiOptions(box);") == 4
+    assert INDEX_HTML.count("searchableMultiOptions(box);") == 3
     assert "function clearVariableFilters" in INDEX_HTML
 
 

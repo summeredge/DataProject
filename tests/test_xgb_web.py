@@ -11,7 +11,6 @@ import pytest
 import chem_ts_corr.service as service
 import chem_ts_corr.web as web
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.xgb_runner import XGBRunResult
 from chem_ts_corr.xgb_validation import build_xgb_feature_sets
 
 
@@ -59,7 +58,9 @@ def test_disabled_xgb_request_is_skipped_without_calling_service(
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "false"})
     monkeypatch.setattr(
-        web, "run_xgb_analysis", lambda **kwargs: pytest.fail("service must not be called")
+        web,
+        "run_xgb_for_active_branch",
+        lambda **kwargs: pytest.fail("runner must not be called"),
     )
 
     payload = web._run_xgb_validation_response(object())
@@ -69,7 +70,7 @@ def test_disabled_xgb_request_is_skipped_without_calling_service(
     assert payload["xgbCandidateUplift"] == []
 
 
-def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
+def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     run_dir, _, final, _ = _write_run(tmp_path)
@@ -81,16 +82,17 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     recommended = ranked.iloc[1:].copy(deep=True)
     ranked.to_csv(run_dir / "ranked_features.csv", index=False)
     recommended.to_csv(run_dir / "recommended_candidates.csv", index=False)
-    data = pd.DataFrame(
-        {"target": [1.0, 2.0], "control": [3.0, 4.0], "x": [5.0, 6.0]},
-        index=pd.date_range("2025-01-01", periods=2, freq="h"),
-    )
     before_final = final.copy(deep=True)
     before_ranked = ranked.copy(deep=True)
     captured: dict[str, object] = {}
 
-    def fake_service(**kwargs):
-        captured.update(kwargs)
+    def fake_runner(output_dir, **kwargs):
+        captured["run_dir"] = Path(output_dir)
+        captured["base_config"] = kwargs.get("base_config")
+        captured["top_n"] = kwargs.get("top_n")
+        captured["max_lag"] = kwargs.get("max_lag")
+        captured["whitelist"] = kwargs.get("whitelist")
+        captured["control_columns"] = kwargs.get("control_columns")
         output_dir = run_dir / "xgb_validation"
         output_dir.mkdir()
         pd.DataFrame(
@@ -102,14 +104,16 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
         (output_dir / "xgb_validation_summary.json").write_text(
             json.dumps({"status": "success", "candidate_count": 1}), encoding="utf-8"
         )
-        return XGBRunResult(
-            "success", (), None, str(output_dir / "xgb_model_summary.csv"),
-            str(output_dir / "xgb_candidate_uplift.csv"), None,
-        )
+        return {
+            "status": "success",
+            "error_message": None,
+            "fold_metrics_path": str(output_dir / "xgb_fold_metrics.csv"),
+            "summary_path": str(output_dir / "xgb_model_summary.csv"),
+            "candidate_uplift_path": str(output_dir / "xgb_candidate_uplift.csv"),
+        }
 
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
-    monkeypatch.setattr(web, "_prepared_frame_for_validation", lambda config: data)
-    monkeypatch.setattr(web, "run_xgb_analysis", fake_service)
+    monkeypatch.setattr(web, "run_xgb_for_active_branch", fake_runner)
     _handler_form(
         monkeypatch,
         {
@@ -126,17 +130,10 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
 
     assert payload["status"] == "success"
     assert captured["run_dir"] == run_dir
-    assert captured["data"] is data
-    assert captured["target"] == "target"
     assert captured["top_n"] == 10
     assert captured["max_lag"] == 6
     assert captured["whitelist"] == ["manual_a", "manual_b"]
     assert captured["control_columns"] == ["control"]
-    pd.testing.assert_frame_equal(captured["final_review_summary"], before_final)
-    pd.testing.assert_frame_equal(captured["ranked_features"], before_ranked)
-    assert captured["ranked_features"]["variable"].tolist() == [
-        "control_high_score", "candidate_a", "candidate_b",
-    ]
     pd.testing.assert_frame_equal(pd.read_csv(run_dir / "ranked_features.csv"), before_ranked)
     assert payload["xgbModelSummary"][0]["model_name"] == "M2"
     assert payload["xgbCandidateUplift"][0]["variable"] == "x"
@@ -147,49 +144,54 @@ def test_xgb_web_forwards_inputs_through_service_and_returns_outputs(
     assert "xgb_validation/xgb_validation_summary.json" in download_names
 
 
-def test_missing_ranked_features_is_rejected_before_loading_or_service_call(
+def test_missing_formal_input_error_token_is_preserved_in_invalid_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     run_dir, _, _, _ = _write_run(tmp_path)
-    (run_dir / "ranked_features.csv").unlink()
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
-    monkeypatch.setattr(
-        web, "_prepared_frame_for_validation", lambda config: pytest.fail("data must not be prepared")
-    )
-    monkeypatch.setattr(web, "run_xgb_analysis", lambda **kwargs: pytest.fail("service must not be called"))
+
+    def rejected_runner(output_dir, **kwargs):
+        raise ValueError(
+            "initial_screening_formal_output_missing: missing ranked_features.csv"
+        )
+
+    monkeypatch.setattr(web, "run_xgb_for_active_branch", rejected_runner)
 
     payload = web._run_xgb_validation_response(object())
 
     assert payload["status"] == "invalid_input"
-    assert "ranked_features" in payload["error_message"]
+    assert "initial_screening_formal_output_missing" in payload["error_message"]
+    assert "ranked_features.csv" in payload["error_message"]
 
 
-def test_xgb_web_uses_full_ranked_features_for_initial_screening_details():
+def test_xgb_web_endpoint_delegates_to_formal_fold_safe_runner():
     source = inspect.getsource(web._run_xgb_validation_response)
 
-    assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' in source
-    assert "ranked_features=ranked" in source
+    assert "run_xgb_for_active_branch(" in source
+    assert "_prepared_frame_for_validation" not in source
+    assert "run_xgb_analysis" not in source
     assert "recommended_candidates.csv" not in source
 
 
-def test_missing_final_review_is_rejected_before_loading_or_service_call(
+def test_missing_final_review_error_token_is_preserved_in_invalid_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     run_dir, _, _, _ = _write_run(tmp_path)
-    (run_dir / "final_review_summary.csv").unlink()
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
-    monkeypatch.setattr(
-        web,
-        "_prepared_frame_for_validation",
-        lambda *args, **kwargs: pytest.fail("data must not be prepared"),
-    )
+
+    def rejected_runner(output_dir, **kwargs):
+        raise ValueError(
+            "initial_screening_formal_output_missing: missing final_review_summary.csv"
+        )
+
+    monkeypatch.setattr(web, "run_xgb_for_active_branch", rejected_runner)
 
     payload = web._run_xgb_validation_response(object())
 
     assert payload["status"] == "invalid_input"
-    assert "final_review_summary" in payload["error_message"]
+    assert "final_review_summary.csv" in payload["error_message"]
 
 
 @pytest.mark.parametrize(
@@ -219,11 +221,8 @@ def test_invalid_xgb_parameters_are_rejected_before_data_or_service_call(
     )
     monkeypatch.setattr(
         web,
-        "_prepared_frame_for_validation",
-        lambda *args, **kwargs: pytest.fail("data must not be prepared"),
-    )
-    monkeypatch.setattr(
-        web, "run_xgb_analysis", lambda **kwargs: pytest.fail("service must not be called")
+        "run_xgb_for_active_branch",
+        lambda **kwargs: pytest.fail("runner must not be called"),
     )
 
     payload = web._run_xgb_validation_response(object())
@@ -238,13 +237,14 @@ def test_xgb_service_errors_remain_isolated_results(
 ):
     run_dir, _, _, _ = _write_run(tmp_path)
     (run_dir / "summary.md").write_text("existing analysis", encoding="utf-8")
-    data = pd.DataFrame({"target": [1.0], "x": [2.0]})
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
-    monkeypatch.setattr(web, "_prepared_frame_for_validation", lambda config: data)
     monkeypatch.setattr(
         web,
-        "run_xgb_analysis",
-        lambda **kwargs: XGBRunResult(status, (), None, None, None, "xgb error"),
+        "run_xgb_for_active_branch",
+        lambda output_dir, **kwargs: {
+            "status": status,
+            "error_message": "xgb error",
+        },
     )
     _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true"})
 
@@ -385,11 +385,12 @@ def test_xgb_prepared_frame_applies_configured_transform(tmp_path: Path, mode: s
         )
 
 
-def test_xgb_api_uses_shared_prepared_frame_instead_of_raw_loader():
+def test_xgb_api_delegates_to_fold_safe_runner_without_raw_loader():
     source = inspect.getsource(web._run_xgb_validation_response)
 
-    assert "_prepared_frame_for_validation(config)" in source
+    assert "run_xgb_for_active_branch(" in source
     assert "load_timeseries_csv" not in source
+    assert "_prepared_frame_for_validation" not in source
 
 
 def test_xgb_web_surface_and_architecture_guards():
@@ -411,7 +412,8 @@ def test_xgb_web_surface_and_architecture_guards():
     ]:
         assert forbidden not in source
     assert "from chem_ts_corr.xgb_runner" not in source
-    assert "run_xgb_analysis" in source
+    assert "run_xgb_for_active_branch" in source
+    assert "run_xgb_analysis" not in source
     assert service.run_xgb_analysis is not None
     assert "XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。" in web.INDEX_HTML
     assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML

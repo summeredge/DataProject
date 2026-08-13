@@ -29,35 +29,33 @@
 
 ## 预处理模式
 
-正式 `analyze_numeric_frame()` / `run_analysis()` 当前实际执行模式：
+后端 `transform_frame()` / `transform_frame_causal()` 支持：
 
 ```text
 raw
-detrend
-diff
-detrend_diff
-```
-
-预处理基础能力：
-
-```text
-transform_frame():
-  支持 lowpass / lowpass_detrend / lowpass_diff
-
-transform_frame_causal():
-  支持 lowpass / lowpass_detrend / lowpass_diff
-```
-
-正式 `analyze_numeric_frame()` / `run_analysis()` 仍拒绝：
-
-```text
 lowpass
 lowpass_detrend
 lowpass_diff
 ```
 
-模式语义与配置字段约束见 `docs/contracts.md`。`lowpass*` 模式可在配置对象中表示，
-但正式分析入口执行前必须被明确拒绝，不得静默回退到 `raw`。
+旧模式（`detrend` / `diff` / `detrend_diff`）继续保留 backend compatibility，
+但不再出现在正式 Web / CLI 初筛选择中，也不得静默映射为新模式。
+模式语义与配置字段约束见 `docs/contracts.md`。
+
+当前正式 Web / CLI 预处理模式：
+
+```text
+raw
+lowpass
+lowpass_detrend
+lowpass_diff
+```
+
+Web 与 CLI 的 `analyze` 入口统一走
+`run_initial_screening_workflow()`：`raw` 只运行 Raw 并自动发布正式初筛；
+任一 `lowpass*` 模式同时运行 Raw + 该模式两个独立初筛，生成
+`preprocessing_comparison.csv` 并进入 `awaiting_confirmation`，等待用户通过
+`confirm_initial_screening_branch()` 明确确认正式分支。
 
 单 branch 初筛 runner 已实现：
 
@@ -180,7 +178,37 @@ run_directory/
   不得跨 fold 边界；gap 继续承担 positive lag history buffer，且等于实际
   max used lag。
 
-当前尚未实现：
+当前已实现（PR-13）：
 
-- Web / API / CLI confirmation UI；
-- Web / API / CLI 双分支工作流总接入（PR-13）。
+- Web / API / CLI 正式双分支工作流总接入：
+  - Web 与 CLI 只暴露 `raw` / `lowpass` / `lowpass_detrend` / `lowpass_diff`
+    四种正式预处理模式；`lowpass_tau_minutes`（默认 5.0）与
+    `diff_interval_minutes`（空值为 `None`）随配置传入并持久化到
+    `run_config.json`；
+  - `/api/analyze` 与 CLI `analyze` 使用 `run_initial_screening_workflow()`，
+    不再以 `run_analysis()` 作为新初筛入口（旧入口保留兼容）；
+  - 非 Raw 分析完成后进入 `awaiting_confirmation`，Web 展示冻结的
+    `preprocessing_comparison.csv`（Raw vs Processed 对比），不发布正式 root
+    初筛，前端不把任一分支伪装成正式排名；
+  - 新增 `POST /api/confirm_initial_screening_branch` 与 CLI
+    `confirm-branch`，只调用 `confirm_initial_screening_branch()`，不重新运行
+    初筛、不重算 comparison、不复制 promotion；
+  - downstream 开始前允许切换分支；`screening_downstream.lock` 创建后另一
+    分支确认被禁用/拒绝（`initial_screening_branch_locked`），后端以正式
+    runner 的 context gate 为最终权威；
+  - 增强筛选 / 普通 Granger / RF/SHAP / 三级复核 / XGBoost 的 Web API 与
+    CLI 命令统一改为调用 `run_*_for_active_branch()` 正式 runner，Web
+    endpoint 不再保留并行 orchestration；
+  - Result payload 增加 `preprocessingContext`、`preprocessingComparison`、
+    `branchSelectionStatus`、`activeScreeningBranch`、
+    `activePreprocessingMode`、`selectedPreprocessingMode`、`branchLocked`；
+    `analysisContext.preprocess_mode` 表示 active 预处理模式，selected 模式
+    单独保留；`awaiting_confirmation` 使用独立 pending payload，仅返回允许
+    的对比/上下文下载；
+  - 下载白名单加入 `preprocessing_comparison.csv` 与
+    `preprocessing_context.json`，`screening_branches/raw/*` 与
+    `screening_branches/processed/*` 不开放任意路径下载；
+  - LLM / 综合报告在正式分支确认前禁用（backend 保留
+    `initial_screening_branch_not_confirmed` token）；
+  - 旧二次验证重采样 / 白名单 override 从正式 Web 移除，正式 downstream
+    只使用 active preprocessing context 与正式分析 `max_lag`。

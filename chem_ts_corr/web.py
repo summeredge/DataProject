@@ -29,13 +29,17 @@ from chem_ts_corr.data import (
     normalize_excluded_columns,
     read_timeseries_table,
 )
-from chem_ts_corr.causality import run_granger_tests
-from chem_ts_corr.causal_review_runner import run_causal_review_stage
-from chem_ts_corr.modeling import fit_explainable_model
-from chem_ts_corr.model_discovery import build_model_discovered_candidates, build_model_variable_importance
-from chem_ts_corr.pipeline import run_analysis
+from chem_ts_corr.pipeline import (
+    _read_preprocessing_context,
+    confirm_initial_screening_branch,
+    run_causal_review_for_active_branch,
+    run_enhanced_screening_for_active_branch,
+    run_granger_for_active_branch,
+    run_initial_screening_workflow,
+    run_model_for_active_branch,
+    run_xgb_for_active_branch,
+)
 from chem_ts_corr.screening import CONTROL_REFERENCE_COLUMNS, order_initial_candidates
-from chem_ts_corr.service import run_xgb_analysis
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
@@ -83,6 +87,8 @@ DOWNLOAD_FILES = {
     "final_review_summary.csv",
     "causal_review_evidence.csv",
     "enhanced_validation_summary.csv",
+    "preprocessing_comparison.csv",
+    "preprocessing_context.json",
     "llm_prompt.md",
     "llm_report.md",
     "xgb_validation/xgb_model_summary.csv",
@@ -220,6 +226,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/analyze":
                 self._send_json(_analyze_response(self))
+                return
+            if self.path == "/api/confirm_initial_screening_branch":
+                self._send_json(_confirm_initial_screening_branch_response(self))
                 return
             if self.path == "/api/run_granger":
                 self._send_json(_run_granger_response(self))
@@ -482,6 +491,8 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         min_valid_ratio=_float_field(form, "min_valid_ratio", 0.7),
         top_k=_int_field(form, "top_k", 30),
         preprocess_mode=_field(form, "preprocess_mode", "raw"),
+        lowpass_tau_minutes=_float_field(form, "lowpass_tau_minutes", 5.0),
+        diff_interval_minutes=_optional_float_field(form, "diff_interval_minutes"),
         detrend_window=_int_field(form, "detrend_window", 24),
         segment_column=segment_column,
         segment_mode=_field(form, "segment_mode", "all"),
@@ -577,9 +588,10 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
                     task["message"] = message
                     task["updated_at"] = time.time()
 
-        pipeline_timings = run_analysis(config, progress_callback=progress)
-        if not isinstance(pipeline_timings, dict):
-            pipeline_timings = {}
+        workflow_result = run_initial_screening_workflow(
+            config, progress_callback=progress
+        )
+        pipeline_timings = _workflow_timings(workflow_result)
         analysis_timings = {
             key: _non_negative_seconds(pipeline_timings.get(key))
             for key in [
@@ -609,7 +621,10 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
             )
             result["elapsed_seconds"] = task_total_seconds
             result["analysis_timings"] = analysis_timings
-            result.setdefault("overview", {})["analysis_elapsed_seconds"] = task_total_seconds
+            if "overview" in result:
+                result["overview"].setdefault(
+                    "analysis_elapsed_seconds", task_total_seconds
+                )
             TASKS[task_id].update(
                 {
                     "status": "done",
@@ -634,6 +649,52 @@ def _analyze_task(task_id: str, config: AnalysisConfig, file_id: str) -> None:
         _cleanup_tasks()
 
 
+def _workflow_timings(workflow_result: object) -> dict[str, float]:
+    """Normalize timings from the unified initial-screening workflow.
+
+    ``raw`` returns a flat ``timings`` dict; non-raw returns per-branch
+    ``raw`` / ``processed`` dicts. The normalized shape keeps the legacy
+    ``analysis_timings`` keys used by the UI.
+    """
+    if not isinstance(workflow_result, dict):
+        return {}
+    flat = workflow_result.get("timings")
+    if isinstance(flat, dict):
+        return {
+            key: _non_negative_seconds(flat.get(key))
+            for key in (
+                "read_data_seconds",
+                "analysis_core_seconds",
+                "write_outputs_seconds",
+                "pipeline_total_seconds",
+            )
+        }
+    branches = [
+        workflow_result.get(branch)
+        for branch in ("raw", "processed")
+        if isinstance(workflow_result.get(branch), dict)
+    ]
+    if not branches:
+        return {}
+    return {
+        "read_data_seconds": sum(
+            _non_negative_seconds(item.get("read_data_seconds")) for item in branches
+        ),
+        "analysis_core_seconds": sum(
+            _non_negative_seconds(item.get("analysis_core_seconds"))
+            for item in branches
+        ),
+        "write_outputs_seconds": sum(
+            _non_negative_seconds(item.get("write_outputs_seconds"))
+            for item in branches
+        ),
+        "pipeline_total_seconds": max(
+            _non_negative_seconds(item.get("pipeline_total_seconds"))
+            for item in branches
+        ),
+    }
+
+
 def _non_negative_seconds(value: object) -> float:
     try:
         seconds = float(value)
@@ -645,6 +706,13 @@ def _non_negative_seconds(value: object) -> float:
 
 
 def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig) -> dict[str, Any]:
+    context = _read_context_for_payload(output_dir)
+    if (
+        context is not None
+        and context["branch_selection_status"] == "awaiting_confirmation"
+    ):
+        return _build_pending_payload(run_id, output_dir, config, context)
+
     ranked = order_initial_candidates(_safe_read_result_csv(output_dir / "ranked_features.csv"))
     recommended = _order_recommended_candidates(_safe_read_result_csv(output_dir / "recommended_candidates.csv"))
     display_ranked = _with_correlation_display_fields(_initial_screening_frame(ranked))
@@ -661,9 +729,28 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
+    comparison = _safe_read_result_csv(output_dir / "preprocessing_comparison.csv")
+    active_mode = (
+        context["active_preprocessing_mode"]
+        if context is not None
+        else config.preprocess_mode
+    )
     return {
         "run_id": run_id,
-        "analysisContext": {"preprocess_mode": config.preprocess_mode},
+        "analysisContext": {"preprocess_mode": active_mode},
+        "preprocessingContext": context,
+        "preprocessingComparison": _records(comparison) if context is not None else [],
+        "branchSelectionStatus": (
+            context["branch_selection_status"] if context is not None else None
+        ),
+        "activeScreeningBranch": (
+            context["active_screening_branch"] if context is not None else None
+        ),
+        "activePreprocessingMode": active_mode if context is not None else None,
+        "selectedPreprocessingMode": (
+            context["selected_preprocessing_mode"] if context is not None else None
+        ),
+        "branchLocked": (output_dir / "screening_downstream.lock").exists(),
         "overview": _overview_payload(display_ranked, risk, config, _summary_metrics(summary), recommended),
         "rankedFeatures": _records(display_ranked),
         "recommendedCandidates": _records(_recommended_candidate_frame(recommended)),
@@ -681,6 +768,119 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
     }
+
+
+def _read_context_for_payload(output_dir: Path) -> dict[str, Any] | None:
+    """Read the frozen preprocessing context without failing on legacy runs.
+
+    Legacy runs without ``preprocessing_context.json`` keep the historical
+    payload behavior. Missing/invalid contexts for new workflow runs keep
+    their frozen backend error tokens.
+    """
+    context_path = output_dir / "preprocessing_context.json"
+    if not context_path.exists():
+        return None
+    return _read_preprocessing_context(output_dir)
+
+
+def _build_pending_payload(
+    run_id: str,
+    output_dir: Path,
+    config: AnalysisConfig,
+    context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the minimal payload for the awaiting-confirmation state.
+
+    The formal root screening files do not exist yet, so only the frozen
+    context, comparison and allowed downloads are returned. Branch-internal
+    files are never wrapped as formal results here.
+    """
+    context = context or _read_context_for_payload(output_dir)
+    comparison = _safe_read_result_csv(output_dir / "preprocessing_comparison.csv")
+    allowed_downloads = {
+        item["name"]
+        for item in _download_links(run_id, output_dir)
+        if item["name"] in {"preprocessing_comparison.csv", "preprocessing_context.json"}
+    }
+    downloads = [
+        {"name": name, "url": f"/download?run_id={run_id}&file={name}"}
+        for name in sorted(allowed_downloads)
+    ]
+    status = (
+        context["branch_selection_status"]
+        if context is not None
+        else "awaiting_confirmation"
+    )
+    return {
+        "run_id": run_id,
+        "preprocessingContext": context,
+        "preprocessingComparison": _records(comparison),
+        "branchSelectionStatus": status,
+        "selectedPreprocessingMode": (
+            context["selected_preprocessing_mode"] if context is not None else None
+        ),
+        "activeScreeningBranch": None,
+        "activePreprocessingMode": None,
+        "branchLocked": (output_dir / "screening_downstream.lock").exists(),
+        "downloads": downloads,
+    }
+
+
+def _branch_context_payload(output_dir: Path) -> dict[str, Any]:
+    """Return the frozen branch/preprocessing context for endpoint responses."""
+    context = _read_context_for_payload(output_dir)
+    return {
+        "branchSelectionStatus": (
+            context["branch_selection_status"] if context is not None else None
+        ),
+        "activeScreeningBranch": (
+            context["active_screening_branch"] if context is not None else None
+        ),
+        "activePreprocessingMode": (
+            context["active_preprocessing_mode"] if context is not None else None
+        ),
+        "selectedPreprocessingMode": (
+            context["selected_preprocessing_mode"] if context is not None else None
+        ),
+        "branchLocked": (output_dir / "screening_downstream.lock").exists(),
+    }
+
+
+def _confirm_initial_screening_branch_response(
+    handler: BaseHTTPRequestHandler,
+) -> dict[str, Any]:
+    """Confirm an existing screening branch and return the refreshed payload.
+
+    Confirmation only publishes the already-computed branch through the
+    backend ``confirm_initial_screening_branch()``; it never re-runs
+    screening or re-computes the comparison. Frozen backend error tokens are
+    preserved on failure.
+    """
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    branch = _field(form, "branch")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    confirm_initial_screening_branch(output_dir, branch=branch)
+    return _build_result_payload(run_id, output_dir, config)
+
+
+def _require_formal_branch(output_dir: Path) -> dict[str, Any] | None:
+    """Gate report/LLM consumers behind a confirmed formal screening branch.
+
+    Legacy runs without ``preprocessing_context.json`` are allowed (their
+    formal root files are authoritative). New workflow runs must not be
+    ``awaiting_confirmation``; the frozen backend error token is preserved.
+    """
+    context_path = output_dir / "preprocessing_context.json"
+    if not context_path.exists():
+        return None
+    context = _read_preprocessing_context(output_dir)
+    if context["branch_selection_status"] == "awaiting_confirmation":
+        raise ValueError(
+            "initial_screening_branch_not_confirmed: 请先确认正式初筛分支。"
+        )
+    return context
 
 
 def _task_status_response(task_id: str) -> dict[str, Any]:
@@ -721,81 +921,17 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
 
 
 def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    from chem_ts_corr.screening import (
-        model_lift_scores,
-        prepare_best_lag_evidence,
-        rolling_corr_scores,
-    )
-
     total_started = time.perf_counter()
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    base_config = _read_run_config(output_dir)
-    secondary_config = _secondary_config_from_form(base_config, form)
-    extra_variables = _secondary_extra_variables_from_form(form)
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
-        raise ValueError("请先完成主筛查并生成 ranked_features.csv")
-
-    variables = _secondary_variables_from_ranked(
-        ranked,
-        base_config,
-        extra_variables=extra_variables,
+    run_enhanced_screening_for_active_branch(
+        output_dir,
+        base_config=_read_run_config(output_dir),
     )
-    _save_secondary_candidate_context(output_dir, variables)
-    if not variables:
-        raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
-
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
-    target_mask = _target_segment_mask(scaled)
-    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    if not variables:
-        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
-
-    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
-    lag_evidence_started = time.perf_counter()
-    ranked_source_scaled = None
-    if not lag_search_changed:
-        ranked_source_scaled = _scaled_frame_for_secondary(base_config)
-    best_lag_evidence, _ = prepare_best_lag_evidence(
-        scaled,
-        secondary_config.target,
-        variables,
-        secondary_config.max_lag,
-        ranked=ranked,
-        ranked_source_frame=ranked_source_scaled,
-        allow_ranked_reuse=not lag_search_changed,
-        target_mask=target_mask,
-    )
-    lag_evidence_seconds = time.perf_counter() - lag_evidence_started
-    best_lags = {
-        variable: evidence["best_lag"]
-        for variable, evidence in best_lag_evidence.items()
-        if evidence["best_lag"] is not None
-    }
-
-    model_lift_started = time.perf_counter()
-    lift = model_lift_scores(scaled, secondary_config.target, variables, secondary_config.max_lag, best_lags=best_lags, target_mask=target_mask)
-    model_lift_seconds = time.perf_counter() - model_lift_started
-
-    rolling_started = time.perf_counter()
-    rolling = rolling_corr_scores(
-        scaled,
-        secondary_config.target,
-        variables,
-        secondary_config.max_lag,
-        best_lag_evidence=best_lag_evidence,
-        target_mask=target_mask,
-    )
-    rolling_seconds = time.perf_counter() - rolling_started
-
-    output_started = time.perf_counter()
-    enhanced = _enhanced_validation_summary(ranked, lift, rolling)
-
-    lift.to_csv(output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig")
-    rolling.to_csv(output_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig")
-    enhanced.to_csv(output_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig")
+    lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
+    rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
+    enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
 
     result = {
         "modelLiftScores": _records(lift.head(200)),
@@ -803,13 +939,9 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
         "enhancedValidationSummary": _records(enhanced.head(200)),
         "downloads": _download_links(run_id, output_dir),
         "message": "增强筛选完成：结果用于补充验证预测增益和时间稳定性，不代表因果结论。",
+        **_branch_context_payload(output_dir),
     }
-    output_seconds = time.perf_counter() - output_started
     result["timings"] = {
-        "lag_evidence_seconds": lag_evidence_seconds,
-        "model_lift_seconds": model_lift_seconds,
-        "rolling_seconds": rolling_seconds,
-        "output_seconds": output_seconds,
         "total_seconds": time.perf_counter() - total_started,
     }
     return result
@@ -880,34 +1012,16 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    base_config = _read_run_config(output_dir)
-    secondary_config = _secondary_config_from_form(base_config, form)
-    extra_variables = _secondary_extra_variables_from_form(form)
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
-        raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(
-        ranked,
-        base_config,
-        extra_variables=extra_variables,
+    run_granger_for_active_branch(
+        output_dir,
+        base_config=_read_run_config(output_dir),
     )
-    _save_secondary_candidate_context(output_dir, variables)
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
-    target_mask = _target_segment_mask(scaled)
-    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    if not variables:
-        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
-    granger = run_granger_tests(
-        scaled,
-        target=secondary_config.target,
-        variables=variables,
-        maxlag=max(1, secondary_config.max_lag),
-        target_mask=target_mask,
-    )
-    granger.to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
+    granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     return {
         "grangerTests": _records(granger.head(200)),
         "downloads": _download_links(run_id, output_dir),
+        "message": "Granger 二级验证完成。",
+        **_branch_context_payload(output_dir),
     }
 
 
@@ -915,66 +1029,25 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
-    base_config = _read_run_config(output_dir)
-    secondary_config = _secondary_config_from_form(base_config, form)
-    extra_variables = _secondary_extra_variables_from_form(form)
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
-        raise ValueError("请先完成主筛查")
-    variables = _secondary_variables_from_ranked(
-        ranked,
-        base_config,
-        extra_variables=extra_variables,
+    result = run_model_for_active_branch(
+        output_dir,
+        base_config=_read_run_config(output_dir),
     )
-    _save_secondary_candidate_context(output_dir, variables)
-    scaled = _scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)
-    target_mask = _target_segment_mask(scaled)
-    variables = [variable for variable in variables if variable in scaled.columns and variable != secondary_config.target]
-    lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)
-    if lag_search_changed:
-        best_lags = {}
-    else:
-        best_lags = _best_lags_from_ranked(ranked)
-    best_lags = _secondary_best_lags_for_missing_variables(
-        scaled,
-        secondary_config.target,
-        variables,
-        best_lags,
-        secondary_config.max_lag,
-        recompute_limit=None if lag_search_changed else 20,
-        target_mask=target_mask,
+    importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
+    model_variable_importance = _safe_read_result_csv(
+        output_dir / "model_variable_importance.csv"
     )
-    if not variables:
-        raise ValueError("二次验证候选变量在预处理后的数据中不存在，请检查 TopK、白名单和二次验证重采样设置。")
-    importance, metrics = fit_explainable_model(
-        scaled,
-        target=secondary_config.target,
-        max_lag=secondary_config.max_lag,
-        candidate_variables=variables,
-        max_features=secondary_config.max_model_features,
-        random_state=secondary_config.random_state,
-        best_lags=best_lags,
-        lag_mode="best_only",
-        target_mask=target_mask,
+    model_discovered = _safe_read_result_csv(
+        output_dir / "model_discovered_candidates.csv"
     )
-    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
-    model_variable_importance = build_model_variable_importance(importance, ranked, risk_flags=risk)
-    model_discovered = build_model_discovered_candidates(
-        importance,
-        ranked,
-        risk_flags=risk,
-        screening_top_n=base_config.top_k,
-        max_lag=secondary_config.max_lag,
-    )
-    importance.to_csv(output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig")
-    model_variable_importance.to_csv(output_dir / "model_variable_importance.csv", index=False, encoding="utf-8-sig")
-    model_discovered.to_csv(output_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig")
     return {
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
-        "modelMetrics": metrics,
+        "modelMetrics": result.get("model_metrics") or {},
         "downloads": _download_links(run_id, output_dir),
+        "message": "随机森林模型解释完成。",
+        **_branch_context_payload(output_dir),
     }
 
 
@@ -1050,51 +1123,29 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     config = _read_run_config(output_dir)
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
-    if ranked.empty:
-        raise ValueError("请先完成主筛查并生成 ranked_features.csv")
-
-    risk_filter = _list_field(form, "risk_flag_filter")
-    control_columns = (
-        _list_field(form, "control_columns")
-        or config.residual_control_columns
-        or config.capacity_columns
-        or []
-    )
-    _ensure_columns_not_excluded(config, control_columns, "三层复核控制列")
-    context_variables = _load_secondary_candidate_context(output_dir)
-    candidate_variables = context_variables or _secondary_variables_from_ranked(ranked, config)
-    candidates = _build_causal_review_candidate_table(ranked, candidate_variables, risk_flags=risk)
-    candidates.to_csv(output_dir / "causal_review_candidates.csv", index=False, encoding="utf-8-sig")
-    candidates = _filter_candidates_by_risk_flags(candidates, risk, risk_filter)
-    scaled = _scaled_frame_for_secondary(config)
-    target_mask = _target_segment_mask(scaled)
-    result = run_causal_review_stage(
-        frame=scaled,
-        target=config.target,
-        ranked_features=ranked,
-        causal_review_candidates=candidates,
-        risk_flags=risk,
-        output_dir=output_dir,
-        control_columns=control_columns,
-        maxlag=_int_field(form, "maxlag", config.resolved_granger_maxlag()),
+    run_causal_review_for_active_branch(
+        output_dir,
+        base_config=config,
+        control_columns=_list_field(form, "control_columns") or None,
+        maxlag=_optional_int_field(form, "maxlag"),
         min_rows=_int_field(form, "min_rows", 60),
         top_n=_optional_int_field(form, "top_n"),
         conditional_lag_mode=_field(form, "conditional_lag_mode", "ranked_window"),
         conditional_lag_window=_int_field(form, "conditional_lag_window", 5),
         conditional_fallback_maxlag=_int_field(form, "conditional_fallback_maxlag", 24),
         conditional_baseline_maxlag=_optional_int_field(form, "conditional_baseline_maxlag") or 24,
-        target_mask=target_mask,
     )
-    conditional = result["conditional_granger_scores"]
-    report = result["causal_review_report"]
-    evidence = result["causal_review_evidence"]
-    final_summary = result["final_review_summary"]
-    conditional.to_csv(output_dir / "conditional_granger_scores.csv", index=False, encoding="utf-8-sig")
-    report.to_csv(output_dir / "causal_review_report.csv", index=False, encoding="utf-8-sig")
-    final_summary.to_csv(output_dir / "final_review_summary.csv", index=False, encoding="utf-8-sig")
-    evidence.to_csv(output_dir / "causal_review_evidence.csv", index=False, encoding="utf-8-sig")
+    conditional = _safe_read_result_csv(output_dir / "conditional_granger_scores.csv")
+    report = _safe_read_result_csv(output_dir / "causal_review_report.csv")
+    evidence = _safe_read_result_csv(output_dir / "causal_review_evidence.csv")
+    final_summary = _safe_read_result_csv(output_dir / "final_review_summary.csv")
+    risk_filter = _list_field(form, "risk_flag_filter")
+    if risk_filter:
+        risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
+        final_summary = _filter_candidates_by_risk_flags(
+            final_summary, risk, risk_filter
+        )
+        report = _filter_candidates_by_risk_flags(report, risk, risk_filter)
     return {
         "conditionalGrangerScores": _records(conditional.head(500)),
         "causalReviewReport": _records(report.head(500)),
@@ -1102,6 +1153,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewEvidence": _records(evidence.head(500)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+        **_branch_context_payload(output_dir),
     }
 
 
@@ -1153,51 +1205,29 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
     else:
         max_lag = config.xgb_max_lag
 
-    final_summary = _safe_read_result_csv(output_dir / "final_review_summary.csv")
-    if final_summary.empty:
+    control_columns = _list_field(form, "control_columns") or None
+    whitelist = _list_field(form, "whitelist") or None
+    try:
+        result = run_xgb_for_active_branch(
+            output_dir,
+            base_config=config,
+            control_columns=control_columns,
+            whitelist=whitelist,
+            top_n=top_n,
+            max_lag=max_lag,
+        )
+    except ValueError as exc:
         return _xgb_response_payload(
             run_id,
             output_dir,
             status="invalid_input",
-            error_message="missing final_review_summary; run the third-level review first",
+            error_message=str(exc),
         )
-
-    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
-    if ranked.empty:
-        return _xgb_response_payload(
-            run_id,
-            output_dir,
-            status="invalid_input",
-            error_message="missing ranked_features; run the initial screening first",
-        )
-    control_columns = (
-        _list_field(form, "control_columns")
-        or config.residual_control_columns
-        or config.capacity_columns
-        or []
-    )
-    whitelist = _list_field(form, "whitelist")
-    _ensure_columns_not_excluded(config, control_columns, "XGBoost 控制列")
-    _ensure_columns_not_excluded(config, whitelist, "XGBoost 白名单")
-    data = _prepared_frame_for_validation(config)
-    target_mask = _target_segment_mask(data)
-    result = run_xgb_analysis(
-        run_dir=output_dir,
-        data=data,
-        target=config.target,
-        final_review_summary=final_summary,
-        ranked_features=ranked,
-        control_columns=control_columns,
-        whitelist=whitelist,
-        top_n=top_n,
-        max_lag=max_lag,
-        target_mask=target_mask,
-    )
     return _xgb_response_payload(
         run_id,
         output_dir,
-        status=result.status,
-        error_message=result.error_message,
+        status=result["status"],
+        error_message=result.get("error_message"),
     )
 
 
@@ -1239,6 +1269,7 @@ def _xgb_response_payload(
         "xgbValidationSummary": validation_summary,
         "downloads": downloads,
         "message": messages.get(status, "XGB 四级验证未运行。"),
+        **_branch_context_payload(output_dir),
     }
 
 
@@ -1246,6 +1277,7 @@ def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
+    _require_formal_branch(output_dir)
     top_n = _int_field(form, "top_n", 20)
     report_type = _field(form, "report_type", "apc_advice")
     package = build_llm_analysis_package(output_dir, top_n=top_n)
@@ -1286,6 +1318,7 @@ def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     run_id = _field(form, "run_id")
     api_key = _field(form, "api_key")
     output_dir = _resolve_run_dir(run_id)
+    _require_formal_branch(output_dir)
     config = LLMCallConfig(
         provider=_field(form, "provider", "deepseek"),
         base_url=_field(form, "base_url", "https://api.deepseek.com"),
@@ -2898,13 +2931,16 @@ INDEX_HTML = r"""<!doctype html>
         <label>预处理模式
           <select id="preprocessMode">
             <option value="raw">原始数据</option>
-            <option value="detrend">滑动均值去趋势</option>
-            <option value="diff">一阶差分</option>
-            <option value="detrend_diff">去趋势后差分</option>
+            <option value="lowpass">一阶低通平滑</option>
+            <option value="lowpass_detrend">一阶低通 + 去趋势</option>
+            <option value="lowpass_diff">一阶低通 + 差分</option>
           </select>
         </label>
-        <label>去趋势窗口点数<input id="detrendWindow" type="number" min="3" max="100000" value="24"></label>
+        <label id="lowpassTauLabel" hidden>低通时间常数 τ（分钟）<input id="lowpassTauMinutes" type="number" min="0.1" step="0.1" value="5.0"></label>
+        <label id="diffIntervalLabel" hidden>差分间隔（分钟）<input id="diffIntervalMinutes" type="number" min="1" step="1" placeholder="留空表示一个采样周期"></label>
+        <label id="detrendWindowLabel" hidden>去趋势窗口点数<input id="detrendWindow" type="number" min="3" max="100000" value="24"></label>
       </div>
+      <div class="help">选择 Raw：只运行 Raw，完成后直接发布正式初筛。选择任一预处理模式（一阶低通 / 一阶低通+去趋势 / 一阶低通+差分）：同时运行 Raw 和该预处理模式两个独立初筛，完成后需要人工确认正式分支。</div>
       </div>
       <div class="control-group">
         <div class="control-group-title">工况与残差控制</div>
@@ -2963,6 +2999,16 @@ INDEX_HTML = r"""<!doctype html>
       <div id="overviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-overviewTab" hidden>
         <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
+        <div id="branchSelectionSection" class="control-group" hidden>
+          <div class="control-group-title">Raw vs Processed 对比</div>
+          <div id="branchSelectionStatus" class="help"></div>
+          <div id="preprocessingComparisonTable" class="empty">选择任一预处理模式完成双分支初筛后，此处显示冻结的预处理对比结果。</div>
+          <div class="actions">
+            <button id="confirmRawBranch" disabled>确认使用原始数据</button>
+            <button id="confirmProcessedBranch" disabled>确认使用预处理数据</button>
+          </div>
+          <div id="branchLockedHint" class="help" hidden>后续验证已开始，当前初筛分支已锁定；如需切换请重新分析。</div>
+        </div>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>初步分析 Top 10</h2>
@@ -3043,28 +3089,8 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">
           <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
           <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
-          <span>原始数据：不重采样；继承主筛查：使用主筛查的分钟间隔；自定义：只填写分钟整数。二次验证仍沿用时间列、目标列、工况分段、缺失处理、预处理模式和标准化；若改用原始采样，请按原始采样间隔重新填写最大滞后点数。</span>
-        </div>
-        <div class="secondary-validation-params">
-          <label>二次验证补充变量（白名单）
-            <details id="secondaryIncludeDropdown" class="multi-dropdown">
-              <summary id="secondaryIncludeSummary">请选择二次验证补充变量</summary>
-              <div id="secondaryIncludeOptions" class="multi-options"></div>
-            </details>
-          </label>
-          <label>二次验证重采样
-            <select id="secondaryResampleMode">
-              <option value="raw" selected>原始数据（不重采样）</option>
-              <option value="inherit">继承主筛查</option>
-              <option value="custom">自定义</option>
-            </select>
-          </label>
-          <label>二次验证自定义重采样间隔（分钟）
-            <input id="secondaryResampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 2 或 5，仅自定义时使用">
-          </label>
-          <label>二次验证最大滞后点数
-            <input id="secondaryMaxLag" type="number" min="0" max="5000" placeholder="默认继承主筛查最大滞后">
-          </label>
+          <span>下游阶段只使用已确认正式分支的预处理口径与主筛查滞后参数，不再提供独立的二次重采样或补充白名单切换。</span>
+          <span id="downstreamGateHint" class="help" hidden>请先确认正式初筛分支。</span>
         </div>
         <div class="actions">
           <button id="runEnhancedScreening" disabled>运行增强筛选</button>
@@ -3097,7 +3123,7 @@ INDEX_HTML = r"""<!doctype html>
       <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
         <h2>三层复核</h2>
         <div class="help">
-          <span>所有结果仅作为“预测验证/人工复核建议”，不是因果结论。可在左侧设置前 N 个候选变量和风险标签包含过滤后运行。</span>
+          <span>所有结果仅作为“预测验证/人工复核建议”，不是因果结论。正式三级候选来自已发布初筛的 causal_review_candidates.csv；风险标签包含过滤仅用于结果展示，不改变正式三级候选。</span>
           <span>三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
           <span>高共线性和共同负荷风险不等于变量无效。对于统计证据支持较强的候选，平台会保留工程复核建议，同时标记统计检验受限。</span>
         </div>
@@ -3274,11 +3300,15 @@ for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
 activateTab("trendTab");
+updatePreprocessControls();
 el("drawTrend").addEventListener("click", drawTrend);
 el("trendStart").addEventListener("input", markTrendTimeRangeManual);
 el("trendEnd").addEventListener("input", markTrendTimeRangeManual);
 el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
+el("preprocessMode").addEventListener("change", updatePreprocessControls);
+el("confirmRawBranch").addEventListener("click", () => confirmInitialScreeningBranch("raw"));
+el("confirmProcessedBranch").addEventListener("click", () => confirmInitialScreeningBranch("processed"));
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
@@ -3386,27 +3416,12 @@ function updateForceIncludeSummary() {
   el("forceIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择强制复核变量";
 }
 
-function fillSecondaryIncludeOptions(columns) {
-  const box = el("secondaryIncludeOptions");
-  box.innerHTML = "";
-  columns.forEach((name) => {
-    const row = document.createElement("label");
-    row.innerHTML = `<input type="checkbox" value="${escapeHtml(name)}"> <span>${escapeHtml(name)}</span>`;
-    const input = row.querySelector("input");
-    input.addEventListener("change", updateSecondaryIncludeSummary);
-    box.appendChild(row);
-  });
-  searchableMultiOptions(box);
-  updateSecondaryIncludeSummary();
-}
-
-function getSecondaryIncludeSelection() {
-  return Array.from(document.querySelectorAll('#secondaryIncludeOptions input[type="checkbox"]:checked')).map((node) => node.value);
-}
-
-function updateSecondaryIncludeSummary() {
-  const selected = getSecondaryIncludeSelection();
-  el("secondaryIncludeSummary").textContent = selected.length ? `已选 ${selected.length} 项` : "请选择二次验证补充变量";
+function updatePreprocessControls() {
+  const mode = el("preprocessMode").value || "raw";
+  const lowpass = mode === "lowpass" || mode === "lowpass_detrend" || mode === "lowpass_diff";
+  el("lowpassTauLabel").hidden = !lowpass;
+  el("diffIntervalLabel").hidden = mode !== "lowpass_diff";
+  el("detrendWindowLabel").hidden = mode !== "lowpass_detrend";
 }
 
 function getExcludedColumnSelection() {
@@ -3474,7 +3489,6 @@ function refreshColumnSelectors() {
   );
   const capacity = getCapacitySelection().filter((name) => !excluded.has(name));
   const forced = getForceIncludeSelection().filter((name) => !excluded.has(name));
-  const secondary = getSecondaryIncludeSelection().filter((name) => !excluded.has(name));
 
   restoreSelect("targetColumn", available, current.targetColumn);
   restoreSelect("segmentColumn", available, current.segmentColumn, true, "不分段");
@@ -3485,19 +3499,9 @@ function refreshColumnSelectors() {
   setCapacitySelection(capacity);
   fillForceIncludeOptions(available);
   setForceIncludeSelection(forced);
-  fillSecondaryIncludeOptions(available);
-  setSecondaryIncludeSelection(secondary);
   const whitelist = el("xgbWhitelist").value.split(/[,，]/).map((value) => value.trim()).filter((value) => value && !excluded.has(value));
   el("xgbWhitelist").value = whitelist.join(",");
   updateExcludedColumnDisabledState();
-}
-
-function setSecondaryIncludeSelection(values) {
-  const selected = new Set(values || []);
-  Array.from(document.querySelectorAll('#secondaryIncludeOptions input[type="checkbox"]')).forEach((node) => {
-    node.checked = selected.has(node.value);
-  });
-  updateSecondaryIncludeSummary();
 }
 
 function handleProtectedColumnChange() {
@@ -3522,13 +3526,6 @@ function validateAnalysisColumnSelection() {
   const candidates = recognizedNumericColumns.filter((name) => name !== target && name !== timeColumn && !excluded.has(name));
   if (!candidates.length) return "剔除后至少需要保留一个可分析数值候选列";
   return "";
-}
-
-function appendSecondaryValidationOptions(form) {
-  form.append("secondary_include_variables", getSecondaryIncludeSelection().join(","));
-  form.append("secondary_resample_mode", el("secondaryResampleMode").value || "raw");
-  form.append("secondary_resample_rule", el("secondaryResampleRule").value.trim());
-  form.append("secondary_max_lag", el("secondaryMaxLag").value);
 }
 
 async function uploadFile() {
@@ -3566,10 +3563,8 @@ async function loadColumns() {
   fillSelect(el("segmentColumn"), data.numericColumns, true);
   fillCapacityOptions(data.numericColumns);
   fillForceIncludeOptions(data.numericColumns);
-  fillSecondaryIncludeOptions(data.numericColumns);
   el("capacityDropdown").open = false;
   el("forceIncludeDropdown").open = false;
-  el("secondaryIncludeDropdown").open = false;
   fillSelect(el("trendVar1"), data.numericColumns);
   fillSelect(el("trendVar2"), data.numericColumns, true, "不选择");
   fillSelect(el("trendVar3"), data.numericColumns, true, "不选择");
@@ -3636,6 +3631,8 @@ async function analyze() {
     form.append("min_valid_ratio", el("minValidRatio").value);
     form.append("resample_rule", el("resampleRule").value.trim());
     form.append("preprocess_mode", el("preprocessMode").value);
+    form.append("lowpass_tau_minutes", el("lowpassTauMinutes").value);
+    form.append("diff_interval_minutes", el("diffIntervalMinutes").value.trim());
     form.append("detrend_window", el("detrendWindow").value);
     form.append("segment_column", el("segmentColumn").value);
     form.append("segment_mode", el("segmentMode").value);
@@ -3703,6 +3700,10 @@ function formatCompletedAnalysisStatus(result) {
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
   currentAnalysisContext = data.analysisContext || {};
+  if (data.branchSelectionStatus === "awaiting_confirmation") {
+    renderPendingBranchResult(data);
+    return;
+  }
   lastRows = data.rankedFeatures || [];
   lastRecommendedRows = data.recommendedCandidates || [];
   lastGrangerRows = data.grangerTests || [];
@@ -3755,7 +3756,124 @@ function renderAnalysisResult(data) {
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
+  updateBranchSelectionUi(data);
+  setDownstreamGate(false);
+  el("generateLlmReport").disabled = !currentRunId;
   updateXgbRunAvailability();
+}
+
+function renderPendingBranchResult(data) {
+  lastRows = [];
+  lastRecommendedRows = [];
+  lastGrangerRows = [];
+  lastImportanceRows = [];
+  lastModelVariableRows = [];
+  lastNearMissRows = [];
+  lastModelDiscoveredRows = [];
+  lastEnhancedSummaryRows = [];
+  lastEnhancedLiftRows = [];
+  lastEnhancedRollingRows = [];
+  lastConditionalRows = [];
+  lastCausalEvidenceRows = [];
+  lastFinalReviewSummaryRows = [];
+  lastXgbModelSummaryRows = [];
+  lastXgbCandidateUpliftRows = [];
+  lastXgbValidationSummary = {};
+  closeDetailModal();
+  renderOverview({});
+  renderAnalysisTimingBreakdown(data.analysis_timings || {});
+  renderGenericTable("preprocessingComparisonTable", data.preprocessingComparison || [], preprocessingComparisonColumns());
+  renderDownloads(data.downloads || []);
+  updateBranchSelectionUi(data);
+  setDownstreamGate(true);
+  el("generateLlmReport").disabled = true;
+  updateXgbRunAvailability();
+}
+
+function processedBranchLabel(mode) {
+  const labels = {
+    lowpass: "确认使用一阶低通",
+    lowpass_detrend: "确认使用低通 + 去趋势",
+    lowpass_diff: "确认使用低通 + 差分",
+  };
+  return labels[String(mode || "")] || "确认使用预处理数据";
+}
+
+function updateBranchSelectionUi(data) {
+  const section = el("branchSelectionSection");
+  const status = data.branchSelectionStatus;
+  const activeBranch = data.activeScreeningBranch;
+  const locked = Boolean(data.branchLocked);
+  const selected = data.selectedPreprocessingMode || "";
+  el("confirmProcessedBranch").textContent = processedBranchLabel(selected);
+  el("branchLockedHint").hidden = !locked;
+  if (!status) {
+    section.hidden = true;
+    el("confirmRawBranch").disabled = true;
+    el("confirmProcessedBranch").disabled = true;
+    return;
+  }
+  section.hidden = false;
+  if (status === "awaiting_confirmation") {
+    el("branchSelectionStatus").textContent =
+      "双分支初筛已完成，正式初筛尚未发布。请查看 Raw vs Processed 对比后明确确认一个分支；确认前不会展示正式排名、Top-K 或推荐变量。";
+    el("confirmRawBranch").disabled = locked;
+    el("confirmProcessedBranch").disabled = locked;
+    return;
+  }
+  if (status === "not_required") {
+    el("branchSelectionStatus").textContent =
+      "已选择原始数据：只运行 Raw 并自动发布正式初筛（branch_selection_status = not_required）。";
+    el("confirmRawBranch").disabled = true;
+    el("confirmProcessedBranch").disabled = true;
+    return;
+  }
+  el("branchSelectionStatus").textContent =
+    `已确认正式初筛分支：${activeBranch === "raw" ? "原始数据" : "预处理数据"}` +
+    (data.activePreprocessingMode ? `（active preprocessing = ${data.activePreprocessingMode}）` : "") +
+    (locked ? "。后续验证已开始，当前初筛分支已锁定；如需切换请重新分析。" : "。");
+  el("confirmRawBranch").disabled = activeBranch === "raw" || locked;
+  el("confirmProcessedBranch").disabled = activeBranch === "processed" || locked;
+}
+
+function setDownstreamGate(blocked) {
+  el("downstreamGateHint").hidden = !blocked;
+  el("runEnhancedScreening").disabled = blocked || !currentRunId;
+  el("runGranger").disabled = blocked || !currentRunId;
+  el("runModel").disabled = blocked || !currentRunId;
+  el("runCausalReview").disabled = blocked || !currentRunId;
+  el("runXgbValidation").disabled = blocked || !currentRunId;
+}
+
+async function confirmInitialScreeningBranch(branch) {
+  if (!currentRunId) return setStatus("请先完成初筛。");
+  const startedAt = performance.now();
+  const timerId = startStatusTimer("正在确认正式初筛分支...", startedAt);
+  el("confirmRawBranch").disabled = true;
+  el("confirmProcessedBranch").disabled = true;
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("branch", branch);
+    const data = await postForm("/api/confirm_initial_screening_branch", form);
+    renderAnalysisResult(data);
+    setStatus(appendElapsed("已确认正式初筛分支。", startedAt), "success");
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
+  } finally {
+    stopStatusTimer(timerId);
+  }
+}
+
+function preprocessingComparisonColumns() {
+  return [
+    "variable", "processed_mode", "raw_final_score", "processed_final_score",
+    "final_score_delta", "raw_rank", "processed_rank", "rank_delta",
+    "raw_pearson", "processed_pearson", "raw_spearman", "processed_spearman",
+    "raw_best_lag", "processed_best_lag", "lag_direction_changed",
+    "raw_in_top_k", "processed_in_top_k", "raw_candidate", "processed_candidate",
+    "raw_risk_tags", "processed_risk_tags",
+  ];
 }
 
 function sleep(ms) {
@@ -3793,7 +3911,6 @@ async function runEnhancedScreening() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
-    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_enhanced_screening", form);
     lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
     lastEnhancedLiftRows = data.modelLiftScores || [];
@@ -3802,6 +3919,7 @@ async function runEnhancedScreening() {
     renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
     renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
     renderDownloads(data.downloads || []);
+    updateBranchSelectionUi(data);
     setStatus(appendElapsed(data.message || "增强筛选完成。结果不代表因果结论。", startedAt), "success");
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
@@ -3819,11 +3937,11 @@ async function runGranger() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
-    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_granger", form);
     lastGrangerRows = data.grangerTests || [];
     renderGenericTable("grangerTable", lastGrangerRows);
     renderDownloads(data.downloads || []);
+    updateBranchSelectionUi(data);
     setStatus(appendElapsed("Granger 二级验证完成。", startedAt), "success");
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
@@ -3842,7 +3960,6 @@ async function runModel() {
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
-    appendSecondaryValidationOptions(form);
     const data = await postForm("/api/run_model", form);
     lastImportanceRows = data.importance || [];
     lastModelVariableRows = data.modelVariableImportance || [];
@@ -3851,6 +3968,7 @@ async function runModel() {
     renderGenericTable("importanceTable", lastImportanceRows);
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
     renderDownloads(data.downloads || []);
+    updateBranchSelectionUi(data);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
     setStatus(appendElapsed(`随机森林模型解释完成。${metrics}`, startedAt), "success");
   } catch (error) {
@@ -3891,6 +4009,7 @@ async function runCausalReview() {
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
+    updateBranchSelectionUi(data);
     updateXgbRunAvailability();
     setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt), "success");
   } catch (error) {
@@ -3938,6 +4057,7 @@ async function runXgbValidation() {
     renderXgbRunSummary(lastXgbValidationSummary);
     renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
     renderDownloads(data.downloads || []);
+    updateBranchSelectionUi(data);
     const message = data.error_message || data.message || "XGB 四级验证失败。";
     const success = data.status === "success";
     el("xgbStatus").textContent = appendElapsed(message, startedAt);
@@ -4156,8 +4276,10 @@ const termsHelpRows = [
   { category: "参数设置说明", name: "输出前 K 个", signal: "主筛查候选排序保留的前 K 个变量。", reading: "影响页面主候选范围和后续增强复核的默认输入，不改变完整下载文件的计算口径。", action: "探索阶段可调大，正式复核时聚焦工程上可解释的候选。" },
   { category: "参数设置说明", name: "最小有效比例", signal: "变量参与筛查所需的最低有效数据占比。", reading: "比例过低会带来数据质量风险；比例过高可能过滤掉间歇运行但重要的点位。", action: "先处理缺失、坏点和常数段，再按装置运行特点调整阈值。" },
   { category: "参数设置说明", name: "重采样规则", signal: "将原始数据对齐到统一采样间隔的规则。", reading: "会改变滞后点数对应的实际时间长度，并影响缺失、峰值和相关强度。", action: "使用符合采集周期和工艺响应速度的规则，避免过度平滑。" },
-  { category: "参数设置说明", name: "预处理模式", signal: "原始、去趋势、差分或组合预处理。", reading: "会改变相关性关注的是绝对水平、慢趋势还是短期波动。", action: "根据问题选择模式，并比较不同模式下候选是否稳定。" },
-  { category: "参数设置说明", name: "去趋势窗口点数", signal: "滑动去趋势时使用的窗口长度。", reading: "窗口决定慢趋势被剔除的尺度，过短可能去掉真实响应，过长可能保留漂移。", action: "按班次、停留时间或主要扰动周期设置，并检查趋势图。" },
+  { category: "参数设置说明", name: "预处理模式", signal: "原始 / 一阶低通 / 一阶低通+去趋势 / 一阶低通+差分。", reading: "选择 Raw 只运行 Raw 并直接发布正式初筛；选择任一预处理模式会同时运行 Raw 和该预处理模式两个独立初筛，完成后需要人工确认正式分支，系统不会自动选择“更优”模式。", action: "根据问题选择模式，确认分支前先查看 Raw vs Processed 对比。" },
+  { category: "参数设置说明", name: "低通时间常数 τ（分钟）", signal: "一阶低通平滑的时间常数。", reading: "只在 lowpass / lowpass_detrend / lowpass_diff 下生效；Raw 不参与实际分析。", action: "结合工艺响应速度设置，默认 5.0 分钟。" },
+  { category: "参数设置说明", name: "差分间隔（分钟）", signal: "lowpass_diff 使用的差分间隔；留空表示一个分析采样周期。", reading: "只影响 lowpass_diff 模式，非空时必须大于 0。", action: "需要多个采样周期差分时填写，否则留空。" },
+  { category: "参数设置说明", name: "去趋势窗口点数", signal: "滑动去趋势时使用的窗口长度。", reading: "只在 lowpass_detrend 下有实际意义；窗口决定慢趋势被剔除的尺度，过短可能去掉真实响应，过长可能保留漂移。", action: "按班次、停留时间或主要扰动周期设置，并检查趋势图。" },
   { category: "参数设置说明", name: "负荷代表列", signal: "代表装置负荷或产量的变量。", reading: "用于识别共同负荷驱动和工况稳定性，影响风险标签解释。", action: "优先选择现场认可的负荷、进料或产量指标。" },
   { category: "参数设置说明", name: "工况分段", signal: "按低/中/高负荷或自定义阈值拆分工况。", reading: "用于判断候选关系是否跨工况稳定，影响复核优先级。", action: "先确认分段边界有工程含义，避免样本过少。" },
   { category: "参数设置说明", name: "自定义下限 / 自定义上限", signal: "工况分段或过滤时使用的自定义上下限。", reading: "会限定参与对比的运行区间，影响稳定性和风险标签判断。", action: "用装置负荷区间、牌号或操作窗口确定上下限。" },
@@ -5244,15 +5366,30 @@ function correlationDirectionExplanation(direction, preprocessMode) {
       负向: "在当前最佳滞后对齐下，候选变量水平较高时，目标变量水平通常较低。",
       方向较弱: "当前最佳滞后点的原始水平相关系数接近零，相关方向较弱。",
     },
+    lowpass: {
+      正向: "在当前最佳滞后对齐下，候选变量一阶低通平滑后的水平较高时，目标变量低通后的水平通常也较高。",
+      负向: "在当前最佳滞后对齐下，候选变量一阶低通平滑后的水平较高时，目标变量低通后的水平通常较低。",
+      方向较弱: "当前最佳滞后点的一阶低通平滑后相关系数接近零，相关方向较弱。",
+    },
     detrend: {
       正向: "在当前最佳滞后对齐下，候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常也较高。",
       负向: "在当前最佳滞后对齐下，候选变量去趋势后的偏离较高时，目标变量去趋势后的偏离通常较低。",
       方向较弱: "当前最佳滞后点的去趋势后相关系数接近零，相关方向较弱。",
     },
+    lowpass_detrend: {
+      正向: "在当前最佳滞后对齐下，候选变量低通+去趋势后的偏离较高时，目标变量的偏离通常也较高。",
+      负向: "在当前最佳滞后对齐下，候选变量低通+去趋势后的偏离较高时，目标变量的偏离通常较低。",
+      方向较弱: "当前最佳滞后点的低通+去趋势后相关系数接近零，相关方向较弱。",
+    },
     diff: {
       正向: "在当前最佳滞后对齐下，候选变量增加时，目标变量通常也呈增加趋势。",
       负向: "在当前最佳滞后对齐下，候选变量增加时，目标变量通常呈下降趋势。",
       方向较弱: "当前最佳滞后点的变化量相关系数接近零，变化方向关系较弱。",
+    },
+    lowpass_diff: {
+      正向: "在当前最佳滞后对齐下，候选变量低通+差分后的变化增加时，目标变量的变化通常也增加。",
+      负向: "在当前最佳滞后对齐下，候选变量低通+差分后的变化增加时，目标变量的变化通常下降。",
+      方向较弱: "当前最佳滞后点的低通+差分变化量相关系数接近零，变化方向关系较弱。",
     },
     detrend_diff: {
       正向: "在当前最佳滞后对齐下，候选变量去趋势后的变化增加时，目标变量去趋势后的变化通常也增加。",
@@ -5270,7 +5407,7 @@ function correlationDirectionExplanation(direction, preprocessMode) {
 
 function innovationDirectionExplanation(status, preprocessMode) {
   const mode = String(preprocessMode ?? "");
-  if (mode === "diff" || mode === "detrend_diff") {
+  if (mode === "diff" || mode === "detrend_diff" || mode === "lowpass_diff") {
     return "当前主筛查已采用差分口径，变化量方向与主筛查方向来自同一组证据，未形成独立的主筛查—变化量一致性验证。";
   }
   const messages = {
@@ -5293,6 +5430,9 @@ function innovationDirectionText(value) {
 function preprocessModeLabel(mode) {
   const labels = {
     raw: "原始数据",
+    lowpass: "一阶低通",
+    lowpass_detrend: "一阶低通 + 去趋势",
+    lowpass_diff: "一阶低通 + 差分",
     detrend: "去趋势",
     diff: "一阶差分",
     detrend_diff: "去趋势后差分",
@@ -5349,7 +5489,7 @@ function renderScreeningScoreDetails(row) {
   const timeRelationship = displayCellValue("temporal_direction_status", row.temporal_direction_status);
   const correlationDirection = row.correlation_direction || "未计算";
   const innovationDirection = innovationDirectionText(row.innovation_sign);
-  const innovationDirectionLabel = preprocessMode === "diff" || preprocessMode === "detrend_diff"
+  const innovationDirectionLabel = preprocessMode === "diff" || preprocessMode === "detrend_diff" || preprocessMode === "lowpass_diff"
     ? "当前分析变化方向"
     : "变化量相关方向";
   const innovationExplanation = innovationDirectionExplanation(row.innovation_status, preprocessMode);
@@ -6959,12 +7099,18 @@ function reset() {
   el("forceIncludeOptions").innerHTML = "";
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
-  el("secondaryIncludeOptions").innerHTML = "";
-  el("secondaryIncludeSummary").textContent = "请选择二次验证补充变量";
-  el("secondaryIncludeDropdown").open = false;
-  el("secondaryResampleMode").value = "raw";
-  el("secondaryResampleRule").value = "";
-  el("secondaryMaxLag").value = "";
+  el("preprocessMode").value = "raw";
+  el("lowpassTauMinutes").value = "5.0";
+  el("diffIntervalMinutes").value = "";
+  el("detrendWindow").value = "24";
+  updatePreprocessControls();
+  el("branchSelectionSection").hidden = true;
+  el("branchSelectionStatus").textContent = "";
+  el("branchLockedHint").hidden = true;
+  el("confirmRawBranch").disabled = true;
+  el("confirmProcessedBranch").disabled = true;
+  resetOptionalTable("preprocessingComparisonTable", "选择任一预处理模式完成双分支初筛后，此处显示冻结的预处理对比结果。");
+  el("downstreamGateHint").hidden = true;
   el("trendVar1").innerHTML = "";
   el("trendVar2").innerHTML = "";
   el("trendVar3").innerHTML = "";

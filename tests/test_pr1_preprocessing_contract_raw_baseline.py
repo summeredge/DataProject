@@ -265,15 +265,18 @@ def test_lowpass_modes_run_in_transform_frame_and_causal_paths(mode: str):
     assert not causal.empty
 
 
-@pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))
-def test_lowpass_modes_are_not_exposed_by_official_web_or_cli(mode: str):
+def test_official_web_and_cli_expose_only_formal_modes_and_never_legacy_modes():
     from chem_ts_corr import cli, web
 
     web_source = Path(web.__file__).read_text(encoding="utf-8")
     cli_source = Path(cli.__file__).read_text(encoding="utf-8")
 
-    assert f'<option value="{mode}">' not in web_source
-    assert f'"{mode}"' not in cli_source
+    for mode in ("raw", "lowpass", "lowpass_detrend", "lowpass_diff"):
+        assert f'<option value="{mode}">' in web_source
+        assert f'"{mode}"' in cli_source
+    for mode in ("detrend", "diff", "detrend_diff"):
+        assert f'<option value="{mode}">' not in web_source
+        assert f'"{mode}"' not in cli_source
 
 
 @pytest.mark.parametrize("mode", sorted(NOT_IMPLEMENTED_PREPROCESS_MODES))

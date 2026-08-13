@@ -203,7 +203,7 @@ def test_runner_builds_pool_features_and_splits_once(monkeypatch, tmp_path: Path
     assert counts == {name: 1 for name in counts}
 
 
-def test_web_prepares_xgb_data_once_without_raw_duplicate(monkeypatch, tmp_path: Path):
+def test_web_xgb_endpoint_delegates_once_to_formal_runner(monkeypatch, tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     input_path = tmp_path / "input.csv"
@@ -216,27 +216,22 @@ def test_web_prepares_xgb_data_once_without_raw_duplicate(monkeypatch, tmp_path:
     ranked = pd.DataFrame([{"variable": "x", "lag": 2}])
     ranked.to_csv(run_dir / "ranked_features.csv", index=False)
     ranked.to_csv(run_dir / "recommended_candidates.csv", index=False)
-    calls = {"prepare": 0, "service": 0}
+    calls = {"runner": 0}
 
-    def prepare(config):
-        calls["prepare"] += 1
-        return pd.DataFrame({"target": [1.0], "x": [2.0]})
-
-    def service(**kwargs):
-        calls["service"] += 1
-        return runner.XGBRunResult("failed", (), None, None, None, "stopped")
+    def formal_runner(output_dir, **kwargs):
+        calls["runner"] += 1
+        return {"status": "failed", "error_message": "stopped"}
 
     monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
     monkeypatch.setattr(web, "_multipart_form", lambda handler: {
         "run_id": "run", "enable_xgb_validation": "true", "top_n": "1"
     })
-    monkeypatch.setattr(web, "_prepared_frame_for_validation", prepare)
-    monkeypatch.setattr(web, "run_xgb_analysis", service)
+    monkeypatch.setattr(web, "run_xgb_for_active_branch", formal_runner)
 
     payload = web._run_xgb_validation_response(object())
 
     assert payload["status"] == "failed"
-    assert calls == {"prepare": 1, "service": 1}
+    assert calls == {"runner": 1}
     source = inspect.getsource(web._run_xgb_validation_response)
     assert "load_timeseries_csv" not in source
 

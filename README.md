@@ -14,7 +14,8 @@
 - 支持中文 Windows 常见文件编码识别。
 - 自动识别时间列和数值变量。
 - 支持按固定周期重采样，例如 1min、5min、15min。
-- 支持原始数据、滑动均值去趋势、一阶差分、去趋势后差分。
+- 支持原始数据、一阶低通、一阶低通+去趋势、一阶低通+差分。
+- 非 Raw 模式同时运行 Raw 与所选预处理模式两个独立初筛，生成对比结果后由用户明确确认正式分支，系统不会自动选择“更优”模式。
 - 支持按负荷或其他工况代表变量选择全部、低、中、高或自定义工况区间。
 - 支持缺失值、重复时间戳、异常跳变、长缺失段和信号饱和等数据质量检查。
 
@@ -46,15 +47,9 @@
 - **增强筛选**：检查加入候选变量后是否改善时间序列预测，并评价滚动时间稳定性；
 - **Granger 预测验证**：判断候选变量的历史信息是否增加目标变量的预测能力；
 - **随机森林/SHAP 模型解释**：识别非线性和多滞后预测线索，并提示主筛查可能遗漏的变量；
-- **补充白名单**：允许将工艺人员指定的变量强制加入二次验证。
+- **补充候选**：工艺人员指定的变量可在初筛阶段通过“强制复核变量”加入，正式下游阶段不再提供额外的候选并集入口。
 
-二次验证可以使用与主筛查不同的重采样周期。最大滞后参数的单位始终是“数据点数”，因此更换采样周期时应保持相同的物理时间范围：
-
-```text
-最大滞后时间 = 最大滞后点数 × 采样间隔
-```
-
-例如，主筛查使用 5min 数据、最大滞后 72 点，对应 360min；二次验证改用原始 1min 数据时，应填写 360 点。
+正式下游阶段（增强筛选、Granger、模型解释、三层复核、XGBoost）统一使用已确认正式分支的预处理口径、重采样规则与主筛查滞后参数，不再提供独立的二次重采样切换。
 
 ### 4. 第三层：综合复核
 
@@ -111,9 +106,9 @@ Web 页面提供：
 1. 选择相对稳定的生产时间范围，尽量避免把开停车、牌号切换和明显异常工况混入同一次分析。
 2. 上传数据并选择时间列、目标变量和负荷/残差控制变量。
 3. 设定主筛查的重采样周期、最大物理滞后范围和候选数量。
-4. 运行主筛查，先排除目标领先、公式型变量、共同负荷和明显闭环响应等高风险结果。
-5. 对保留候选运行增强筛选、Granger 和模型解释。
-6. 将工艺上重要但未进入前列的变量通过白名单加入复核。
+4. 运行主筛查：选择 Raw 直接发布正式初筛；选择任一预处理模式时先查看 Raw vs Processed 对比，再明确确认一个正式分支。
+5. 确认正式分支后，对保留候选运行增强筛选、Granger 和模型解释。
+6. 工艺上重要但未进入前列的变量可在初筛阶段通过“强制复核变量”加入。
 7. 运行第三层综合复核，查看最终推荐、统计限制和证据冲突。
 8. 仅对少量重点候选运行 XGBoost 时间外验证。
 9. 结合工艺机理、物料路径、控制回路结构和现场趋势进行人工确认。
@@ -208,9 +203,26 @@ python -m chem_ts_corr.cli analyze `
   --input D:\data\plant_history.csv `
   --time-column 时间 `
   --target 目标变量 `
+  --preprocess-mode lowpass `
   --max-lag 72 `
   --top-k 30 `
   --output reports\demo
+```
+
+选择非 Raw 模式时，分析完成后需要确认正式分支：
+
+```powershell
+python -m chem_ts_corr.cli confirm-branch --output reports\demo --branch processed
+```
+
+随后可运行正式下游阶段：
+
+```powershell
+python -m chem_ts_corr.cli run-enhanced --output reports\demo
+python -m chem_ts_corr.cli run-granger --output reports\demo
+python -m chem_ts_corr.cli run-model --output reports\demo
+python -m chem_ts_corr.cli run-causal-review --output reports\demo
+python -m chem_ts_corr.cli run-xgb --output reports\demo
 ```
 
 Web 页面是主要使用入口；命令行适合固定参数的批量运行。
@@ -234,6 +246,8 @@ Web 页面是主要使用入口；命令行适合固定参数的批量运行。
 | `conditional_granger_scores.csv` | 条件 Granger 结果 |
 | `causal_review_evidence.csv` | 逐变量综合证据复核表 |
 | `final_review_summary.csv` | 最终人工复核优先级 |
+| `preprocessing_comparison.csv` | Raw 与所选预处理模式的分支对比（非 Raw 工作流） |
+| `preprocessing_context.json` | 正式分支选择与预处理上下文（审计用） |
 | `xgb_validation/` | XGBoost 时间外验证结果 |
 | `llm_prompt.md` / `llm_report.md` | AI 综合解读材料 |
 

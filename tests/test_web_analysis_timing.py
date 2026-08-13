@@ -81,7 +81,11 @@ def test_analyze_task_adds_authoritative_total_and_payload_timing(monkeypatch, t
         }
 
     monkeypatch.setattr(web, "_write_run_config", lambda *args, **kwargs: None)
-    monkeypatch.setattr(web, "run_analysis", lambda *args, **kwargs: pipeline_timings)
+    monkeypatch.setattr(
+        web,
+        "run_initial_screening_workflow",
+        lambda *args, **kwargs: {"timings": pipeline_timings},
+    )
     monkeypatch.setattr(
         web,
         "_build_result_payload",

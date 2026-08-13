@@ -1,3 +1,4 @@
+import pandas as pd
 import pytest
 
 import chem_ts_corr.web as web
@@ -100,7 +101,7 @@ def test_invalid_primary_resample_fails_before_thread_or_analysis(
     )
     monkeypatch.setattr(
         web,
-        "run_analysis",
+        "run_initial_screening_workflow",
         lambda *args, **kwargs: pytest.fail("invalid input must not run analysis"),
     )
 
@@ -112,7 +113,7 @@ def test_invalid_primary_resample_fails_before_thread_or_analysis(
     "endpoint_name",
     ["_run_enhanced_screening_response", "_run_granger_response", "_run_model_response"],
 )
-def test_empty_custom_secondary_resample_fails_before_validation_work(
+def test_stale_secondary_resample_params_are_ignored_and_formal_runner_is_called(
     endpoint_name, monkeypatch, tmp_path
 ):
     config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path / "run")
@@ -123,29 +124,39 @@ def test_empty_custom_secondary_resample_fails_before_validation_work(
             "run_id": "run",
             "secondary_resample_mode": "custom",
             "secondary_resample_rule": "",
+            "secondary_include_variables": "stale_whitelist",
         },
     )
     monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path / "run")
     monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
-    monkeypatch.setattr(
-        web,
-        "_safe_read_result_csv",
-        lambda path: pytest.fail("validation data must not be read after invalid input"),
-    )
+    captured: dict[str, object] = {}
 
-    with pytest.raises(ValueError, match="^重采样间隔必须是大于 0 的整数分钟$"):
-        getattr(web, endpoint_name)(object())
+    def fake_runner(output_dir, **kwargs):
+        captured["output_dir"] = output_dir
+        return {}
+
+    if endpoint_name == "_run_enhanced_screening_response":
+        monkeypatch.setattr(web, "run_enhanced_screening_for_active_branch", fake_runner)
+    elif endpoint_name == "_run_granger_response":
+        monkeypatch.setattr(web, "run_granger_for_active_branch", fake_runner)
+    else:
+        monkeypatch.setattr(web, "run_model_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_safe_read_result_csv", lambda path: pd.DataFrame())
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    getattr(web, endpoint_name)(object())
+
+    assert captured["output_dir"] == tmp_path / "run"
 
 
 def test_resample_inputs_are_integer_minute_controls():
     primary = web.INDEX_HTML.split('id="resampleRule"', 1)[1].split(">", 1)[0]
-    secondary = web.INDEX_HTML.split('id="secondaryResampleRule"', 1)[1].split(">", 1)[0]
 
-    for control in [primary, secondary]:
-        assert 'type="number"' in control
-        assert 'min="1"' in control
-        assert 'step="1"' in control
-        assert 'inputmode="numeric"' in control
+    assert 'type="number"' in primary
+    assert 'min="1"' in primary
+    assert 'step="1"' in primary
+    assert 'inputmode="numeric"' in primary
     assert 'placeholder="可留空，例如 5"' in primary
     assert "例如 5min" not in web.INDEX_HTML
     assert "例如 2min / 5min" not in web.INDEX_HTML
+    assert 'id="secondaryResampleRule"' not in web.INDEX_HTML

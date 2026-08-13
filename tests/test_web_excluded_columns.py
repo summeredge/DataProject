@@ -95,7 +95,6 @@ def test_frontend_disables_time_and_target_and_filters_other_selectors():
         "segmentColumn",
         "fillCapacityOptions",
         "fillForceIncludeOptions",
-        "fillSecondaryIncludeOptions",
         "trendVar1",
         "trendVar4",
         "scatterX1",

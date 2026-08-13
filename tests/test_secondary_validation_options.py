@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -106,8 +105,8 @@ def _secondary_scaled_frame(columns: list[str] | None = None) -> pd.DataFrame:
     columns = columns or [f"v{i}" for i in range(1, 11)]
     return pd.DataFrame(
         {
-            "target": np.arange(60, dtype=float),
-            **{name: np.arange(60, dtype=float) + i for i, name in enumerate(columns, start=1)},
+            "target": pd.Series(range(60), dtype=float),
+            **{name: pd.Series(range(60), dtype=float) + i for i, name in enumerate(columns, start=1)},
         }
     )
 
@@ -161,395 +160,304 @@ def test_secondary_variables_extra_outside_top_k_appended_and_deduplicated():
     assert variables.count("v9") == 1
 
 
-def test_secondary_endpoints_build_candidates_from_ranked_features_only():
+# --- PR-13: formal Web endpoints delegate to active-branch runners ---------
+
+
+def _endpoint_bodies() -> dict[str, str]:
     web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    expected_call = (
-        "variables = _secondary_variables_from_ranked(\n"
-        "        ranked,\n"
-        "        base_config,\n"
-        "        extra_variables=extra_variables,\n"
-        "    )"
-    )
+    bodies: dict[str, str] = {}
     for function_name in [
         "_run_enhanced_screening_response",
         "_run_granger_response",
         "_run_model_response",
+        "_run_causal_review_response",
+        "_run_xgb_validation_response",
     ]:
         function_start = web_source.index(f"def {function_name}")
         function_end = web_source.index("\ndef ", function_start + 1)
-        function_body = web_source[function_start:function_end]
-        assert '_safe_read_result_csv(output_dir / "ranked_features.csv")' in function_body
-        assert "recommended_candidates.csv" not in function_body
-        assert expected_call in function_body
+        bodies[function_name] = web_source[function_start:function_end]
+    return bodies
 
 
-def test_secondary_endpoints_persist_unified_candidate_context():
-    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    for function_name in [
-        "_run_enhanced_screening_response",
-        "_run_granger_response",
-        "_run_model_response",
-    ]:
-        function_start = web_source.index(f"def {function_name}")
-        function_end = web_source.index("\ndef ", function_start + 1)
-        function_body = web_source[function_start:function_end]
-        assert "_save_secondary_candidate_context(output_dir, variables)" in function_body
+def test_formal_web_endpoints_call_active_branch_runners_only():
+    bodies = _endpoint_bodies()
+
+    assert "run_enhanced_screening_for_active_branch(" in bodies["_run_enhanced_screening_response"]
+    assert "run_granger_for_active_branch(" in bodies["_run_granger_response"]
+    assert "run_model_for_active_branch(" in bodies["_run_model_response"]
+    assert "run_causal_review_for_active_branch(" in bodies["_run_causal_review_response"]
+    assert "run_xgb_for_active_branch(" in bodies["_run_xgb_validation_response"]
 
 
-def _patch_secondary_endpoint_mocks(
-    monkeypatch,
-    tmp_path: Path,
-    ranked: pd.DataFrame,
-    config: AnalysisConfig,
-    frame: pd.DataFrame,
+def test_formal_web_endpoints_do_not_reimplement_old_orchestration():
+    bodies = _endpoint_bodies()
+    forbidden = [
+        "run_analysis(",
+        "run_xgb_analysis(",
+        "run_causal_review_stage(",
+        "fit_explainable_model(",
+        "run_granger_tests(",
+        "_build_causal_review_candidate_table(",
+        "_load_secondary_candidate_context(",
+        "_prepared_frame_for_validation(",
+        "_secondary_config_from_form(",
+        "_secondary_extra_variables_from_form(",
+    ]
+    for body in bodies.values():
+        for token in forbidden:
+            assert token not in body, f"{token} must not appear in a formal endpoint body"
+
+
+def test_enhanced_screening_endpoint_delegates_and_reads_formal_csvs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     from chem_ts_corr import web
 
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: {})
-    monkeypatch.setattr(web, "_field", lambda form, name: "run-1")
+    config = _secondary_endpoint_config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: {"run_id": "run-1"})
     monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
     monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
-    monkeypatch.setattr(web, "_secondary_config_from_form", lambda base, form: config)
-    monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: ["v9"])
-    monkeypatch.setattr(
-        web, "_safe_read_result_csv", lambda path: ranked
-    )
-    monkeypatch.setattr(
-        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: frame
-    )
-    monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
-    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
 
-
-def test_enhanced_screening_receives_top_k_whitelist_and_extra_variables(tmp_path, monkeypatch):
-    from chem_ts_corr import screening, web
-
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    frame = _secondary_scaled_frame()
-    captured: dict[str, object] = {}
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def capture_evidence(frame, target, variables, max_lag, **kwargs):
-        captured["variables"] = list(variables)
-        return {}, {}
-
-    monkeypatch.setattr(screening, "prepare_best_lag_evidence", capture_evidence)
-    monkeypatch.setattr(
-        screening, "model_lift_scores", lambda *args, **kwargs: pd.DataFrame({"variable": []})
-    )
-    monkeypatch.setattr(
-        screening, "rolling_corr_scores", lambda *args, **kwargs: pd.DataFrame({"variable": []})
-    )
-
-    web._run_enhanced_screening_response(object())
-
-    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    assert captured["variables"] == expected
-    assert captured["variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
-
-
-def test_granger_receives_top_k_whitelist_and_extra_variables(tmp_path, monkeypatch):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    frame = _secondary_scaled_frame()
-    captured: dict[str, object] = {}
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def capture_granger(frame, target, variables, maxlag, **kwargs):
-        captured["variables"] = list(variables)
-        return pd.DataFrame({"variable": variables})
-
-    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
-
-    web._run_granger_response(object())
-
-    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    assert captured["variables"] == expected
-    assert captured["variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
-
-
-def test_model_receives_top_k_whitelist_and_extra_variables_with_max_features(
-    tmp_path, monkeypatch
-):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    frame = _secondary_scaled_frame()
-    captured: dict[str, object] = {}
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def read_result_csv(path):
-        if path.name == "risk_flags.csv":
-            return pd.DataFrame()
-        return ranked
-
-    monkeypatch.setattr(web, "_safe_read_result_csv", read_result_csv)
-
-    def capture_fit(frame, target, max_lag, candidate_variables, max_features, **kwargs):
-        captured["candidate_variables"] = list(candidate_variables)
-        captured["max_features"] = max_features
-        return pd.DataFrame({"variable": []}), {}
-
-    monkeypatch.setattr(web, "fit_explainable_model", capture_fit)
-    monkeypatch.setattr(
-        web,
-        "build_model_variable_importance",
-        lambda *args, **kwargs: pd.DataFrame({"variable": []}),
-    )
-    monkeypatch.setattr(
-        web,
-        "build_model_discovered_candidates",
-        lambda *args, **kwargs: pd.DataFrame({"variable": []}),
-    )
-
-    web._run_model_response(object())
-
-    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    assert captured["candidate_variables"] == expected
-    assert captured["candidate_variables"][:5] == ["v1", "v2", "v3", "v4", "v5"]
-    assert captured["max_features"] == 123
-
-
-def test_granger_drops_preprocessing_removed_variables_without_threshold_filtering(
-    tmp_path, monkeypatch
-):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    # v3 is removed during preprocessing; other below-0.30 Top-K variables must survive.
-    frame = _secondary_scaled_frame(columns=["v1", "v2", "v4", "v5", "v8", "v9"])
-    captured: dict[str, object] = {}
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def capture_granger(frame, target, variables, maxlag, **kwargs):
-        captured["variables"] = list(variables)
-        return pd.DataFrame({"variable": variables})
-
-    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
-
-    web._run_granger_response(object())
-
-    assert captured["variables"] == ["v1", "v2", "v4", "v5", "v8", "v9"]
-    assert float(ranked.loc[2, "final_score"]) < 0.30
-    assert float(ranked.loc[3, "final_score"]) < 0.30
-    assert float(ranked.loc[4, "final_score"]) < 0.30
-
-
-def test_secondary_endpoint_persists_prefilter_unified_candidate_context(tmp_path, monkeypatch):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    frame = _secondary_scaled_frame()
-    captured: dict[str, object] = {}
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def capture_granger(frame, target, variables, maxlag, **kwargs):
-        captured["variables"] = list(variables)
-        return pd.DataFrame({"variable": variables})
-
-    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
-
-    web._run_granger_response(object())
-
-    expected = ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    context = pd.read_csv(tmp_path / "secondary_candidate_context.csv", encoding="utf-8-sig")
-    assert context["variable"].tolist() == expected
-    assert captured["variables"] == expected
-
-
-def test_secondary_candidate_context_overwrites_previous_record(tmp_path, monkeypatch):
-    from chem_ts_corr import web
-
-    web._save_secondary_candidate_context(tmp_path, ["stale_1", "stale_2"])
-    ranked = _secondary_ranked_frame()
-    config = _secondary_endpoint_config(tmp_path)
-    frame = _secondary_scaled_frame()
-    _patch_secondary_endpoint_mocks(monkeypatch, tmp_path, ranked, config, frame)
-
-    def capture_granger(frame, target, variables, maxlag, **kwargs):
-        return pd.DataFrame({"variable": variables})
-
-    monkeypatch.setattr(web, "run_granger_tests", capture_granger)
-
-    web._run_granger_response(object())
-
-    context = pd.read_csv(tmp_path / "secondary_candidate_context.csv", encoding="utf-8-sig")
-    assert context["variable"].tolist() == ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    assert "stale_1" not in context["variable"].tolist()
-
-
-def _write_causal_review_run_files(
-    tmp_path: Path,
-    ranked: pd.DataFrame,
-    risk: pd.DataFrame | None = None,
-    stale_candidates: pd.DataFrame | None = None,
-) -> None:
-    ranked.to_csv(tmp_path / "ranked_features.csv", index=False, encoding="utf-8-sig")
-    if risk is not None:
-        risk.to_csv(tmp_path / "risk_flags.csv", index=False, encoding="utf-8-sig")
-    if stale_candidates is not None:
-        stale_candidates.to_csv(
-            tmp_path / "causal_review_candidates.csv", index=False, encoding="utf-8-sig"
+    def fake_runner(output_dir, base_config=None):
+        captured["output_dir"] = output_dir
+        captured["base_config"] = base_config
+        pd.DataFrame([{"variable": "v1", "model_lift": 0.1}]).to_csv(
+            output_dir / "model_lift_scores.csv", index=False, encoding="utf-8-sig"
         )
+        pd.DataFrame([{"variable": "v1", "rolling_stability": 0.7}]).to_csv(
+            output_dir / "rolling_corr_scores.csv", index=False, encoding="utf-8-sig"
+        )
+        pd.DataFrame([{"variable": "v1", "interpretation": "enhanced screening only"}]).to_csv(
+            output_dir / "enhanced_validation_summary.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        return {"run_dir": output_dir}
+
+    monkeypatch.setattr(web, "run_enhanced_screening_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    result = web._run_enhanced_screening_response(object())
+
+    assert captured["output_dir"] == tmp_path
+    assert captured["base_config"] is config
+    assert result["enhancedValidationSummary"][0]["variable"] == "v1"
+    assert result["modelLiftScores"][0]["model_lift"] == 0.1
+    assert result["rollingCorrScores"][0]["rolling_stability"] == 0.7
+    assert "timings" in result
 
 
-def _patch_causal_review_endpoint_mocks(
-    monkeypatch,
-    tmp_path: Path,
-    config: AnalysisConfig,
-    scaled: pd.DataFrame,
-    form: dict[str, str] | None = None,
-) -> None:
+def test_granger_endpoint_delegates_and_reads_formal_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from chem_ts_corr import web
 
-    form = dict(form or {})
-    form.setdefault("run_id", "run-1")
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: form)
+    config = _secondary_endpoint_config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: {"run_id": "run-1"})
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+
+    def fake_runner(output_dir, base_config=None):
+        captured["output_dir"] = output_dir
+        captured["base_config"] = base_config
+        pd.DataFrame([{"variable": "v1", "best_granger_lag": 3}]).to_csv(
+            output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig"
+        )
+        return {"run_dir": output_dir}
+
+    monkeypatch.setattr(web, "run_granger_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    result = web._run_granger_response(object())
+
+    assert captured["output_dir"] == tmp_path
+    assert captured["base_config"] is config
+    assert result["grangerTests"][0]["best_granger_lag"] == 3
+
+
+def test_model_endpoint_delegates_and_reads_formal_csvs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from chem_ts_corr import web
+
+    config = _secondary_endpoint_config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(web, "_multipart_form", lambda handler: {"run_id": "run-1"})
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+
+    def fake_runner(output_dir, base_config=None):
+        captured["output_dir"] = output_dir
+        captured["base_config"] = base_config
+        pd.DataFrame([{"variable": "v1", "importance": 0.3}]).to_csv(
+            output_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig"
+        )
+        pd.DataFrame([{"variable": "v1", "importance_rank": 1}]).to_csv(
+            output_dir / "model_variable_importance.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([{"variable": "v9", "discovery": True}]).to_csv(
+            output_dir / "model_discovered_candidates.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        return {"run_dir": output_dir, "model_metrics": {"r2": 0.5}}
+
+    monkeypatch.setattr(web, "run_model_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    result = web._run_model_response(object())
+
+    assert captured["output_dir"] == tmp_path
+    assert captured["base_config"] is config
+    assert result["importance"][0]["importance"] == 0.3
+    assert result["modelVariableImportance"][0]["importance_rank"] == 1
+    assert result["modelDiscoveredCandidates"][0]["variable"] == "v9"
+    assert result["modelMetrics"]["r2"] == 0.5
+
+
+def test_causal_review_endpoint_delegates_and_reads_four_formal_csvs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from chem_ts_corr import web
+
+    config = AnalysisConfig(
+        tmp_path / "input.csv",
+        "time",
+        "target",
+        tmp_path,
+        top_k=5,
+        max_lag=2,
+        residual_control_columns=["c1"],
+    )
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
-        web, "_field", lambda form, name, default="": form.get(name, default)
+        web,
+        "_multipart_form",
+        lambda handler: {
+            "run_id": "run-1",
+            "control_columns": "c1",
+            "maxlag": "3",
+            "min_rows": "60",
+            "top_n": "4",
+            "conditional_lag_mode": "full_scan",
+        },
     )
     monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
     monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+
+    def fake_runner(output_dir, **kwargs):
+        captured.update(kwargs)
+        pd.DataFrame([{"variable": "v1", "lag": 1}]).to_csv(
+            output_dir / "conditional_granger_scores.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([{"variable": "v1", "recommendation": "priority_review"}]).to_csv(
+            output_dir / "causal_review_report.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([{"variable": "v1", "evidence": 1}]).to_csv(
+            output_dir / "causal_review_evidence.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([{"variable": "v1", "final_rank": 1}]).to_csv(
+            output_dir / "final_review_summary.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        return {"run_dir": output_dir}
+
+    monkeypatch.setattr(web, "run_causal_review_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    result = web._run_causal_review_response(object())
+
+    assert captured["control_columns"] == ["c1"]
+    assert captured["maxlag"] == 3
+    assert captured["top_n"] == 4
+    assert captured["conditional_lag_mode"] == "full_scan"
+    assert result["conditionalGrangerScores"][0]["variable"] == "v1"
+    assert result["causalReviewReport"][0]["recommendation"] == "priority_review"
+    assert result["causalReviewEvidence"][0]["evidence"] == 1
+    assert result["finalReviewSummary"][0]["final_rank"] == 1
+
+
+def test_causal_review_risk_filter_is_display_only_and_candidate_csv_is_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from chem_ts_corr import web
+
+    config = AnalysisConfig(
+        tmp_path / "input.csv",
+        "time",
+        "target",
+        tmp_path,
+        top_k=5,
+        max_lag=2,
+    )
+    risk = pd.DataFrame(
+        [
+            {"variable": "v1", "risk_flags": "common_capacity_driver", "risk_count": 1},
+            {"variable": "v2", "risk_flags": "", "risk_count": 0},
+        ]
+    )
+    risk.to_csv(tmp_path / "risk_flags.csv", index=False, encoding="utf-8-sig")
+    candidates = pd.DataFrame([{"variable": "v1"}, {"variable": "v2"}])
+    candidates.to_csv(
+        tmp_path / "causal_review_candidates.csv", index=False, encoding="utf-8-sig"
+    )
+    candidates_bytes = (tmp_path / "causal_review_candidates.csv").read_bytes()
     monkeypatch.setattr(
-        web, "_scaled_frame_for_secondary", lambda config, protected_columns=None: scaled
+        web,
+        "_multipart_form",
+        lambda handler: {
+            "run_id": "run-1",
+            "risk_flag_filter": "共同负荷驱动",
+        },
     )
-    monkeypatch.setattr(web, "_target_segment_mask", lambda frame: None)
-    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
+    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
+    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: config)
+
+    def fake_runner(output_dir, **kwargs):
+        pd.DataFrame([{"variable": "v1"}, {"variable": "v2"}]).to_csv(
+            output_dir / "final_review_summary.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame([{"variable": "v1"}, {"variable": "v2"}]).to_csv(
+            output_dir / "causal_review_report.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame().to_csv(
+            output_dir / "conditional_granger_scores.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        pd.DataFrame().to_csv(
+            output_dir / "causal_review_evidence.csv",
+            index=False,
+            encoding="utf-8-sig",
+        )
+        return {"run_dir": output_dir}
+
+    monkeypatch.setattr(web, "run_causal_review_for_active_branch", fake_runner)
+    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: [])
+
+    result = web._run_causal_review_response(object())
+
+    assert (tmp_path / "causal_review_candidates.csv").read_bytes() == candidates_bytes
+    assert [row["variable"] for row in result["finalReviewSummary"]] == ["v1"]
+    assert [row["variable"] for row in result["causalReviewReport"]] == ["v1"]
 
 
-def _capture_causal_review_stage(monkeypatch, captured: dict[str, object]) -> None:
-    from chem_ts_corr import web
-
-    def capture_stage(**kwargs):
-        captured["candidates"] = kwargs["causal_review_candidates"]
-        captured["top_n"] = kwargs["top_n"]
-        return {
-            "conditional_granger_scores": pd.DataFrame(),
-            "causal_review_report": pd.DataFrame(),
-            "causal_review_evidence": pd.DataFrame(),
-            "final_review_summary": pd.DataFrame(),
-        }
-
-    monkeypatch.setattr(web, "run_causal_review_stage", capture_stage)
-
-
-def test_causal_review_fallback_builds_top_k_plus_whitelist_and_ignores_stale_candidates(
-    tmp_path, monkeypatch
-):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = AnalysisConfig(
-        tmp_path / "input.csv",
-        "time",
-        "target",
-        tmp_path,
-        top_k=5,
-        force_include_variables=["v8"],
-        max_lag=2,
-    )
-    risk = pd.DataFrame(
-        [
-            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
-            for i in range(1, 11)
-        ]
-    )
-    stale = pd.DataFrame([{"variable": "v9"}])
-    scaled = _secondary_scaled_frame()
-    _write_causal_review_run_files(tmp_path, ranked, risk=risk, stale_candidates=stale)
-    _patch_causal_review_endpoint_mocks(monkeypatch, tmp_path, config, scaled)
-    captured: dict[str, object] = {}
-    _capture_causal_review_stage(monkeypatch, captured)
-
-    web._run_causal_review_response(object())
-
-    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
-    expected_variables = {"v1", "v2", "v3", "v4", "v5", "v8"}
-    assert set(rebuilt["variable"]) == expected_variables
-    assert "v9" not in set(rebuilt["variable"])
-    assert set(captured["candidates"]["variable"]) == expected_variables
-    assert captured["top_n"] is None
-    pd.testing.assert_frame_equal(
-        pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig"),
-        ranked,
-    )
-
-
-def test_causal_review_uses_persisted_secondary_context_including_extra_variables(
-    tmp_path, monkeypatch
-):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = AnalysisConfig(
-        tmp_path / "input.csv",
-        "time",
-        "target",
-        tmp_path,
-        top_k=5,
-        max_lag=2,
-    )
-    risk = pd.DataFrame(
-        [
-            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
-            for i in range(1, 11)
-        ]
-    )
-    scaled = _secondary_scaled_frame()
-    web._save_secondary_candidate_context(
-        tmp_path, ["v1", "v2", "v3", "v4", "v5", "v8", "v9"]
-    )
-    _write_causal_review_run_files(tmp_path, ranked, risk=risk)
-    _patch_causal_review_endpoint_mocks(monkeypatch, tmp_path, config, scaled)
-    captured: dict[str, object] = {}
-    _capture_causal_review_stage(monkeypatch, captured)
-
-    web._run_causal_review_response(object())
-
-    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
-    assert set(rebuilt["variable"]) == {"v1", "v2", "v3", "v4", "v5", "v8", "v9"}
-    assert set(captured["candidates"]["variable"]) == {"v1", "v2", "v3", "v4", "v5", "v8", "v9"}
-
-
-def test_causal_review_top_n_truncates_only_after_full_candidate_set(tmp_path, monkeypatch):
-    from chem_ts_corr import web
-
-    ranked = _secondary_ranked_frame()
-    config = AnalysisConfig(
-        tmp_path / "input.csv",
-        "time",
-        "target",
-        tmp_path,
-        top_k=5,
-        force_include_variables=["v8"],
-        max_lag=2,
-    )
-    risk = pd.DataFrame(
-        [
-            {"variable": f"v{i}", "risk_flags": "", "risk_level": "none"}
-            for i in range(1, 11)
-        ]
-    )
-    scaled = _secondary_scaled_frame()
-    _write_causal_review_run_files(tmp_path, ranked, risk=risk)
-    _patch_causal_review_endpoint_mocks(
-        monkeypatch, tmp_path, config, scaled, form={"top_n": "3"}
-    )
-    captured: dict[str, object] = {}
-    _capture_causal_review_stage(monkeypatch, captured)
-
-    web._run_causal_review_response(object())
-
-    rebuilt = pd.read_csv(tmp_path / "causal_review_candidates.csv", encoding="utf-8-sig")
-    assert len(rebuilt) == 6
-    assert captured["top_n"] == 3
-    assert len(captured["candidates"]) == 6
+# --- Legacy helpers are retained for compatibility unit tests --------------
 
 
 def test_secondary_lag_search_changed_normalizes_resample_rule():
@@ -720,57 +628,18 @@ def test_secondary_config_raw_ignores_custom_resample_value():
     assert secondary.resample_rule is None
 
 
-def test_index_html_contains_secondary_validation_options():
-    for token in [
-        "secondaryIncludeDropdown",
-        "secondaryIncludeOptions",
-        "secondaryIncludeSummary",
-        "secondaryResampleMode",
-        "secondaryResampleRule",
-        "secondaryMaxLag",
-        "二次验证补充变量",
-        "二次验证重采样",
-        "二次验证最大滞后点数",
-        "原始数据（不重采样）",
-        "继承主筛查",
-        "自定义",
-    ]:
-        assert token in INDEX_HTML
-    assert "仅白名单" not in INDEX_HTML
-    assert "whitelist_only" not in INDEX_HTML
+def test_secondary_config_caps_secondary_max_lag_to_ui_limit():
+    config = AnalysisConfig(
+        input_path=Path("dummy.csv"),
+        time_column="time",
+        target="Y",
+        output_dir=Path("out"),
+        max_lag=72,
+    )
 
+    secondary = _secondary_config_from_form(config, {"secondary_max_lag": "50000"})
 
-def test_secondary_validation_buttons_append_options():
-    assert "function appendSecondaryValidationOptions" in INDEX_HTML
-    assert INDEX_HTML.count("appendSecondaryValidationOptions(form)") >= 3
-    for field in [
-        "secondary_include_variables",
-        "secondary_resample_mode",
-        "secondary_resample_rule",
-        "secondary_max_lag",
-    ]:
-        assert field in INDEX_HTML
-    for function_name in ["runEnhancedScreening", "runGranger", "runModel"]:
-        function_start = INDEX_HTML.index(f"async function {function_name}()")
-        function_end = INDEX_HTML.index("async function", function_start + 1) if "async function" in INDEX_HTML[function_start + 1 :] else len(INDEX_HTML)
-        assert "appendSecondaryValidationOptions(form)" in INDEX_HTML[function_start:function_end]
-
-
-def test_backend_secondary_endpoints_use_secondary_form_helpers():
-    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    assert 'read_text(encoding="utf-8")' in Path("tests/test_secondary_validation_options.py").read_text(encoding="utf-8")
-    for function_name in [
-        "_run_enhanced_screening_response",
-        "_run_granger_response",
-        "_run_model_response",
-    ]:
-        function_start = web_source.index(f"def {function_name}")
-        function_end = web_source.index("\ndef ", function_start + 1)
-        function_body = web_source[function_start:function_end]
-        assert "_secondary_config_from_form" in function_body
-        assert "_secondary_extra_variables_from_form" in function_body
-        assert "secondary_config.max_lag" in function_body
-        assert "_scaled_frame_for_secondary(secondary_config, protected_columns=extra_variables)" in function_body
+    assert secondary.max_lag == 5000
 
 
 def test_enhanced_validation_summary_includes_secondary_whitelist_variables():
@@ -845,7 +714,6 @@ def test_enhanced_validation_summary_keeps_variables_only_in_secondary_outputs()
 
 def test_secondary_best_lags_for_missing_variables_adds_lag_for_extra_candidate():
     import numpy as np
-    import pandas as pd
 
     n = 80
     x = np.arange(n, dtype=float)
@@ -864,41 +732,8 @@ def test_secondary_best_lags_for_missing_variables_adds_lag_for_extra_candidate(
     assert isinstance(result["X"], int)
 
 
-def test_index_html_reset_restores_secondary_validation_defaults():
-    function_start = INDEX_HTML.index("function reset()")
-    reset_body = INDEX_HTML[function_start:]
-
-    assert 'el("secondaryResampleMode").value = "raw"' in reset_body
-    assert 'el("secondaryResampleRule").value = ""' in reset_body
-    assert 'el("secondaryMaxLag").value = ""' in reset_body
-
-
-def test_secondary_config_caps_secondary_max_lag_to_ui_limit():
-    config = AnalysisConfig(
-        input_path=Path("dummy.csv"),
-        time_column="time",
-        target="Y",
-        output_dir=Path("out"),
-        max_lag=72,
-    )
-
-    secondary = _secondary_config_from_form(config, {"secondary_max_lag": "50000"})
-
-    assert secondary.max_lag == 5000
-
-
-def test_run_granger_response_clamps_zero_max_lag_for_granger_api():
-    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    function_start = web_source.index("def _run_granger_response")
-    function_end = web_source.index("\ndef ", function_start + 1)
-    function_body = web_source[function_start:function_end]
-
-    assert "maxlag=max(1, secondary_config.max_lag)" in function_body
-
-
 def test_secondary_best_lags_limits_bulk_missing_lag_scan_without_skipping_all():
     import numpy as np
-    import pandas as pd
 
     n = 80
     data = {"Y": np.arange(n, dtype=float)}
@@ -919,7 +754,6 @@ def test_secondary_best_lags_limits_bulk_missing_lag_scan_without_skipping_all()
 
 def test_secondary_best_lags_recomputes_all_when_limit_is_none():
     import numpy as np
-    import pandas as pd
 
     n = 80
     data = {"Y": np.arange(n, dtype=float)}
@@ -939,287 +773,80 @@ def test_secondary_best_lags_recomputes_all_when_limit_is_none():
     assert all(isinstance(value, int) for value in result.values())
 
 
-def test_enhanced_screening_recomputes_best_lags_when_secondary_resample_changes():
-    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    function_start = web_source.index("def _run_enhanced_screening_response")
-    function_end = web_source.index("\ndef ", function_start + 1)
-    function_body = web_source[function_start:function_end]
-
-    assert "lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)" in function_body
-    assert "prepare_best_lag_evidence(" in function_body
-    assert "ranked_source_scaled = _scaled_frame_for_secondary(base_config)" in function_body
-    assert "ranked_source_frame=ranked_source_scaled" in function_body
-    assert "allow_ranked_reuse=not lag_search_changed" in function_body
-    assert "best_lag_evidence=best_lag_evidence" in function_body
+# --- PR-13: formal Web UI no longer exposes secondary override -------------
 
 
-def _run_enhanced_screening_case(tmp_path, monkeypatch, lag_search_changed):
-    from chem_ts_corr import screening, web
-    from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
-
-    n = 120
-    rng = np.random.default_rng(17)
-    target = pd.Series(rng.normal(size=n))
-    variable = target.shift(-2).ffill().bfill() + rng.normal(scale=1e-4, size=n)
-    frame = pd.DataFrame(
-        {"target": target.to_numpy(), "x": variable.to_numpy()},
-        index=pd.date_range("2026-01-01", periods=n, freq="min"),
-    )
-    base_config = AnalysisConfig(
-        input_path=tmp_path / "unused.csv",
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=3,
-        top_k=1,
-    )
-    secondary_config = AnalysisConfig(
-        input_path=tmp_path / "unused.csv",
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=4 if lag_search_changed else 3,
-        top_k=1,
-    )
-    ranked_best = summarize_best_lags(compute_lag_scores(frame, "target", 3)).iloc[0]
-    ranked = pd.DataFrame(
-        {
-            "variable": ["x"],
-            "lag": [int(ranked_best["lag"])],
-            "raw_corr": [float(ranked_best["score"])],
-        }
-    )
-
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: {})
-    monkeypatch.setattr(web, "_field", lambda form, name: "run-1")
-    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
-    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: base_config)
-    monkeypatch.setattr(web, "_secondary_config_from_form", lambda config, form: secondary_config)
-    monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: [])
-    monkeypatch.setattr(web, "_safe_read_result_csv", lambda path: ranked)
-    monkeypatch.setattr(web, "_secondary_variables_from_ranked", lambda *args, **kwargs: ["x"])
-    scaled_calls = []
-
-    def scaled_for_config(config, protected_columns=None):
-        scaled_calls.append((config, tuple(protected_columns or [])))
-        return frame
-
-    monkeypatch.setattr(web, "_scaled_frame_for_secondary", scaled_for_config)
-    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
-
-    original_compute = screening.compute_lag_scores
-    scan_calls = []
-
-    def counted_compute(pair, target_name, max_lag):
-        scan_calls.append(pair.columns[-1])
-        return original_compute(pair, target_name, max_lag)
-
-    captured = {}
-    original_lift = screening.model_lift_scores
-    original_rolling = screening.rolling_corr_scores
-
-    def capture_lift(*args, best_lags=None, **kwargs):
-        captured["best_lags"] = best_lags
-        return original_lift(*args, best_lags=best_lags, **kwargs)
-
-    def capture_rolling(*args, best_lag_evidence=None, **kwargs):
-        captured["evidence"] = best_lag_evidence
-        captured["rolling"] = original_rolling(
-            *args,
-            best_lag_evidence=best_lag_evidence,
-            **kwargs,
-        )
-        return captured["rolling"]
-
-    monkeypatch.setattr(screening, "compute_lag_scores", counted_compute)
-    monkeypatch.setattr(screening, "model_lift_scores", capture_lift)
-    monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
-
-    result = web._run_enhanced_screening_response(object())
-    captured["scaled_calls"] = scaled_calls
-    captured["base_config"] = base_config
-    captured["secondary_config"] = secondary_config
-    return result, captured, scan_calls
+def test_index_html_hides_secondary_validation_override_controls():
+    for token in [
+        "secondaryIncludeDropdown",
+        "secondaryIncludeOptions",
+        "secondaryIncludeSummary",
+        "secondaryResampleMode",
+        "secondaryResampleRule",
+        "secondaryMaxLag",
+        "二次验证重采样",
+        "二次验证最大滞后点数",
+        "二次验证补充变量",
+    ]:
+        assert token not in INDEX_HTML
+    assert "appendSecondaryValidationOptions" not in INDEX_HTML
 
 
-def test_enhanced_screening_reuses_ranked_evidence_and_reports_timings(tmp_path, monkeypatch):
-    result, captured, scan_calls = _run_enhanced_screening_case(
-        tmp_path, monkeypatch, lag_search_changed=False
-    )
-
-    assert scan_calls == []
-    assert captured["evidence"]["x"]["source"] == "ranked"
-    assert captured["scaled_calls"] == [
-        (captured["secondary_config"], ()),
-        (captured["base_config"], ()),
+def test_index_html_offers_only_the_four_formal_preprocess_modes():
+    select = INDEX_HTML.split('<select id="preprocessMode">', 1)[1].split("</select>", 1)[0]
+    options = [
+        value
+        for value in ["raw", "lowpass", "lowpass_detrend", "lowpass_diff"]
+        if f'value="{value}"' in select
     ]
-    assert captured["best_lags"] == {
-        variable: item["best_lag"] for variable, item in captured["evidence"].items()
-    }
-    assert set(result["timings"]) == {
-        "lag_evidence_seconds",
-        "model_lift_seconds",
-        "rolling_seconds",
-        "output_seconds",
-        "total_seconds",
-    }
-    assert all(value >= 0 for value in result["timings"].values())
+    assert options == ["raw", "lowpass", "lowpass_detrend", "lowpass_diff"]
+    for legacy in ["detrend", "diff", "detrend_diff"]:
+        assert f'value="{legacy}"' not in select
 
 
-def test_enhanced_screening_changed_parameters_scan_each_variable_once(tmp_path, monkeypatch):
-    result, captured, scan_calls = _run_enhanced_screening_case(
-        tmp_path, monkeypatch, lag_search_changed=True
-    )
-
-    assert scan_calls == ["x"]
-    assert captured["evidence"]["x"]["source"] == "recomputed"
-    assert captured["best_lags"]["x"] == captured["evidence"]["x"]["best_lag"]
-    assert captured["scaled_calls"] == [(captured["secondary_config"], ())]
-    assert result["timings"]["total_seconds"] >= max(result["timings"].values())
+def test_index_html_submits_tau_and_diff_parameters():
+    analyze_body = INDEX_HTML.split("async function analyze()", 1)[1].split(
+        "async function waitForAnalysisResult", 1
+    )[0]
+    assert 'form.append("lowpass_tau_minutes", el("lowpassTauMinutes").value);' in analyze_body
+    assert 'form.append("diff_interval_minutes", el("diffIntervalMinutes").value.trim());' in analyze_body
+    assert 'id="lowpassTauMinutes" type="number" min="0.1" step="0.1" value="5.0"' in INDEX_HTML
+    assert 'id="diffIntervalMinutes"' in INDEX_HTML
 
 
-def test_enhanced_screening_extra_variable_index_change_recomputes_ranked_candidate(
-    tmp_path, monkeypatch
-):
-    from chem_ts_corr import screening, web
-    from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
-
-    n = 120
-    rng = np.random.default_rng(23)
-    target = pd.Series(rng.normal(size=n))
-    x = target.shift(-2).ffill().bfill() + rng.normal(scale=1e-4, size=n)
-    z = target.shift(1).ffill().bfill()
-    full_index = pd.date_range("2026-02-01", periods=n, freq="min")
-    raw = pd.DataFrame(
-        {
-            "timestamp": full_index,
-            "target": target.to_numpy(),
-            "x": x.to_numpy(),
-            "z": z.to_numpy(),
-        }
-    )
-    raw.loc[20:89, "z"] = np.nan
-    input_path = tmp_path / "input.csv"
-    raw.to_csv(input_path, index=False, encoding="utf-8-sig")
-    base_config = AnalysisConfig(
-        input_path=input_path,
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=3,
-        top_k=1,
-    )
-    secondary_config = AnalysisConfig(
-        input_path=input_path,
-        time_column="timestamp",
-        target="target",
-        output_dir=tmp_path,
-        max_lag=3,
-        top_k=1,
-        force_include_variables=["z"],
-    )
-    monkeypatch.setattr(web, "SCALED_FRAME_CACHE", {})
-    source_frame = web._scaled_frame_for_secondary(base_config)
-    current_frame = web._scaled_frame_for_secondary(
-        secondary_config, protected_columns=["z"]
-    )
-    assert "z" not in source_frame.columns
-    assert "z" in current_frame.columns
-    assert len(current_frame) < len(source_frame)
-    assert current_frame[["target", "x"]].notna().all().all()
-    expected = screening.rolling_corr_scores(current_frame, "target", ["x"], 3)
-    ranked_best = summarize_best_lags(compute_lag_scores(source_frame, "target", 3)).iloc[0]
-    ranked = pd.DataFrame(
-        {
-            "variable": ["x"],
-            "lag": [int(ranked_best["lag"])],
-            "raw_corr": [float(ranked_best["score"])],
-        }
-    )
-    web.SCALED_FRAME_CACHE.clear()
-
-    monkeypatch.setattr(web, "_multipart_form", lambda handler: {})
-    monkeypatch.setattr(web, "_field", lambda form, name: "run-1")
-    monkeypatch.setattr(web, "_resolve_run_dir", lambda run_id: tmp_path)
-    monkeypatch.setattr(web, "_read_run_config", lambda output_dir: base_config)
-    monkeypatch.setattr(web, "_secondary_config_from_form", lambda config, form: secondary_config)
-    monkeypatch.setattr(web, "_secondary_extra_variables_from_form", lambda form: ["z"])
-    monkeypatch.setattr(web, "_safe_read_result_csv", lambda path: ranked)
-    monkeypatch.setattr(web, "_download_links", lambda *args, **kwargs: {})
-
-    scaled_calls = []
-    original_scaled = web._scaled_frame_for_secondary
-
-    def capture_scaled(config, protected_columns=None):
-        scaled_calls.append((config, tuple(protected_columns or [])))
-        return original_scaled(config, protected_columns)
-
-    monkeypatch.setattr(web, "_scaled_frame_for_secondary", capture_scaled)
-    original_compute = screening.compute_lag_scores
-    scan_calls = []
-
-    def counted_compute(pair, target_name, max_lag):
-        scan_calls.append(pair.columns[-1])
-        return original_compute(pair, target_name, max_lag)
-
-    captured = {}
-    original_rolling = screening.rolling_corr_scores
-
-    def capture_rolling(*args, best_lag_evidence=None, **kwargs):
-        captured["evidence"] = best_lag_evidence
-        captured["rolling"] = original_rolling(
-            *args,
-            best_lag_evidence=best_lag_evidence,
-            **kwargs,
-        )
-        return captured["rolling"]
-
-    monkeypatch.setattr(screening, "compute_lag_scores", counted_compute)
-    monkeypatch.setattr(screening, "rolling_corr_scores", capture_rolling)
-
-    web._run_enhanced_screening_response(object())
-
-    assert not _secondary_lag_search_changed(base_config, secondary_config)
-    assert scan_calls.count("x") == 1
-    assert captured["evidence"]["x"]["source"] == "recomputed"
-    assert scaled_calls == [
-        (secondary_config, ("z",)),
-        (base_config, ()),
-    ]
-    actual = captured["rolling"].loc[
-        captured["rolling"]["variable"].eq("x")
-    ].reset_index(drop=True)
-    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
+def test_index_html_has_branch_confirmation_ui_and_downstream_gate():
+    for token in [
+        "branchSelectionSection",
+        "branchSelectionStatus",
+        "preprocessingComparisonTable",
+        "confirmRawBranch",
+        "confirmProcessedBranch",
+        "branchLockedHint",
+        "downstreamGateHint",
+        "请先确认正式初筛分支",
+        "后续验证已开始，当前初筛分支已锁定；如需切换请重新分析。",
+        "Raw vs Processed 对比",
+        "confirmInitialScreeningBranch",
+    ]:
+        assert token in INDEX_HTML
+    assert 'confirmInitialScreeningBranch("raw")' in INDEX_HTML
+    assert 'confirmInitialScreeningBranch("processed")' in INDEX_HTML
 
 
-def test_model_response_recomputes_best_lags_when_secondary_resample_changes():
-    web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
-    function_start = web_source.index("def _run_model_response")
-    function_end = web_source.index("\ndef ", function_start + 1)
-    function_body = web_source[function_start:function_end]
+def test_index_html_reset_restores_formal_preprocess_controls():
+    function_start = INDEX_HTML.index("function reset()")
+    reset_body = INDEX_HTML[function_start:]
 
-    assert "lag_search_changed = _secondary_lag_search_changed(base_config, secondary_config)" in function_body
-    assert "if lag_search_changed:" in function_body
-    assert "best_lags = {}" in function_body
-    assert "else:" in function_body
-    assert "best_lags = _best_lags_from_ranked(ranked)" in function_body
-    assert "_merge_near_miss_lags" not in function_body
-    assert "recompute_limit=None if lag_search_changed else 20" in function_body
+    assert 'el("preprocessMode").value = "raw"' in reset_body
+    assert 'el("lowpassTauMinutes").value = "5.0"' in reset_body
+    assert 'el("diffIntervalMinutes").value = ""' in reset_body
+    assert "updatePreprocessControls();" in reset_body
 
 
 def test_web_source_does_not_keep_old_lag_scale_changed_helper():
     web_source = Path("chem_ts_corr/web.py").read_text(encoding="utf-8")
 
     assert "_secondary_lag_scale_changed" not in web_source
-
-
-def test_secondary_max_lag_does_not_fallback_to_primary_max_lag_in_frontend():
-    function_start = INDEX_HTML.index("function appendSecondaryValidationOptions")
-    function_end = INDEX_HTML.index("async function", function_start)
-    function_body = INDEX_HTML[function_start:function_end]
-
-    assert 'form.append("secondary_max_lag", el("secondaryMaxLag").value);' in function_body
-    assert 'secondaryMaxLag").value || el("maxLag").value' not in function_body
 
 
 def test_index_html_defines_secondary_validation_grid_styles():

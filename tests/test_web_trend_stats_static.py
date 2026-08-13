@@ -26,7 +26,8 @@ def _css_rule(selector):
 def _trend_js_block():
     start = INDEX_HTML.index("function renderTrendChart")
     end = INDEX_HTML.index("const candidateTable", start)
-    return INDEX_HTML[start:end]
+    helpers_start = INDEX_HTML.index("function timestampMilliseconds")
+    return INDEX_HTML[helpers_start:start] + INDEX_HTML[start:end]
 
 
 def _run_trend_js(script_body):
@@ -36,6 +37,7 @@ def _run_trend_js(script_body):
             "const el = (id) => { if (!elements[id]) elements[id] = { className: '', innerHTML: '', textContent: '', getBoundingClientRect: () => ({ width: 960 }), clientWidth: 960 }; return elements[id]; };",
             "const escapeHtml = (value) => String(value == null ? '' : value).replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));",
             "const trendColors = ['#176b87', '#c2410c', '#6d28d9', '#15803d', '#b91c1c', '#ca8a04', '#a21caf', '#475569'];",
+            "let trendSelection = null;",
             "let lastTrendSeries = [];",
             _trend_js_block(),
             script_body,
@@ -285,6 +287,46 @@ def test_existing_trend_stats_guards_remain_present():
     assert "clearTrendStats()" in render_source
     assert 'node.className = "trend-stats empty"' in clear_source
     assert 'el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value, el("trendVar5").value, el("trendVar6").value, el("trendVar7").value, el("trendVar8").value' in INDEX_HTML
+
+
+def test_trend_selection_uses_physical_timestamps_and_has_clear_feedback():
+    assert 'id="clearTrendSelection"' in INDEX_HTML
+    assert 'id="trendSelectionInfo"' in INDEX_HTML
+    assert 'el("clearTrendSelection").addEventListener("click", clearTrendSelection);' in INDEX_HTML
+    trend_source = INDEX_HTML.split("function renderTrendChart", 1)[1].split(
+        "function trendChartWidth", 1
+    )[0]
+
+    for marker in (
+        "let timeStart = Infinity;",
+        "let timeEnd = -Infinity;",
+        "const timeToX = (milliseconds)",
+        "const xToTime = (position)",
+        'id="trendSelectionHitbox"',
+        "data-trend-selection",
+        "setTrendWindowFromSelection(xToTime(start), xToTime(dragEnd));",
+        "formatTrendTimestamp(timeStart)",
+        "formatTrendTimestamp(timeEnd)",
+    ):
+        assert marker in trend_source
+
+    assert "function formatTrendDuration(milliseconds)" in INDEX_HTML
+    assert "已选择时间窗口" in INDEX_HTML
+    assert "趋势数据缺少可解析的时间戳" in INDEX_HTML
+
+
+def test_trend_selection_reset_restores_defaults_and_redraws():
+    reset_source = INDEX_HTML.split("function clearTrendSelection()", 1)[1].split(
+        "function timestampMilliseconds", 1
+    )[0]
+
+    assert "trendSelection = null;" in reset_source
+    assert 'trendTimeRangeMode = "manual";' in reset_source
+    assert "trendDefaultStart" in reset_source
+    assert "trendDefaultEnd" in reset_source
+    assert 'el("trendMaxPoints").value = "10000";' in reset_source
+    assert "updateTrendSelectionInfo();" in reset_source
+    assert "void drawTrend();" in reset_source
 
 
 def test_trend_js_avoids_large_array_spreads():

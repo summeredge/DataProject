@@ -3176,6 +3176,10 @@ INDEX_HTML = r"""<!doctype html>
             <input id="trendMaxPoints" type="number" min="100" max="100000" value="10000">
           </label>
         </div>
+        <div class="actions">
+          <button id="clearTrendSelection" type="button" class="secondary" disabled>清除选择</button>
+        </div>
+        <div id="trendSelectionInfo" class="help" aria-live="polite">可在趋势绘图区横向拖动选择时间窗口。</div>
         <div id="trendChart" class="chart empty">选择 1 到 4 个数据后点击“显示趋势”。</div>
         <div id="trendLegend" class="legend"></div>
         <div id="trendStats" class="trend-stats empty">选择数据并点击“显示趋势”后显示统计摘要。</div>
@@ -3400,6 +3404,9 @@ let trendTimeRangeMode = "auto";
 let trendSamplingIntervalMs = null;
 let trendLatestTime = "";
 let trendAutoWindowActive = false;
+let trendDefaultStart = "";
+let trendDefaultEnd = "";
+let trendSelection = null;
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
 const lagProfileCache = new Map();
@@ -3417,6 +3424,7 @@ el("drawTrend").addEventListener("click", drawTrend);
 el("trendStart").addEventListener("input", markTrendTimeRangeManual);
 el("trendEnd").addEventListener("input", markTrendTimeRangeManual);
 el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);
+el("clearTrendSelection").addEventListener("click", clearTrendSelection);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("preprocessMode").addEventListener("change", updatePreprocessControls);
 el("confirmRawBranch").addEventListener("click", () => confirmInitialScreeningBranch("raw"));
@@ -3704,8 +3712,12 @@ async function loadColumns() {
   trendSamplingIntervalMs = Number(data.trendSamplingIntervalMs);
   trendLatestTime = data.timeEnd || "";
   trendAutoWindowActive = false;
+  trendDefaultStart = data.trendStartDefault || "";
+  trendDefaultEnd = data.trendEndDefault || "";
+  trendSelection = null;
   if (data.trendStartDefault) el("trendStart").value = data.trendStartDefault;
   if (data.trendEndDefault) el("trendEnd").value = data.trendEndDefault;
+  updateTrendSelectionInfo();
     const loadCandidate = data.numericColumns.find((name) => /load|负荷|进料|流量|feed|rate/i.test(name));
     if (loadCandidate) {
       el("segmentColumn").value = loadCandidate;
@@ -4651,6 +4663,8 @@ function clearVariableFilters() {
 function markTrendTimeRangeManual() {
   trendTimeRangeMode = "manual";
   trendAutoWindowActive = false;
+  trendSelection = null;
+  updateTrendSelectionInfo();
 }
 
 function updateAutoTrendTimeRange() {
@@ -4687,6 +4701,66 @@ function appendChartQueryParams(params) {
   params.set("diff_interval_minutes", hasActiveContext ? (currentAnalysisContext.diff_interval_minutes ?? "") : el("diffIntervalMinutes").value.trim());
   params.set("detrend_window", hasActiveContext ? activeDetrendWindow : el("detrendWindow").value);
   params.set("excluded_columns", getExcludedColumnSelection().join(","));
+}
+
+function clearTrendSelection() {
+  trendSelection = null;
+  trendTimeRangeMode = "manual";
+  trendAutoWindowActive = false;
+  if (trendDefaultStart) el("trendStart").value = trendDefaultStart;
+  if (trendDefaultEnd) el("trendEnd").value = trendDefaultEnd;
+  el("trendMaxPoints").value = "10000";
+  updateTrendSelectionInfo();
+  if (fileId && lastTrendSeries.length) void drawTrend();
+}
+
+function timestampMilliseconds(value) {
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : null;
+}
+
+function datetimeLocalValue(milliseconds) {
+  const local = new Date(milliseconds - new Date(milliseconds).getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function formatTrendTimestamp(milliseconds) {
+  return datetimeLocalValue(milliseconds).replace("T", " ");
+}
+
+function formatTrendDuration(milliseconds) {
+  const totalMinutes = Math.max(0, Math.round(milliseconds / 60000));
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  const parts = [];
+  if (days) parts.push(`${days}天`);
+  if (hours) parts.push(`${hours}小时`);
+  if (minutes || !parts.length) parts.push(`${minutes}分钟`);
+  return parts.join("");
+}
+
+function updateTrendSelectionInfo() {
+  const button = el("clearTrendSelection");
+  const info = el("trendSelectionInfo");
+  if (!button || !info) return;
+  button.disabled = !trendSelection;
+  if (!trendSelection) {
+    info.textContent = "可在趋势绘图区横向拖动选择时间窗口。";
+    return;
+  }
+  info.textContent = `已选择时间窗口：${formatTrendTimestamp(trendSelection.start)} ～ ${formatTrendTimestamp(trendSelection.end)}（${formatTrendDuration(trendSelection.end - trendSelection.start)}）`;
+}
+
+function setTrendWindowFromSelection(start, end) {
+  const earlier = Math.min(start, end);
+  const later = Math.max(start, end);
+  trendSelection = { start: earlier, end: later };
+  trendTimeRangeMode = "manual";
+  trendAutoWindowActive = false;
+  el("trendStart").value = datetimeLocalValue(earlier);
+  el("trendEnd").value = datetimeLocalValue(later);
+  updateTrendSelectionInfo();
 }
 
 async function drawTrend() {
@@ -4954,11 +5028,29 @@ function renderTrendChart(series, axisMode) {
     return;
   }
   const width = trendChartWidth(container), height = 320, pad = { left: 76, right: axisMode === "independent" ? 76 : 28, top: 30, bottom: 44 };
-  let maxLen = 0;
-  for (const item of series) maxLen = Math.max(maxLen, item.points.length);
   const sharedRange = trendSharedRange(series);
   const ranges = series.map((item) => axisMode === "shared" ? sharedRange : valueRange(item.points));
-  const x = (index) => pad.left + (index / Math.max(1, maxLen - 1)) * (width - pad.left - pad.right);
+  let timeStart = Infinity;
+  let timeEnd = -Infinity;
+  for (const item of series) {
+    for (const point of (item.points || [])) {
+      const pointTime = timestampMilliseconds(point.x);
+      if (pointTime === null) continue;
+      timeStart = Math.min(timeStart, pointTime);
+      timeEnd = Math.max(timeEnd, pointTime);
+    }
+  }
+  if (!Number.isFinite(timeStart) || !Number.isFinite(timeEnd)) {
+    lastTrendSeries = [];
+    container.className = "chart empty";
+    container.textContent = "趋势数据缺少可解析的时间戳。";
+    el("trendLegend").innerHTML = "";
+    clearTrendStats();
+    return;
+  }
+  const plotWidth = width - pad.left - pad.right;
+  const timeToX = (milliseconds) => pad.left + (milliseconds - timeStart) / Math.max(1, timeEnd - timeStart) * plotWidth;
+  const xToTime = (position) => timeStart + (position - pad.left) / Math.max(1, plotWidth) * (timeEnd - timeStart);
   const y = (value, range) => pad.top + (1 - (value - range.min) / Math.max(1e-12, range.max - range.min)) * (height - pad.top - pad.bottom);
   const tickLineEnd = width - pad.right;
   const leftTicks = axisTicks(axisMode === "shared" ? sharedRange : ranges[0]);
@@ -4972,12 +5064,21 @@ function renderTrendChart(series, axisMode) {
     return `<line x1="${width - pad.right}" y1="${yPos}" x2="${width - pad.right + 4}" y2="${yPos}" stroke="#9aa4b2"/><text x="${width - pad.right + 8}" y="${yPos}" text-anchor="start" dominant-baseline="middle" font-size="11" fill="#5f6b7a">${formatAxisValue(tick)}</text>`;
   }).join("");
   const paths = series.map((item, idx) => {
-    const points = item.points.map((point, index) => {
-      const value = Number(point.y);
-      return Number.isFinite(value) ? `${x(index).toFixed(2)},${y(value, ranges[idx]).toFixed(2)}` : null;
+    const points = (item.points || []).map((point) => {
+      const value = trendFiniteValue(point);
+      const pointTime = timestampMilliseconds(point.x);
+      return Number.isFinite(value) && pointTime !== null
+        ? `${timeToX(pointTime).toFixed(2)},${y(value, ranges[idx]).toFixed(2)}`
+        : null;
     }).filter(Boolean).join(" ");
     return `<polyline points="${points}" fill="none" stroke="${trendColors[idx % trendColors.length]}" stroke-width="2.2"/>`;
   }).join("");
+  const currentSelection = trendSelection && trendSelection.start >= timeStart && trendSelection.end <= timeEnd
+    ? trendSelection
+    : null;
+  const selectionMarkup = currentSelection
+    ? `<g data-trend-selection pointer-events="none"><rect x="${timeToX(currentSelection.start)}" y="${pad.top}" width="${Math.max(0, timeToX(currentSelection.end) - timeToX(currentSelection.start))}" height="${height - pad.top - pad.bottom}" fill="#176b87" fill-opacity=".18"/><line data-trend-selection-edge="start" x1="${timeToX(currentSelection.start)}" x2="${timeToX(currentSelection.start)}" y1="${pad.top}" y2="${height - pad.bottom}" stroke="#176b87" stroke-width="1.5"/><line data-trend-selection-edge="end" x1="${timeToX(currentSelection.end)}" x2="${timeToX(currentSelection.end)}" y1="${pad.top}" y2="${height - pad.bottom}" stroke="#176b87" stroke-width="1.5"/></g>`
+    : '<g data-trend-selection pointer-events="none" visibility="hidden"><rect y="0" height="0" fill="#176b87" fill-opacity=".18"/><line data-trend-selection-edge="start"/><line data-trend-selection-edge="end"/></g>';
   const axisNote = axisMode === "independent"
     ? "独立 Y 轴：坐标1对应数据1，坐标2对应数据2，其它曲线仍按自身范围缩放，仅作趋势形态对比"
     : "同一 Y 轴：所有曲线使用同一数值范围";
@@ -4991,11 +5092,73 @@ function renderTrendChart(series, axisMode) {
     ${rightTickSvg}
     <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">${escapeHtml(axisNote)}</text>
     ${paths}
+    ${selectionMarkup}
+    <rect id="trendSelectionHitbox" x="${pad.left}" y="${pad.top}" width="${plotWidth}" height="${height - pad.top - pad.bottom}" fill="transparent" style="cursor:crosshair;touch-action:none"/>
+    <text x="${pad.left}" y="${height - 10}" font-size="10" fill="#5f6b7a">${escapeHtml(formatTrendTimestamp(timeStart))}</text>
+    <text x="${width - pad.right}" y="${height - 10}" text-anchor="end" font-size="10" fill="#5f6b7a">${escapeHtml(formatTrendTimestamp(timeEnd))}</text>
   </svg>`;
   el("trendLegend").innerHTML = series.map((item, idx) =>
     `<span><i class="swatch" style="background:${trendColors[idx % trendColors.length]}"></i>${escapeHtml(item.name)}</span>`
   ).join("");
   renderTrendStats(series);
+  updateTrendSelectionInfo();
+  if (typeof container.querySelector !== "function") return;
+  const svg = container.querySelector("svg");
+  const hitbox = container.querySelector("#trendSelectionHitbox");
+  const selectionGroup = svg?.querySelector("[data-trend-selection]");
+  const selectionArea = selectionGroup?.querySelector("rect");
+  const selectionEdges = selectionGroup?.querySelectorAll("[data-trend-selection-edge]");
+  if (!svg || !hitbox || !selectionGroup || !selectionArea || !selectionEdges?.length) return;
+  const positionFromEvent = (event) => {
+    const bounds = svg.getBoundingClientRect();
+    const position = (event.clientX - bounds.left) / Math.max(1, bounds.width) * width;
+    return Math.min(width - pad.right, Math.max(pad.left, position));
+  };
+  const drawSelection = (start, end) => {
+    const left = Math.min(timeToX(start), timeToX(end));
+    const right = Math.max(timeToX(start), timeToX(end));
+    selectionGroup.removeAttribute("visibility");
+    selectionArea.setAttribute("x", left);
+    selectionArea.setAttribute("y", pad.top);
+    selectionArea.setAttribute("width", right - left);
+    selectionArea.setAttribute("height", height - pad.top - pad.bottom);
+    selectionEdges[0].setAttribute("x1", left);
+    selectionEdges[0].setAttribute("x2", left);
+    selectionEdges[0].setAttribute("y1", pad.top);
+    selectionEdges[0].setAttribute("y2", height - pad.bottom);
+    selectionEdges[1].setAttribute("x1", right);
+    selectionEdges[1].setAttribute("x2", right);
+    selectionEdges[1].setAttribute("y1", pad.top);
+    selectionEdges[1].setAttribute("y2", height - pad.bottom);
+  };
+  const restoreSelection = () => {
+    if (trendSelection && trendSelection.start >= timeStart && trendSelection.end <= timeEnd) {
+      drawSelection(trendSelection.start, trendSelection.end);
+    } else {
+      selectionGroup.setAttribute("visibility", "hidden");
+    }
+  };
+  let dragStart = null;
+  hitbox.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    dragStart = positionFromEvent(event);
+    hitbox.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  hitbox.addEventListener("pointermove", (event) => {
+    if (dragStart === null) return;
+    drawSelection(xToTime(dragStart), xToTime(positionFromEvent(event)));
+  });
+  hitbox.addEventListener("pointerup", (event) => {
+    if (dragStart === null) return;
+    const dragEnd = positionFromEvent(event);
+    const start = dragStart;
+    dragStart = null;
+    if (Math.abs(dragEnd - start) < 3) return restoreSelection();
+    setTrendWindowFromSelection(xToTime(start), xToTime(dragEnd));
+    drawSelection(trendSelection.start, trendSelection.end);
+  });
+  hitbox.addEventListener("pointercancel", () => { dragStart = null; restoreSelection(); });
 }
 
 function trendChartWidth(container) {
@@ -7202,6 +7365,9 @@ function reset() {
   trendSamplingIntervalMs = null;
   trendLatestTime = "";
   trendAutoWindowActive = false;
+  trendDefaultStart = "";
+  trendDefaultEnd = "";
+  trendSelection = null;
   lastScatterMatrixPayload = null;
   tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
@@ -7246,6 +7412,7 @@ function reset() {
   el("trendStart").value = "";
   el("trendEnd").value = "";
   el("trendMaxPoints").value = "10000";
+  updateTrendSelectionInfo();
   el("analyze").disabled = true;
   el("runEnhancedScreening").disabled = true;
   el("runGranger").disabled = true;

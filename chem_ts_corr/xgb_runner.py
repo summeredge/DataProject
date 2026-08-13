@@ -19,6 +19,9 @@ from chem_ts_corr.preprocess import (
 from chem_ts_corr.xgb_validation import (
     DEFAULT_CANDIDATE_LAG_RADIUS,
     DEFAULT_EARLY_STOPPING_ROUNDS,
+    DEFAULT_XGB_MIN_TEST_ROWS,
+    DEFAULT_XGB_MIN_TRAIN_ROWS,
+    DEFAULT_XGB_MIN_VALIDATION_ROWS,
     DEFAULT_XGB_TOP_N,
     DEFAULT_XGB_PARAMS,
     CandidateUpliftMetric,
@@ -449,12 +452,7 @@ def run_xgb_validation_fold_safe(
             ).drop(columns="_candidate_order").reset_index(drop=True)
 
         data_fingerprint = (
-            _xgb_data_fingerprint(
-                fold_data[0]["train_fs"].features.loc[:, list(m1)],
-                fold_data[0]["train_fs"].target,
-            )
-            if fold_data
-            else ""
+            _fold_safe_data_fingerprint(fold_data, m2) if fold_data else ""
         )
         paths = {name: output_dir / name for name in XGB_OUTPUT_FILES}
         summary_payload = {
@@ -463,7 +461,7 @@ def run_xgb_validation_fold_safe(
             "candidate_count": int(len(candidate_summary)),
             "candidate_pool_count": int(len(candidate_pool)),
             "fold_count": int(len(splits)),
-            "row_count": int(len(split_base)),
+            "row_count": int(len(predictions)),
             "m0_feature_count": int(len(m0)),
             "m1_feature_count": int(len(m1)),
             "m2_feature_count": int(len(m2)),
@@ -588,6 +586,79 @@ def _fold_safe_partition_features(
     )
 
 
+def _require_fold_safe_effective_rows(
+    *,
+    fold: int,
+    train_rows: int,
+    validation_rows: int,
+    test_rows: int,
+) -> None:
+    """Reject a fold whose real model input falls below the fixed minimums.
+
+    These rows are the effective sample after preprocessing, target mask, lag
+    feature alignment and complete-case dropna; the split-base slice lengths
+    are only the initial fold geometry.
+    """
+    if train_rows < DEFAULT_XGB_MIN_TRAIN_ROWS:
+        raise ValueError(
+            f"fold {fold} effective train rows {train_rows} are below "
+            f"min_train_rows {DEFAULT_XGB_MIN_TRAIN_ROWS}"
+        )
+    if validation_rows < DEFAULT_XGB_MIN_VALIDATION_ROWS:
+        raise ValueError(
+            f"fold {fold} effective validation rows {validation_rows} are below "
+            f"min_validation_rows {DEFAULT_XGB_MIN_VALIDATION_ROWS}"
+        )
+    if test_rows < DEFAULT_XGB_MIN_TEST_ROWS:
+        raise ValueError(
+            f"fold {fold} effective test rows {test_rows} are below "
+            f"min_test_rows {DEFAULT_XGB_MIN_TEST_ROWS}"
+        )
+
+
+def _fold_safe_data_fingerprint(
+    fold_data: list[dict[str, object]],
+    m2: tuple[str, ...],
+) -> str:
+    """Hash every fold's actual train / validation / test model input.
+
+    The description frame carries fold id, partition type, the original time
+    index, target values and the full M2 feature columns (M2 includes every
+    candidate's features), so any real model-input change is detected while
+    unused unrelated columns are ignored. It contains no paths, timestamps or
+    random values.
+    """
+    frames: list[pd.DataFrame] = []
+    for entry in fold_data:
+        fold = int(entry["fold"])
+        partitions = (
+            ("train", entry["train_fs"].features, entry["train_fs"].target),
+            ("validation", entry["validation_features"], entry["validation_target"]),
+            ("test", entry["test_features"], entry["test_target"]),
+        )
+        for partition, features, target in partitions:
+            if features.empty:
+                continue
+            frame = features.copy(deep=True)
+            frame["fold"] = fold
+            frame["partition"] = partition
+            frame["__target__"] = target.to_numpy()
+            frames.append(frame)
+    if not frames:
+        return ""
+    combined = pd.concat(frames, axis=0)
+    ordered_columns = [
+        "fold",
+        "partition",
+        *(column for column in m2 if column in combined.columns),
+        "__target__",
+    ]
+    combined = combined.loc[:, ordered_columns]
+    features_frame = combined.drop(columns="__target__")
+    target_series = combined["__target__"].rename("target")
+    return _xgb_data_fingerprint(features_frame, target_series)
+
+
 def _fold_safe_run_models(
     split_base: pd.DataFrame,
     splits,
@@ -640,7 +711,7 @@ def _fold_safe_run_models(
             target_mask=target_mask,
         )
         if canonical is None:
-            if train_fs.features.empty or not train_fs.m2_features:
+            if not train_fs.m2_features:
                 raise ValueError("No valid XGB features available")
             canonical = (
                 train_fs.m0_features,
@@ -677,6 +748,13 @@ def _fold_safe_run_models(
         test_keep = test_fs.features.index.intersection(transformed["test"].index)
         test_features = test_fs.features.loc[test_keep]
         test_target = test_fs.target.loc[test_keep]
+
+        _require_fold_safe_effective_rows(
+            fold=split.fold,
+            train_rows=len(train_fs.features),
+            validation_rows=len(validation_features),
+            test_rows=len(test_features),
+        )
 
         model_features = {"M0": m0, "M1": m1, "M2": m2}
         fold_predictions = {

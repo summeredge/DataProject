@@ -44,6 +44,9 @@ DEFAULT_XGB_PARAMS = {
     "random_state": 42,
 }
 DEFAULT_EARLY_STOPPING_ROUNDS = 50
+DEFAULT_XGB_MIN_TRAIN_ROWS = 100
+DEFAULT_XGB_MIN_VALIDATION_ROWS = 30
+DEFAULT_XGB_MIN_TEST_ROWS = 30
 XGB_TRAIN_MODEL_NAMES = frozenset({"M0", "M1", "M2", "CANDIDATE"})
 XGB_VALIDATION_STATUS = frozenset(
     {
@@ -514,9 +517,9 @@ def build_expanding_time_splits(
     n_splits: int = DEFAULT_OUTER_SPLITS,
     gap: int = 0,
     validation_fraction: float = DEFAULT_VALIDATION_FRACTION,
-    min_train_rows: int = 100,
-    min_validation_rows: int = 30,
-    min_test_rows: int = 30,
+    min_train_rows: int = DEFAULT_XGB_MIN_TRAIN_ROWS,
+    min_validation_rows: int = DEFAULT_XGB_MIN_VALIDATION_ROWS,
+    min_test_rows: int = DEFAULT_XGB_MIN_TEST_ROWS,
 ) -> list[XGBTimeSplit]:
     if n_samples <= 0:
         raise ValueError("n_samples must be positive")

@@ -335,7 +335,9 @@
   `model_discovered_candidates.csv`；
 - 运行前后前三层正式文件 byte-identical；成功只写五个 XGB 输出文件；
 - 首次成功创建 downstream lock，已有 lock 仍可继续运行；
-- 缺失 xgboost 返回 `missing_dependency`。
+- 缺失 xgboost 返回 `missing_dependency`；
+- 正式入口返回有效样本不足导致的 `invalid_input`（例如工况 mask 使
+  effective train rows < 100）；正式入口 `row_count == len(xgb_predictions.csv)`。
 
 `tests/test_xgb_fold_preprocessing_isolation.py` 覆盖 fold 状态隔离：
 
@@ -344,4 +346,12 @@
   （lowpass / lowpass_detrend / lowpass_diff）；
 - diff 首值不跨 partition 借用上一分区；forward-fill 不跨 partition；
 - partition 内真实物理缺口仍按现有 lowpass / diff / ffill 规则重启；
-- raw 分支仍使用 expanding split、gap 与 positive lag。
+- raw 分支仍使用 expanding split、gap 与 positive lag；
+- 每个 fold 在 preprocessing / target mask / lag / dropna 后再次校验
+  100 / 30 / 30 有效样本下限，不足时返回 `invalid_input` 且不训练任何模型，
+  已有五个输出保持不变；
+- lowpass_diff 或 lag 删除导致有效样本不足时正确阻断；
+- `row_count` 等于实际 out-of-time prediction rows，不等于 split-base 行数；
+- `data_fingerprint` 覆盖所有 fold 实际 train / validation / test 输入：修改
+  任意 test / validation / 非首 fold 实际数据都会改变 fingerprint，相同输入
+  重复执行稳定，未进入 feature 的无关列变化不影响 fingerprint。

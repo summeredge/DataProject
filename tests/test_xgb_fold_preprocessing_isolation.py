@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -104,6 +106,34 @@ def _run_fold_safe(tmp_path, data: pd.DataFrame, monkeypatch, **kwargs):
         **kwargs,
     )
     return result, captured
+
+
+def _frames_with_load(rows: int = 700, *, non_operating: slice | None = None) -> pd.DataFrame:
+    frame = _frames(rows)
+    frame["load"] = 0.0
+    if non_operating is not None:
+        frame.iloc[non_operating, frame.columns.get_loc("load")] = 1.0
+    return frame
+
+
+def _mask_kwargs() -> dict[str, object]:
+    return {
+        "segment_column": "load",
+        "segment_mode": "custom",
+        "segment_min": 0,
+        "segment_max": 0,
+    }
+
+
+def _fingerprint(run_dir, data: pd.DataFrame, monkeypatch, **kwargs) -> str:
+    result, _ = _run_fold_safe(run_dir, data, monkeypatch, **kwargs)
+    assert result.status == "success", result.error_message
+    payload = json.loads(
+        (run_dir / "xgb_validation/xgb_validation_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return payload["data_fingerprint"]
 
 
 def test_resolve_max_used_lag_matches_baseline_and_candidate_windows():
@@ -264,3 +294,151 @@ def test_m1_baseline_trained_once_per_fold_not_once_per_candidate(
     assert result.status == "success"
     assert sum(1 for call in captured if call["model_name"] == "M1") == 3
     assert sum(1 for call in captured if call["model_name"] == "CANDIDATE") == 6
+
+
+# --- Effective sample minimums after preprocessing / mask / lag / dropna ---
+
+
+def test_effective_train_rows_checked_after_target_mask(tmp_path, monkeypatch):
+    data = _frames_with_load(non_operating=slice(0, 135))
+
+    result, captured = _run_fold_safe(tmp_path, data, monkeypatch, **_mask_kwargs())
+
+    assert result.status == "invalid_input"
+    assert "effective train rows" in result.error_message
+    assert "min_train_rows 100" in result.error_message
+    assert captured == []
+    assert not list((tmp_path / "xgb_validation").glob("*"))
+
+
+def test_effective_validation_rows_checked_after_target_mask(tmp_path, monkeypatch):
+    data = _frames_with_load(non_operating=slice(140, None))
+
+    result, captured = _run_fold_safe(tmp_path, data, monkeypatch, **_mask_kwargs())
+
+    assert result.status == "invalid_input"
+    assert "effective validation rows" in result.error_message
+    assert "min_validation_rows 30" in result.error_message
+    assert captured == []
+
+
+def test_effective_test_rows_checked_after_target_mask(tmp_path, monkeypatch):
+    data = _frames_with_load(non_operating=slice(175, 350))
+
+    result, captured = _run_fold_safe(tmp_path, data, monkeypatch, **_mask_kwargs())
+
+    assert result.status == "invalid_input"
+    assert "effective test rows" in result.error_message
+    assert "min_test_rows 30" in result.error_message
+    assert captured == []
+
+
+def test_segment_mask_triggers_real_minimum_without_training(tmp_path, monkeypatch):
+    data = _frames_with_load(non_operating=slice(0, 135))
+    result, captured = _run_fold_safe(tmp_path, data, monkeypatch, **_mask_kwargs())
+
+    assert result.status == "invalid_input"
+    assert captured == []
+    assert not list((tmp_path / "xgb_validation").glob("*"))
+
+
+def test_lowpass_diff_effective_rows_checked(tmp_path, monkeypatch):
+    result, captured = _run_fold_safe(
+        tmp_path, _frames(), monkeypatch, preprocess_mode="lowpass_diff"
+    )
+
+    assert result.status == "invalid_input"
+    assert "effective validation rows" in result.error_message
+    assert "min_validation_rows 30" in result.error_message
+    assert captured == []
+
+
+def test_sufficient_fold_still_succeeds(tmp_path, monkeypatch):
+    result, captured = _run_fold_safe(tmp_path, _frames(), monkeypatch)
+
+    assert result.status == "success"
+    assert captured
+
+
+def test_effective_row_failure_preserves_existing_outputs(tmp_path, monkeypatch):
+    output_dir = tmp_path / "xgb_validation"
+    output_dir.mkdir()
+    old_contents = {name: f"old::{name}" for name in runner.XGB_OUTPUT_FILES}
+    for name, content in old_contents.items():
+        (output_dir / name).write_text(content, encoding="utf-8")
+
+    data = _frames_with_load(non_operating=slice(0, 135))
+    result, captured = _run_fold_safe(tmp_path, data, monkeypatch, **_mask_kwargs())
+
+    assert result.status == "invalid_input"
+    assert captured == []
+    for name, content in old_contents.items():
+        assert (output_dir / name).read_text(encoding="utf-8") == content
+
+
+# --- row_count and data_fingerprint audit semantics -----------------------
+
+
+def test_row_count_equals_out_of_time_prediction_rows(tmp_path, monkeypatch):
+    result, _ = _run_fold_safe(tmp_path, _frames(), monkeypatch)
+
+    assert result.status == "success"
+    payload = json.loads(
+        (tmp_path / "xgb_validation/xgb_validation_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    predictions = pd.read_csv(tmp_path / "xgb_validation/xgb_predictions.csv")
+    assert payload["row_count"] == len(predictions)
+    assert payload["row_count"] != 700
+
+
+def test_fingerprint_changes_when_test_data_changes(tmp_path, monkeypatch):
+    baseline = _frames()
+    changed = baseline.copy(deep=True)
+    changed.iloc[200, changed.columns.get_loc("x")] = 1e12
+
+    fingerprint_a = _fingerprint(tmp_path / "a", baseline, monkeypatch)
+    fingerprint_b = _fingerprint(tmp_path / "b", changed, monkeypatch)
+
+    assert fingerprint_a != fingerprint_b
+
+
+def test_fingerprint_changes_when_validation_data_changes(tmp_path, monkeypatch):
+    baseline = _frames()
+    changed = baseline.copy(deep=True)
+    changed.iloc[150, changed.columns.get_loc("x")] = 1e12
+
+    fingerprint_a = _fingerprint(tmp_path / "a", baseline, monkeypatch)
+    fingerprint_b = _fingerprint(tmp_path / "b", changed, monkeypatch)
+
+    assert fingerprint_a != fingerprint_b
+
+
+def test_fingerprint_changes_for_non_first_fold(tmp_path, monkeypatch):
+    baseline = _frames()
+    changed = baseline.copy(deep=True)
+    changed.iloc[600, changed.columns.get_loc("x")] = 1e12
+
+    fingerprint_a = _fingerprint(tmp_path / "a", baseline, monkeypatch)
+    fingerprint_b = _fingerprint(tmp_path / "b", changed, monkeypatch)
+
+    assert fingerprint_a != fingerprint_b
+
+
+def test_fingerprint_stable_across_repeated_runs(tmp_path, monkeypatch):
+    fingerprint_a = _fingerprint(tmp_path / "a", _frames(), monkeypatch)
+    fingerprint_b = _fingerprint(tmp_path / "b", _frames(), monkeypatch)
+
+    assert fingerprint_a == fingerprint_b
+
+
+def test_fingerprint_ignores_unused_unrelated_column_changes(tmp_path, monkeypatch):
+    baseline = _frames().assign(junk=np.arange(700, dtype=float) * 7.0)
+    changed = baseline.copy(deep=True)
+    changed.iloc[600, changed.columns.get_loc("junk")] = 1e12
+
+    fingerprint_a = _fingerprint(tmp_path / "a", baseline, monkeypatch)
+    fingerprint_b = _fingerprint(tmp_path / "b", changed, monkeypatch)
+
+    assert fingerprint_a == fingerprint_b

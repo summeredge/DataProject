@@ -115,3 +115,19 @@ target 缺失处理、固定采样周期），随后对每个 `train` / `gap_1` 
 detrend / diff / forward-fill 状态不跨 fold 边界；gap 仍等于实际 max used lag，
 并作为 positive lag history buffer。M0 / M1 / M2 定义、candidate uplift 判定、
 XGB 参数与输出 schema 均保持不变。
+
+### 有效样本下限与审计字段
+
+- split-base 上的 `train >= 100` / `validation >= 30` / `test >= 30` 只是初始
+  fold 几何约束；正式 fold-safe XGB 在每个 fold 完成 preprocessing、工况
+  target mask、lag feature alignment 与 complete-case dropna 后，再次按同一
+  组下限（100 / 30 / 30）检查真正送入模型的有效行数。任一 partition 有效样本
+  不足时整个 XGB 返回 `invalid_input`，不训练、不生成部分结果，已有
+  `xgb_validation/` 输出按 transactional 行为保护。
+- formal fold-safe 的 `row_count` 表示实际 out-of-time prediction /
+  evaluation rows，即 `xgb_predictions.csv` 行数（legacy runner 的
+  `row_count` 仍表示 legacy feature-set 的有效行数）。
+- `data_fingerprint` 覆盖所有 fold 实际用于模型的 train / validation / test
+  输入（fold id、partition 类型、时间索引、target、M1 与 M2 特征），不再只
+  覆盖第一个 fold 的 train M1；修改任一实际模型输入都会改变 fingerprint，
+  未进入模型 feature 的无关列变化不影响 fingerprint，重复执行相同输入保持稳定。

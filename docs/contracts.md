@@ -551,3 +551,20 @@ run_causal_review_for_active_branch(
 - 三级复核不自动调用增强筛选、普通 Granger、模型或 XGBoost 阶段，阶段保持
   独立；XGBoost 正式 branch/context 与 fold preprocessing isolation
   （PR-12）已实现，Web/API/CLI 双分支工作流总接入（PR-13）尚未实现。
+
+## XGBoost 正式 fold-safe 有效样本与审计字段契约（PR-12）
+
+- split-base 的 `train >= 100` / `validation >= 30` / `test >= 30` 仅为初始
+  fold 几何约束；正式 fold-safe XGB 在每个 fold 完成 preprocessing、工况
+  target mask、lag feature alignment 与 complete-case dropna 后，再次按同一
+  下限检查真正送入模型的有效行数。
+- 任一 partition 有效样本不足时整个 XGB 返回 `invalid_input`，不得静默跳过
+  fold、减少 fold 数、自动放宽下限、关闭工况 mask、减少 lag 或继续生成部分
+  结果；已有 `xgb_validation/` 五个输出按 transactional 行为保护。
+- formal fold-safe `row_count` 表示实际 out-of-time prediction rows（即
+  `xgb_predictions.csv` 行数）；legacy runner 的 `row_count` 仍表示 legacy
+  feature-set 有效行数。字段名不变。
+- `data_fingerprint` 覆盖所有 fold 实际用于模型的 train / validation / test
+  输入（fold id、partition 类型、时间索引、target、M1 与 M2 特征），不再只
+  覆盖第一个 fold 的 train M1；不得包含文件路径、`run_dir`、`created_at` 或
+  随机值，相同输入重复执行必须稳定。

@@ -124,7 +124,11 @@ def _write_context(run_dir: Path, **overrides) -> None:
     )
 
 
-def _write_input_csv(config: AnalysisConfig, rows: int = 700) -> None:
+def _write_input_csv(
+    config: AnalysisConfig,
+    rows: int = 700,
+    load: pd.Series | None = None,
+) -> None:
     time = pd.date_range("2026-01-01", periods=rows, freq="min")
     frame = pd.DataFrame(
         {
@@ -133,8 +137,11 @@ def _write_input_csv(config: AnalysisConfig, rows: int = 700) -> None:
         },
         index=time,
     )
+    if load is not None:
+        frame["load"] = load.to_numpy()
     table = frame.reset_index().rename(columns={"index": config.time_column})
-    table[[config.time_column, "target", "x"]].to_csv(
+    columns = [config.time_column, "target", "x", *(["load"] if load is not None else [])]
+    table[columns].to_csv(
         config.input_path, index=False, encoding=config.encoding
     )
 
@@ -440,3 +447,44 @@ def test_pr12_runner_source_preserves_formal_contract():
         assert forbidden not in body
     assert "required_formal_files=XGB_FORMAL_INPUT_FILES" in body
     assert "run_xgb_validation_fold_safe" in body
+
+
+def test_formal_runner_returns_invalid_input_for_effective_train_shortfall(
+    tmp_path: Path, monkeypatch
+):
+    config = _config(
+        tmp_path,
+        segment_column="load",
+        segment_mode="custom",
+        segment_min=0,
+        segment_max=0,
+    )
+    _write_formal_root(tmp_path)
+    _write_context(tmp_path)
+    load = pd.Series(np.zeros(700, dtype=float))
+    load.iloc[:135] = 1.0
+    _write_input_csv(config, load=load)
+    _install_fake_dependency(monkeypatch)
+
+    result = run_xgb_for_active_branch(tmp_path, base_config=config)
+
+    assert result["status"] == "invalid_input"
+    assert "effective train rows" in result["error_message"]
+    assert "min_train_rows 100" in result["error_message"]
+
+
+def test_formal_runner_row_count_matches_predictions(tmp_path: Path, monkeypatch):
+    config = _make_raw_run(tmp_path)
+    _write_input_csv(config)
+    _install_fake_dependency(monkeypatch)
+
+    result = run_xgb_for_active_branch(tmp_path, base_config=config)
+
+    assert result["status"] == "success"
+    payload = json.loads(
+        (tmp_path / "xgb_validation/xgb_validation_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    predictions = pd.read_csv(tmp_path / "xgb_validation/xgb_predictions.csv")
+    assert payload["row_count"] == len(predictions)

@@ -168,8 +168,19 @@ run_directory/
 - 未锁定目录重新用于新 workflow 时先校验 mode，再清理旧 root 正式文件与旧
   context，避免暴露上一轮正式结果。
 
+当前已实现（PR-12）：
+
+- XGBoost 正式 branch/context 接入：`run_xgb_for_active_branch()` 复用
+  `prepare_downstream_analysis_context()`，只消费正式 root 的
+  `ranked_features.csv` 与已执行 PR-11 生成的 `final_review_summary.csv`；
+- XGBoost fold preprocessing isolation：先建立单一 split base 时间轴
+  （统一 resample、target 缺失处理、固定采样周期），随后对每个
+  `train` / `gap_1` / `validation` / `gap_2` / `test` 分区独立执行 causal
+  preprocessing 与 transform，lowpass / detrend / diff / forward-fill 状态
+  不得跨 fold 边界；gap 继续承担 positive lag history buffer，且等于实际
+  max used lag。
+
 当前尚未实现：
 
 - Web / API / CLI confirmation UI；
-- XGBoost preprocessing consistency（PR-12）；
 - Web / API / CLI 双分支工作流总接入（PR-13）。

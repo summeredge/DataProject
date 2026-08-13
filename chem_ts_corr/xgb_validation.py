@@ -371,6 +371,39 @@ def candidate_lag_window(
     return tuple(range(max(1, lag - radius), min(max_lag, lag + radius) + 1))
 
 
+def resolve_xgb_max_used_lag(
+    candidate_pool: pd.DataFrame,
+    *,
+    max_lag: int,
+    baseline_lags: Sequence[int] = DEFAULT_BASELINE_LAGS,
+    candidate_lag_radius: int = DEFAULT_CANDIDATE_LAG_RADIUS,
+    available_columns: Sequence[str] | None = None,
+) -> int:
+    """Resolve the largest positive lag actually used by XGB feature sets.
+
+    This is the fold ``gap`` value. It reuses ``normalize_positive_lags`` and
+    ``candidate_lag_window`` so the result always matches the lag set that
+    ``build_xgb_feature_sets`` would construct for the same inputs.
+    """
+    used = set(normalize_positive_lags([1, *baseline_lags], max_lag))
+    available = None if available_columns is None else {_text(value) for value in available_columns}
+    if (
+        candidate_pool is not None
+        and not candidate_pool.empty
+        and "variable" in candidate_pool.columns
+    ):
+        for _, row in candidate_pool.iterrows():
+            variable = _text(row.get("variable"))
+            if available is not None and variable not in available:
+                continue
+            used.update(
+                candidate_lag_window(
+                    row.get("screening_lag"), max_lag, candidate_lag_radius
+                )
+            )
+    return max(used) if used else 1
+
+
 def validate_xgb_max_lag(max_lag: object) -> int:
     if isinstance(max_lag, bool) or not isinstance(max_lag, Integral):
         raise ValueError("max_lag must be an integer between 1 and 5000")

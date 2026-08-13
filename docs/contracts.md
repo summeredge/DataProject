@@ -549,5 +549,5 @@ run_causal_review_for_active_branch(
   `initial_screening_context_missing` / `initial_screening_context_invalid`，
   均不得 fallback；
 - 三级复核不自动调用增强筛选、普通 Granger、模型或 XGBoost 阶段，阶段保持
-  独立；XGBoost preprocessing consistency（PR-12）与 Web/API/CLI 双分支
-  工作流总接入（PR-13）尚未实现。
+  独立；XGBoost 正式 branch/context 与 fold preprocessing isolation
+  （PR-12）已实现，Web/API/CLI 双分支工作流总接入（PR-13）尚未实现。

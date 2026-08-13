@@ -148,6 +148,8 @@ def preprocess_frame_causal(
     target: str,
     resample_rule: str | None,
     max_forward_fill_gap_points: int = 5,
+    *,
+    min_rows: int = 10,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     if resample_rule:
@@ -163,8 +165,10 @@ def preprocess_frame_causal(
         cleaned[predictor_columns] = cleaned[predictor_columns].groupby(groups).ffill(
             limit=max_forward_fill_gap_points
         )
-    if len(cleaned) < 10:
-        raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
+    if len(cleaned) < min_rows:
+        raise ValueError(
+            f"Not enough usable rows after preprocessing; at least {min_rows} are required"
+        )
     return preserve_sample_period(cleaned, period_ns)
 
 

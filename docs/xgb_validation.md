@@ -96,3 +96,22 @@ python scripts/benchmark_xgb_validation.py --rows 50000 --variables 50 --candida
 ## 10. 解释边界
 
 预测增量不等于因果成立，不代表变量可操纵，也不代表变量适合进入 APC。XGB 不会消除共线性、共同负荷、公式泄漏或数据质量风险。结果只用于独立工程解释，不会修改 `final_score`、`driver_rank`、`final_rank`、候选等级或风险标签，也不会自动删除候选。
+
+## 11. 正式 branch/context 与 fold preprocessing isolation
+
+正式 XGB backend `run_xgb_for_active_branch()`（`chem_ts_corr/pipeline.py`）只消费：
+
+- 正式 root 的 `ranked_features.csv`；
+- 已执行 PR-11 生成的 `final_review_summary.csv`；
+- `preprocessing_context.json` 中的 active branch 与 active preprocessing 参数；
+- 原始输入数据。
+
+缺失 `final_review_summary.csv` 会在模型训练前明确拒绝，不自动运行三级复核；
+`awaiting_confirmation` 拒绝 `initial_screening_branch_not_confirmed`。
+
+正式 XGB 使用 fold-safe backend：先建立单一 split base 时间轴（统一 resample、
+target 缺失处理、固定采样周期），随后对每个 `train` / `gap_1` / `validation` /
+`gap_2` / `test` 分区独立执行 causal preprocessing 与 transform，lowpass /
+detrend / diff / forward-fill 状态不跨 fold 边界；gap 仍等于实际 max used lag，
+并作为 positive lag history buffer。M0 / M1 / M2 定义、candidate uplift 判定、
+XGB 参数与输出 schema 均保持不变。

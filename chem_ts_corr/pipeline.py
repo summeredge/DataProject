@@ -73,6 +73,10 @@ CAUSAL_REVIEW_FORMAL_INPUT_FILES = [
     "causal_review_candidates.csv",
     "risk_flags.csv",
 ]
+XGB_FORMAL_INPUT_FILES = [
+    "ranked_features.csv",
+    "final_review_summary.csv",
+]
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
@@ -1378,6 +1382,101 @@ def run_causal_review_for_active_branch(
         "causal_review_report_path": run_dir / "causal_review_report.csv",
         "causal_review_evidence_path": run_dir / "causal_review_evidence.csv",
         "final_review_summary_path": run_dir / "final_review_summary.csv",
+    }
+
+
+def run_xgb_for_active_branch(
+    run_dir: Path,
+    *,
+    base_config: AnalysisConfig | None = None,
+    control_columns: list[str] | None = None,
+    whitelist: list[str] | None = None,
+    top_n: int | None = None,
+    max_lag: int | None = None,
+    progress_callback=None,
+) -> dict[str, object]:
+    """Run the fold-safe XGB validation on the active formal screening branch.
+
+    The formal ``preprocessing_context.json`` is the only source of truth for
+    the branch and its preprocessing parameters. XGB requires the promoted
+    ``ranked_features.csv`` and the PR-11 ``final_review_summary.csv``; it
+    never re-runs the three-tier review and never reads branch directories or
+    preprocessing comparisons. The existing fold-safe backend keeps
+    lowpass/detrend/diff/forward-fill state isolated per fold.
+    """
+    run_dir = Path(run_dir)
+    context, config = prepare_downstream_analysis_context(
+        run_dir,
+        base_config=base_config,
+        required_formal_files=XGB_FORMAL_INPUT_FILES,
+    )
+    _progress(progress_callback, "正在运行 XGB 四级验证（正式 branch）")
+    from chem_ts_corr import web as web_module
+    from chem_ts_corr.xgb_runner import run_xgb_validation_fold_safe
+
+    ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+    final_review_summary = pd.read_csv(
+        run_dir / "final_review_summary.csv", encoding="utf-8-sig"
+    )
+
+    resolved_control_columns = (
+        control_columns
+        if control_columns is not None
+        else config.residual_control_columns
+        or config.capacity_columns
+        or []
+    )
+    resolved_whitelist = (
+        whitelist if whitelist is not None else list(config.xgb_whitelist or [])
+    )
+    web_module._ensure_columns_not_excluded(
+        config, resolved_control_columns, "XGBoost 控制列"
+    )
+    web_module._ensure_columns_not_excluded(
+        config, resolved_whitelist, "XGBoost 白名单"
+    )
+
+    resolved_top_n = config.xgb_top_n if top_n is None else top_n
+    resolved_max_lag = config.xgb_max_lag if max_lag is None else max_lag
+
+    numeric = web_module._numeric_frame(
+        config, protected_columns=resolved_control_columns
+    )
+
+    result = run_xgb_validation_fold_safe(
+        run_dir=run_dir,
+        target=config.target,
+        data=numeric,
+        final_review_summary=final_review_summary,
+        ranked_features=ranked,
+        control_columns=resolved_control_columns,
+        whitelist=resolved_whitelist,
+        top_n=resolved_top_n,
+        max_lag=resolved_max_lag,
+        preprocess_mode=config.preprocess_mode,
+        lowpass_tau_minutes=config.lowpass_tau_minutes,
+        diff_interval_minutes=config.diff_interval_minutes,
+        detrend_window=config.detrend_window,
+        resample_rule=config.resample_rule,
+        max_interpolate_gap_points=config.max_interpolate_gap_points,
+        segment_column=config.segment_column,
+        segment_mode=config.segment_mode,
+        segment_min=config.segment_min,
+        segment_max=config.segment_max,
+    )
+
+    _progress(progress_callback, "XGB 四级验证完成")
+    return {
+        "run_dir": run_dir,
+        "active_screening_branch": context["active_screening_branch"],
+        "active_preprocessing_mode": context["active_preprocessing_mode"],
+        "config": config,
+        "status": result.status,
+        "error_message": result.error_message,
+        "output_files": result.output_files,
+        "fold_metrics_path": result.fold_metrics_path,
+        "summary_path": result.summary_path,
+        "candidate_uplift_path": result.candidate_uplift_path,
     }
 
 

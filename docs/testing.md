@@ -316,3 +316,32 @@
   / `build_causal_review_candidates` / `screening_branches` /
   `preprocessing_comparison.csv` / `model_discovered_candidates` /
   `final_score >= 0.30` / `abs(lag` / `abs(best_lag`。
+
+## PR-12 XGBoost 正式 branch/context 与 fold preprocessing isolation 测试边界
+
+`tests/test_pr12_active_branch_xgb.py` 覆盖正式 XGB backend 入口
+（`run_xgb_for_active_branch()`）：
+
+- `awaiting_confirmation` 拒绝 `initial_screening_branch_not_confirmed`，
+  不生成 `xgb_validation/`、不创建 `screening_downstream.lock`；
+- 缺失 `final_review_summary.csv` 明确失败
+  `initial_screening_formal_output_missing`，不自动运行三级复核；
+- 确认 Raw 优先于 `selected_preprocessing_mode`；确认 Processed 时
+  `preprocess_mode` / `lowpass_tau_minutes` / `diff_interval_minutes` /
+  `resample_rule` 与 context 一致；caller config 不得覆盖 context；
+- control columns / whitelist / top_n / max_lag 解析优先级保持现有契约；
+- 只消费正式 root `ranked_features.csv` 与 `final_review_summary.csv`，
+  不读 `screening_branches/`、`preprocessing_comparison.csv` 或
+  `model_discovered_candidates.csv`；
+- 运行前后前三层正式文件 byte-identical；成功只写五个 XGB 输出文件；
+- 首次成功创建 downstream lock，已有 lock 仍可继续运行；
+- 缺失 xgboost 返回 `missing_dependency`。
+
+`tests/test_xgb_fold_preprocessing_isolation.py` 覆盖 fold 状态隔离：
+
+- gap 等于实际 max used lag，train/validation/test 无时间重叠；
+- 改变 train 尾部值不得改变 validation/test 的独立 transform 结果
+  （lowpass / lowpass_detrend / lowpass_diff）；
+- diff 首值不跨 partition 借用上一分区；forward-fill 不跨 partition；
+- partition 内真实物理缺口仍按现有 lowpass / diff / ffill 规则重启；
+- raw 分支仍使用 expanding split、gap 与 positive lag。

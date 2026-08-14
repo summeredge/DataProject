@@ -36,6 +36,33 @@ final_score 降序。
 -   闭环状态影响排序
 -   综合结果覆盖
 
+## 排除窗口数据选择契约（PR-TR1）
+
+`exclude_windows` 使用以下唯一结构，字段只能为 `start` 和 `end`：
+
+```python
+[
+    {
+        "start": "2026-08-14T08:30:00",
+        "end": "2026-08-14T09:45:00",
+    }
+]
+```
+
+- 空列表表示没有排除窗口；窗口按 `start <= timestamp <= end`（含边界）选择排除行；
+- `start > end`、无法解析的时间、缺少字段或额外字段必须明确失败；有效但未命中数据的
+  窗口正常保留为有效配置；
+- 完整上传数据始终保留，排除窗口只是本次分析的数据选择条件；清空
+  `exclude_windows` 等价于恢复全部数据；
+- 排除发生在重采样和预处理之前，不重采样、不插值、不改变剩余时间戳或列；
+- 排除窗口不是风险标签；排除比例不得进入 `final_score`，不得改变评分算法、初筛排序、
+  Top-K 或候选池；
+- 统一统计固定包含 `original_rows`、`excluded_rows`、`remaining_rows`、
+  `excluded_ratio`、`exclude_window_count`。其中 `remaining_rows = original_rows -
+  excluded_rows`，`excluded_ratio = excluded_rows / original_rows`；原始行数为 `0` 时
+  比例为 `0.0`，重叠窗口不重复计数，`exclude_window_count` 为有效配置的窗口数量；
+- 本 PR 仅实现数据层过滤和统计，后续 PR 才会将其接入实际分析流程。
+
 ## 数据质量风险语义
 
 `data_quality_score` 仍通过连续系数直接参与初筛证据得分：

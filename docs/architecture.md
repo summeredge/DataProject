@@ -27,6 +27,14 @@
 -   综合复核 → 覆盖初筛结果
 -   未执行分析 → 展示分析结论
 
+## 排除窗口（PR-TR1 基础能力）
+
+完整上传数据始终保留。`exclude_windows` 只是本次分析的数据选择条件：在重采样和
+预处理之前按闭区间 `start <= timestamp <= end` 过滤；清空 `exclude_windows` 即等价于
+恢复全部数据。排除窗口不是风险标签，不得改变 `final_score` 或评分算法。
+
+本 PR 仅提供数据层过滤与统计，尚未接入 Web、初筛或任何后续分析流程。
+
 ## 预处理模式
 
 后端 `transform_frame()` / `transform_frame_causal()` 支持：

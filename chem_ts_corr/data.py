@@ -1,12 +1,90 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 
 EXCEL_SUFFIXES = {".xlsx", ".xls", ".xlsm"}
 TEXT_SUFFIXES = {".csv", ".txt", ".tsv"}
+
+
+def _exclude_window_mask(
+    frame: pd.DataFrame,
+    exclude_windows: list[dict[str, str]],
+) -> tuple[pd.Series, int]:
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError("apply_exclude_windows requires a DatetimeIndex")
+    if not isinstance(exclude_windows, list):
+        raise ValueError("exclude_windows must be a list")
+
+    excluded = pd.Series(False, index=frame.index, dtype=bool)
+    for position, window in enumerate(exclude_windows):
+        if not isinstance(window, dict):
+            raise ValueError(f"exclude_windows[{position}] must be an object with start and end")
+        if set(window) != {"start", "end"}:
+            raise ValueError(f"exclude_windows[{position}] must contain only start and end")
+
+        start = _parse_exclude_window_time(window["start"], position, "start")
+        end = _parse_exclude_window_time(window["end"], position, "end")
+        try:
+            invalid_range = start > end
+        except TypeError as exc:
+            raise ValueError(
+                f"exclude_windows[{position}] start and end must use compatible timezones"
+            ) from exc
+        if invalid_range:
+            raise ValueError(f"exclude_windows[{position}] start must be before or equal to end")
+        try:
+            excluded |= (frame.index >= start) & (frame.index <= end)
+        except TypeError as exc:
+            raise ValueError(
+                f"exclude_windows[{position}] timestamps must match the DataFrame index timezone"
+            ) from exc
+    return excluded, len(exclude_windows)
+
+
+def _parse_exclude_window_time(value: Any, position: int, field: str) -> pd.Timestamp:
+    if not isinstance(value, str):
+        raise ValueError(f"exclude_windows[{position}].{field} must be an ISO-8601 timestamp string")
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"exclude_windows[{position}].{field} is not a valid timestamp: {value!r}"
+        ) from exc
+    if pd.isna(timestamp):
+        raise ValueError(f"exclude_windows[{position}].{field} is not a valid timestamp: {value!r}")
+    return timestamp
+
+
+def apply_exclude_windows(
+    frame: pd.DataFrame,
+    exclude_windows: list[dict[str, str]],
+) -> pd.DataFrame:
+    """Return a copy of ``frame`` without rows in inclusive exclusion windows."""
+    excluded, _ = _exclude_window_mask(frame, exclude_windows)
+    result = frame.loc[~excluded].copy(deep=True)
+    result.attrs = dict(frame.attrs)
+    return result
+
+
+def exclude_window_stats(
+    frame: pd.DataFrame,
+    exclude_windows: list[dict[str, str]],
+) -> dict[str, int | float]:
+    """Summarize rows selected out by the shared exclusion-window rule."""
+    excluded, window_count = _exclude_window_mask(frame, exclude_windows)
+    original_rows = len(frame)
+    excluded_rows = int(excluded.sum())
+    return {
+        "original_rows": original_rows,
+        "excluded_rows": excluded_rows,
+        "remaining_rows": original_rows - excluded_rows,
+        "excluded_ratio": excluded_rows / original_rows if original_rows else 0.0,
+        "exclude_window_count": window_count,
+    }
 
 
 def normalize_excluded_columns(excluded_columns: list[str] | None) -> list[str]:

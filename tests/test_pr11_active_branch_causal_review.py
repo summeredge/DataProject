@@ -262,6 +262,7 @@ def _patch_causal_review_stage(monkeypatch) -> dict[str, object]:
         conditional_fallback_maxlag,
         conditional_baseline_maxlag,
         target_mask,
+        prefer_ranked_lag,
     ):
         captured.update(
             {
@@ -280,6 +281,7 @@ def _patch_causal_review_stage(monkeypatch) -> dict[str, object]:
                 "conditional_fallback_maxlag": conditional_fallback_maxlag,
                 "conditional_baseline_maxlag": conditional_baseline_maxlag,
                 "target_mask": target_mask,
+                "prefer_ranked_lag": prefer_ranked_lag,
             }
         )
         return {
@@ -446,6 +448,7 @@ def test_causal_review_uses_in_memory_causal_ranked_lags(tmp_path, monkeypatch):
     assert ranked_path.read_bytes() == ranked_before
     assert captured["ranked_features"]["lag"].tolist() == [-config.max_lag] * len(ranked)
     assert captured["ranked_features"]["final_score"].tolist() == ranked["final_score"].tolist()
+    assert captured["prefer_ranked_lag"] is True
 
 
 # --- Test 3: confirmed processed uses context parameters ------------------

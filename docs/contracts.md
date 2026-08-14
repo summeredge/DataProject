@@ -525,6 +525,11 @@ run_causal_review_for_active_branch(
   的候选不得进入；
 - 执行前后 `causal_review_candidates.csv` 必须 byte-identical，正式 runner
   不得写入该文件；
+- `causal_review_candidates.csv::lag` 与 `ranked_features.csv::lag` 继续表示
+  历史初筛证据。正式 active-branch runner 以 `prefer_ranked_lag=True` 将内存
+  causal ranked lag view 传入三级复核；conditional `ranked_window` 必须直接
+  使用该 view 的 lag（包括缺失），不得回退候选表中的历史 lag。standalone
+  `run_causal_review_stage()` 默认保持候选表 lag 优先；
 - `top_n=None`（默认）时把正式候选全量传入现有 `run_causal_review_stage()`，
   不得重新加入 `final_score >= 0.30`、candidate grade、review tier、
   risk level、model importance 或 Granger significance 硬裁剪；显式

@@ -1344,6 +1344,7 @@ def run_causal_review_for_active_branch(
         conditional_fallback_maxlag=conditional_fallback_maxlag,
         conditional_baseline_maxlag=conditional_baseline_maxlag,
         target_mask=target_mask,
+        prefer_ranked_lag=True,
     )
     result["conditional_granger_scores"].to_csv(
         run_dir / "conditional_granger_scores.csv",

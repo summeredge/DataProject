@@ -33,6 +33,7 @@ def run_causal_review_stage(
     conditional_fallback_maxlag: int = 24,
     conditional_baseline_maxlag: int | None = 24,
     target_mask: pd.Series | None = None,
+    prefer_ranked_lag: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """Run the standalone v0.4 causal-review stage.
 
@@ -42,7 +43,12 @@ def run_causal_review_stage(
     """
     selected_candidates = _select_candidates(causal_review_candidates, top_n=top_n)
     variables = _candidate_variables(selected_candidates)
-    ranked_features_for_review = _review_features_for_candidates(ranked_features, selected_candidates, variables)
+    ranked_features_for_review = _review_features_for_candidates(
+        ranked_features,
+        selected_candidates,
+        variables,
+        prefer_ranked_lag=prefer_ranked_lag,
+    )
 
     if not variables:
         return {
@@ -141,6 +147,8 @@ def _review_features_for_candidates(
     ranked_features: pd.DataFrame,
     selected_candidates: pd.DataFrame,
     variables: list[str],
+    *,
+    prefer_ranked_lag: bool = False,
 ) -> pd.DataFrame:
     selected = selected_candidates.copy(deep=True)
     if "variable" not in selected.columns:
@@ -176,7 +184,10 @@ def _review_features_for_candidates(
             continue
         ranked_col = f"{col}__ranked"
         if col in selected_columns and ranked_col in merged.columns:
-            merged[col] = merged[col].combine_first(merged[ranked_col])
+            if col == "lag" and prefer_ranked_lag:
+                merged[col] = merged[ranked_col]
+            else:
+                merged[col] = merged[col].combine_first(merged[ranked_col])
             merged = merged.drop(columns=[ranked_col])
         elif ranked_col in merged.columns:
             merged[col] = merged[ranked_col]

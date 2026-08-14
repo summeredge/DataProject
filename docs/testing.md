@@ -350,6 +350,10 @@
   ranked / secondary candidate context / 非 active branch /
   model discovered candidates 重新生成或扩大；执行前后
   `causal_review_candidates.csv` byte-identical；
+- 正式三级复核显式启用 causal ranked-lag precedence：候选表历史 lag 为 20、
+  内存 causal lag 为 2 时 ranked-window 为 `[1, 2, 3]`；causal lag 缺失时沿用
+  `fallback_missing_ranked_lag`，不得回退历史 lag。standalone 默认仍保持
+  候选表 lag 优先；
 - `top_n=None` 默认覆盖完整正式候选集，包含 `final_score < 0.30` 但仍属
   正式候选的变量；显式 `top_n` 保留原顺序传给 stage，由 stage 现有
   `head(top_n)` 截断，不得重新排序；

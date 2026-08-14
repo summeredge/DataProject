@@ -153,6 +153,91 @@ def test_causal_review_runner_ranked_window_passes_window_candidate_lags(monkeyp
     assert captured["candidate_lags"] == {"x": list(range(75, 86))}
 
 
+def test_causal_review_runner_prefers_causal_ranked_lag_for_window(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    run_causal_review_stage(
+        frame=_frame_with_lagged_signal(),
+        target="target",
+        ranked_features=pd.DataFrame([{"variable": "x", "lag": 2}]),
+        causal_review_candidates=pd.DataFrame([{"variable": "x", "lag": 20}]),
+        maxlag=24,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+        conditional_lag_window=1,
+        prefer_ranked_lag=True,
+    )
+
+    assert captured["candidate_lags"] == {"x": [1, 2, 3]}
+
+
+def test_causal_review_runner_causal_missing_lag_does_not_fallback_to_candidate_lag(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        captured["candidate_lag_status"] = kwargs["candidate_lag_status"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    run_causal_review_stage(
+        frame=_frame_with_lagged_signal(),
+        target="target",
+        ranked_features=pd.DataFrame([{"variable": "x", "lag": np.nan}]),
+        causal_review_candidates=pd.DataFrame([{"variable": "x", "lag": 20}]),
+        maxlag=10,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+        conditional_fallback_maxlag=4,
+        prefer_ranked_lag=True,
+    )
+
+    assert captured["candidate_lags"] == {"x": [1, 2, 3, 4]}
+    assert captured["candidate_lag_status"] == {"x": "fallback_missing_ranked_lag"}
+
+
+def test_causal_review_runner_default_keeps_candidate_lag_precedence(monkeypatch):
+    captured = {}
+
+    def fake_run_conditional_granger_tests(**kwargs):
+        captured["candidate_lags"] = kwargs["candidate_lags"]
+        row = {col: np.nan for col in OUT_COLS}
+        row["variable"] = "x"
+        row["status"] = "ok"
+        return pd.DataFrame([row])
+
+    import chem_ts_corr.causal_review_runner as runner_module
+
+    monkeypatch.setattr(runner_module, "run_conditional_granger_tests", fake_run_conditional_granger_tests)
+    run_causal_review_stage(
+        frame=_frame_with_lagged_signal(),
+        target="target",
+        ranked_features=pd.DataFrame([{"variable": "x", "lag": 2}]),
+        causal_review_candidates=pd.DataFrame([{"variable": "x", "lag": 20}]),
+        maxlag=24,
+        min_rows=80,
+        conditional_lag_mode="ranked_window",
+        conditional_lag_window=1,
+    )
+
+    assert captured["candidate_lags"] == {"x": [19, 20, 21]}
+
+
 def test_causal_review_runner_best_only_passes_single_ranked_lag(monkeypatch):
     captured = {}
 

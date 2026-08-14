@@ -290,6 +290,48 @@ def test_context_overrides_caller_preprocessing_config(tmp_path: Path, monkeypat
     assert captured["diff_interval_minutes"] is None
 
 
+def test_xgb_runner_uses_frozen_exclude_windows_for_fold_safe_data(tmp_path: Path, monkeypatch):
+    frozen_windows = [{"start": "2026-01-01T00:10:00", "end": "2026-01-01T00:15:00"}]
+    config = _make_raw_run(tmp_path)
+    _write_context(tmp_path, exclude_windows=frozen_windows)
+    _write_input_csv(config, rows=40)
+    before = {
+        name: (tmp_path / name).read_bytes()
+        for name in (
+            "ranked_features.csv",
+            "final_review_summary.csv",
+            "recommended_candidates.csv",
+            "preprocessing_context.json",
+        )
+    }
+    assert not (tmp_path / "run_config.json").exists()
+    captured = _spy_fold_safe(monkeypatch)
+    from chem_ts_corr import web
+
+    original_numeric_frame = web._numeric_frame
+
+    def capture_numeric_frame(downstream_config, protected_columns=None):
+        captured["config"] = downstream_config
+        return original_numeric_frame(downstream_config, protected_columns)
+
+    monkeypatch.setattr(web, "_numeric_frame", capture_numeric_frame)
+
+    run_xgb_for_active_branch(
+        tmp_path, base_config=replace(config, exclude_windows=[])
+    )
+
+    data = captured["data"]
+    assert captured["config"].exclude_windows == frozen_windows
+    assert captured["config"].exclude_windows != []
+    excluded_timestamps = pd.date_range("2026-01-01 00:10", "2026-01-01 00:15", freq="min")
+    assert data.index.intersection(excluded_timestamps).empty
+    assert pd.Timestamp("2026-01-01 00:09") in data.index
+    assert pd.Timestamp("2026-01-01 00:16") in data.index
+    for name, content in before.items():
+        assert (tmp_path / name).read_bytes() == content
+    assert not (tmp_path / "run_config.json").exists()
+
+
 @pytest.mark.parametrize(
     ("explicit", "residual", "capacity", "expected"),
     [

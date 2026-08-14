@@ -8,8 +8,14 @@ from chem_ts_corr.conditional_granger import run_conditional_granger_tests
 from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import build_lag_features
 from chem_ts_corr.preprocess import preprocess_frame, segment_by_load
+from chem_ts_corr import screening
 from chem_ts_corr.screening import regime_scores
-from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import (
+    PHYSICAL_GAP_STARTS_ATTR,
+    lagged_series,
+    preserve_sample_period,
+    sample_period_ns,
+)
 from chem_ts_corr.xgb_validation import build_xgb_feature_sets
 
 
@@ -93,6 +99,46 @@ def test_compute_lag_scores_does_not_count_forced_break_pair():
     scores = compute_lag_scores(frame, "target", 1, lag_values=[1])
 
     assert int(scores.iloc[0]["n"]) == 10
+
+
+def test_residual_lag_excludes_forced_break_and_preserves_direction(monkeypatch):
+    index = pd.date_range("2026-01-01 08:00", periods=50, freq="5min")
+    target_residual = np.random.default_rng(20260814).normal(size=len(index))
+    candidate_residual = np.empty(len(index))
+    candidate_residual[:-1] = target_residual[1:]
+    candidate_residual[-1] = 0.0
+    control = np.linspace(-2.0, 2.0, len(index))
+    frame = pd.DataFrame(
+        {
+            "target": 3.0 * control + target_residual,
+            "candidate": -2.0 * control + candidate_residual,
+            "control": control,
+        },
+        index=index,
+    )
+    preserve_sample_period(frame, 5 * 60 * 1_000_000_000)
+    original_compute = screening.compute_lag_scores
+    captured: dict[str, pd.DataFrame] = {}
+
+    def capture_compute(residual_pair, *args, **kwargs):
+        captured["residual_pair"] = residual_pair
+        return original_compute(residual_pair, *args, **kwargs)
+
+    monkeypatch.setattr(screening, "compute_lag_scores", capture_compute)
+    unbroken = screening.residual_corr_scores(frame, "target", ["control"], 3)
+    unbroken_row = unbroken.set_index("variable").loc["candidate"]
+
+    frame.attrs[PHYSICAL_GAP_STARTS_ATTR] = (index[30],)
+    broken = screening.residual_corr_scores(frame, "target", ["control"], 3)
+    broken_row = broken.set_index("variable").loc["candidate"]
+
+    residual_pair = captured["residual_pair"]
+    assert sample_period_ns(residual_pair) == sample_period_ns(frame)
+    assert residual_pair.attrs[PHYSICAL_GAP_STARTS_ATTR] == (index[30],)
+    assert int(unbroken_row["residual_n"]) == len(frame) - 1
+    assert int(broken_row["residual_n"]) == len(frame) - 2
+    assert int(unbroken_row["residual_lag"]) == 1
+    assert int(broken_row["residual_lag"]) == 1
 
 
 def test_preprocess_dropna_preserves_original_sample_period():

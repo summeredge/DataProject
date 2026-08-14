@@ -38,6 +38,24 @@ def preserve_sample_period(
     return frame
 
 
+def preserve_time_axis_metadata(
+    source: pd.DataFrame | pd.Series,
+    result: pd.DataFrame | pd.Series,
+) -> pd.DataFrame | pd.Series:
+    """Copy only explicit time-axis semantics to a derived object."""
+    period_ns = source.attrs.get(SAMPLE_PERIOD_NS_ATTR)
+    try:
+        period_ns = int(period_ns)
+    except (TypeError, ValueError, OverflowError):
+        period_ns = None
+    if period_ns is not None and period_ns > 0:
+        preserve_sample_period(result, period_ns)
+    forced_starts = physical_gap_starts(source)
+    if forced_starts:
+        result.attrs[PHYSICAL_GAP_STARTS_ATTR] = forced_starts
+    return result
+
+
 def physical_gap_starts(frame: pd.DataFrame | pd.Series) -> tuple[pd.Timestamp, ...]:
     values = frame.attrs.get(PHYSICAL_GAP_STARTS_ATTR, ())
     return tuple(pd.Timestamp(value) for value in values)

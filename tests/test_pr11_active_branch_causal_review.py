@@ -768,6 +768,30 @@ def test_causal_review_keeps_formal_root_byte_identical(tmp_path, monkeypatch):
     assert result["active_screening_branch"] == "raw"
 
 
+def test_causal_review_runner_uses_frozen_exclude_windows_at_data_entry(tmp_path, monkeypatch):
+    frozen_windows = [{"start": "2026-01-01T00:10:00", "end": "2026-01-01T00:15:00"}]
+    caller_windows = [{"start": "2026-01-01T00:30:00", "end": "2026-01-01T00:35:00"}]
+    config = _make_raw_run(tmp_path)
+    _write_context(tmp_path, exclude_windows=frozen_windows)
+    before = {
+        name: (tmp_path / name).read_bytes()
+        for name in ("ranked_features.csv", "preprocessing_context.json")
+    }
+    assert not (tmp_path / "run_config.json").exists()
+    captured = _spy_scaled_config(monkeypatch, tmp_path)
+    _patch_causal_review_stage(monkeypatch)
+
+    run_causal_review_for_active_branch(
+        tmp_path, base_config=replace(config, exclude_windows=caller_windows)
+    )
+
+    assert captured["config"].exclude_windows == frozen_windows
+    assert captured["config"].exclude_windows != caller_windows
+    for name, content in before.items():
+        assert (tmp_path / name).read_bytes() == content
+    assert not (tmp_path / "run_config.json").exists()
+
+
 # --- Test 16: exactly the four three-tier outputs are generated ----------
 
 

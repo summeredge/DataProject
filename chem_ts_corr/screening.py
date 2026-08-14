@@ -17,6 +17,7 @@ from chem_ts_corr.time_axis import (
     lagged_series,
     physical_gap_starts,
     physical_segment_ids,
+    preserve_time_axis_metadata,
     sample_period_ns,
 )
 
@@ -260,7 +261,13 @@ def residual_corr_scores(
             base["control_condition_number"] = condition_number if np.isfinite(condition_number) else np.nan
             target_residual, residualization_method, _, _ = _residualize(pair[target], pair[usable_controls])
             candidate_residual, _, _, _ = _residualize(pair[column], pair[usable_controls])
-            residual_pair = pd.DataFrame({target: target_residual, column: candidate_residual}, index=pair.index)
+            residual_pair = preserve_time_axis_metadata(
+                frame,
+                pd.DataFrame(
+                    {target: target_residual, column: candidate_residual},
+                    index=pair.index,
+                ),
+            )
             residual_lag_scores = compute_lag_scores(residual_pair, target, max_lag)
             best = summarize_best_lags(residual_lag_scores)
             quality = build_lag_peak_quality(residual_lag_scores, max_lag)

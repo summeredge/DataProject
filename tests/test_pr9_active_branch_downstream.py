@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 
@@ -103,8 +103,8 @@ def _read_context(run_dir: Path) -> dict[str, object]:
     )
 
 
-def _run_raw_workflow(tmp_path: Path) -> AnalysisConfig:
-    config = _config(tmp_path, preprocess_mode="raw")
+def _run_raw_workflow(tmp_path: Path, **overrides) -> AnalysisConfig:
+    config = _config(tmp_path, preprocess_mode="raw", **overrides)
     _write_input(config, _raw_frame())
     run_initial_screening_workflow(config)
     return config
@@ -137,6 +137,16 @@ def _formal_root_bytes(run_dir: Path) -> dict[str, bytes]:
     return {
         name: (Path(run_dir) / name).read_bytes() for name in FORMAL_ROOT_FILES
     }
+
+
+def _write_frozen_run_config(config: AnalysisConfig) -> None:
+    data = asdict(config)
+    data["input_path"] = str(config.input_path)
+    data["output_dir"] = str(config.output_dir)
+    data["roles_path"] = str(config.roles_path) if config.roles_path else None
+    (config.output_dir / "run_config.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _full_secondary_frame() -> pd.DataFrame:
@@ -297,6 +307,28 @@ def test_enhanced_screening_never_reuses_ranked_lag_evidence(tmp_path, monkeypat
     assert evidence["allow_ranked_reuse"] is False
 
 
+def test_enhanced_runner_uses_frozen_exclude_windows_at_data_entry(tmp_path, monkeypatch):
+    frozen_windows = [{"start": "2026-01-01T00:10:00", "end": "2026-01-01T00:15:00"}]
+    caller_windows = [{"start": "2026-01-01T00:30:00", "end": "2026-01-01T00:35:00"}]
+    config = _run_raw_workflow(tmp_path, exclude_windows=frozen_windows)
+    _write_frozen_run_config(config)
+    before = {
+        name: (tmp_path / name).read_bytes()
+        for name in ("ranked_features.csv", "preprocessing_context.json", "run_config.json")
+    }
+    captured = _spy_scaled_config(monkeypatch)
+    _patch_enhanced_core(monkeypatch)
+
+    run_enhanced_screening_for_active_branch(
+        tmp_path, base_config=replace(config, exclude_windows=caller_windows)
+    )
+
+    assert captured["config"].exclude_windows == frozen_windows
+    assert captured["config"].exclude_windows != caller_windows
+    for name, content in before.items():
+        assert (tmp_path / name).read_bytes() == content
+
+
 # --- Test 4: selected processed but confirmed raw -> Granger raw ---------
 
 
@@ -311,6 +343,28 @@ def test_granger_uses_confirmed_raw_over_selected_mode(tmp_path, monkeypatch):
 
     assert captured["config"].preprocess_mode == "raw"
     assert captured["config"].preprocess_mode != "lowpass_diff"
+
+
+def test_granger_runner_uses_frozen_exclude_windows_at_data_entry(tmp_path, monkeypatch):
+    frozen_windows = [{"start": "2026-01-01T00:10:00", "end": "2026-01-01T00:15:00"}]
+    caller_windows = [{"start": "2026-01-01T00:30:00", "end": "2026-01-01T00:35:00"}]
+    config = _run_raw_workflow(tmp_path, exclude_windows=frozen_windows)
+    _write_frozen_run_config(config)
+    before = {
+        name: (tmp_path / name).read_bytes()
+        for name in ("ranked_features.csv", "preprocessing_context.json", "run_config.json")
+    }
+    captured = _spy_scaled_config(monkeypatch)
+    _patch_granger_core(monkeypatch)
+
+    run_granger_for_active_branch(
+        tmp_path, base_config=replace(config, exclude_windows=caller_windows)
+    )
+
+    assert captured["config"].exclude_windows == frozen_windows
+    assert captured["config"].exclude_windows != caller_windows
+    for name, content in before.items():
+        assert (tmp_path / name).read_bytes() == content
 
 
 # --- Test 5: confirmed processed -> enhanced context params --------------

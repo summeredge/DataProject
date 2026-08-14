@@ -217,7 +217,14 @@ def test_exclude_window_apis_do_not_trigger_or_change_formal_analysis(tmp_path, 
         {"variable": ["A", "B"], "final_score": [0.8, 0.5], "driver_rank": [1, 2]}
     )
     ranked.to_csv(ranked_path, index=False, encoding="utf-8-sig")
-    before = ranked_path.read_bytes()
+    run_config_path = run_dir / "run_config.json"
+    context_path = run_dir / "preprocessing_context.json"
+    run_config_path.write_text('{"exclude_windows": []}\n', encoding="utf-8")
+    context_path.write_text('{"exclude_windows": []}\n', encoding="utf-8")
+    before = {
+        path: path.read_bytes()
+        for path in (ranked_path, run_config_path, context_path)
+    }
     monkeypatch.setattr(web, "RUNS_DIR", runs_dir)
     calls: list[str] = []
 
@@ -267,7 +274,7 @@ def test_exclude_window_apis_do_not_trigger_or_change_formal_analysis(tmp_path, 
     web._trend_response(_trend_params(file_id))
 
     assert calls == []
-    assert ranked_path.read_bytes() == before
+    assert {path: path.read_bytes() for path in before} == before
     pd.testing.assert_frame_equal(pd.read_csv(ranked_path, encoding="utf-8-sig"), ranked)
     assert list(runs_dir.iterdir()) == [run_dir]
 

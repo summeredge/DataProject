@@ -16,6 +16,7 @@ from chem_ts_corr.time_axis import (
 
 LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
 RESAMPLE_BY_PHYSICAL_GAPS_ATTR = "resample_by_physical_gaps"
+RESAMPLE_PHYSICAL_GAP_STARTS_ATTR = "resample_physical_gap_starts"
 
 
 @dataclass(frozen=True)
@@ -118,7 +119,11 @@ def preprocess_frame(
 
     selected = frame[keep_columns]
     if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
-        groups = _contiguous_segment_ids(selected.index, period_ns)
+        groups = _contiguous_segment_ids(
+            selected.index,
+            period_ns,
+            frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+        )
         cleaned = pd.concat(
             [
                 group.interpolate(
@@ -181,7 +186,11 @@ def preprocess_frame_causal(
     cleaned = frame.copy().dropna(subset=[target])
     predictor_columns = [column for column in cleaned.columns if column != target]
     if max_forward_fill_gap_points > 0 and predictor_columns:
-        groups = _contiguous_segment_ids(cleaned.index, period_ns)
+        groups = _contiguous_segment_ids(
+            cleaned.index,
+            period_ns,
+            cleaned.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+        )
         cleaned[predictor_columns] = cleaned[predictor_columns].groupby(groups).ffill(
             limit=max_forward_fill_gap_points
         )
@@ -383,7 +392,11 @@ def lowpass_filter_frame(
         period_ns = int(nominal_period_ns)
     else:
         period_ns = sample_period_ns(frame)
-    segment_ids = _physical_segment_ids(frame.index, period_ns)
+    segment_ids = _physical_segment_ids(
+        frame.index,
+        period_ns,
+        frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+    )
     times_ns = frame.index.asi8
     filtered = pd.DataFrame(index=frame.index, columns=frame.columns, dtype=float)
     for column in frame.columns:
@@ -420,12 +433,15 @@ def lowpass_filter_frame(
 def _physical_segment_ids(
     index: pd.DatetimeIndex,
     nominal_period_ns: int | None,
+    forced_starts: tuple[object, ...] | list[object] = (),
 ) -> pd.Series:
     if nominal_period_ns is None or len(index) < 2:
         return pd.Series(0, index=index, dtype=int)
     gap_threshold_ns = LOWPASS_PHYSICAL_GAP_FACTOR * float(nominal_period_ns)
     diffs_ns = index.to_series().diff().dt.total_seconds().mul(1_000_000_000.0)
     breaks = diffs_ns.gt(gap_threshold_ns)
+    if forced_starts:
+        breaks |= index.isin(pd.DatetimeIndex(forced_starts))
     breaks.iloc[0] = False
     return breaks.cumsum().astype(int)
 
@@ -440,7 +456,11 @@ def detrend_moving_average(
     window = max(3, int(window))
     min_periods = max(2, window // 4)
     if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
-        groups = _contiguous_segment_ids(frame.index, period_ns)
+        groups = _contiguous_segment_ids(
+            frame.index,
+            period_ns,
+            frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+        )
         trend = pd.concat(
             [
                 group.rolling(window=window, center=True, min_periods=min_periods).mean()
@@ -451,7 +471,11 @@ def detrend_moving_average(
         trend = frame.rolling(window=window, center=True, min_periods=min_periods).mean()
     detrended = frame - trend
     if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
-        groups = _contiguous_segment_ids(detrended.index, period_ns)
+        groups = _contiguous_segment_ids(
+            detrended.index,
+            period_ns,
+            frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+        )
         transformed = pd.concat(
             [
                 group.interpolate(
@@ -483,7 +507,11 @@ def detrend_trailing_average(
         period_ns = sample_period_ns(frame)
     window = max(3, int(window))
     min_periods = max(2, window // 4)
-    groups = _contiguous_segment_ids(frame.index, period_ns)
+    groups = _contiguous_segment_ids(
+        frame.index,
+        period_ns,
+        frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+    )
     trend = pd.concat(
         [
             group.rolling(window=window, center=False, min_periods=min_periods).mean()
@@ -496,7 +524,11 @@ def detrend_trailing_average(
 
 def difference_by_contiguous_segment(frame: pd.DataFrame) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
-    groups = _contiguous_segment_ids(frame.index, period_ns)
+    groups = _contiguous_segment_ids(
+        frame.index,
+        period_ns,
+        frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+    )
     return preserve_sample_period(frame.groupby(groups).diff(), period_ns)
 
 
@@ -593,7 +625,11 @@ def difference_by_physical_interval(
         result = frame.copy()
         result.attrs = dict(frame.attrs)
         return preserve_sample_period(result, period_ns)
-    segment_ids = _physical_segment_ids(frame.index, period_ns)
+    segment_ids = _physical_segment_ids(
+        frame.index,
+        period_ns,
+        frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
+    )
     result = frame.groupby(segment_ids, sort=False).diff(
         periods=effective_diff_points
     )
@@ -601,10 +637,16 @@ def difference_by_physical_interval(
     return preserve_sample_period(result, period_ns)
 
 
-def _contiguous_segment_ids(index: pd.Index, period_ns: int | None) -> pd.Series:
+def _contiguous_segment_ids(
+    index: pd.Index,
+    period_ns: int | None,
+    forced_starts: tuple[object, ...] | list[object] = (),
+) -> pd.Series:
     if not isinstance(index, pd.DatetimeIndex) or period_ns is None or len(index) < 2:
         return pd.Series(0, index=index, dtype=int)
     breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
+    if forced_starts:
+        breaks |= index.isin(pd.DatetimeIndex(forced_starts))
     breaks.iloc[0] = False
     return breaks.cumsum().astype(int)
 
@@ -617,24 +659,13 @@ def _resample_frame(
     if not frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
         return frame.resample(rule).median()
     groups = _contiguous_segment_ids(frame.index, period_ns)
-    try:
-        resample_period_ns = int(pd.tseries.frequencies.to_offset(rule).nanos)
-    except ValueError:
-        resample_period_ns = period_ns
     parts: list[pd.DataFrame] = []
     for _, group in frame.groupby(groups, sort=False):
-        part = group.resample(rule).median()
-        if parts and not part.empty:
-            previous = parts[-1]
-            if not previous.empty and (
-                part.index[0].value - previous.index[-1].value <= resample_period_ns
-            ):
-                previous = previous.iloc[:-1]
-                if previous.empty:
-                    parts.pop()
-                else:
-                    parts[-1] = previous
+        part = group.resample(rule, origin=group.index[0]).median()
         parts.append(part)
     result = pd.concat(parts).sort_index() if parts else frame.iloc[0:0].copy()
     result.attrs = dict(frame.attrs)
+    result.attrs[RESAMPLE_PHYSICAL_GAP_STARTS_ATTR] = tuple(
+        part.index[0] for part in parts[1:] if not part.empty
+    )
     return result

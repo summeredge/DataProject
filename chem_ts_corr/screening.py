@@ -784,7 +784,15 @@ def rolling_corr_scores(
         shifted = lagged_series(
             pair[variable], pair.index, best_lag, period_ns=sample_period_ns(frame)
         )
-        rolling = shifted.rolling(window=window_size, min_periods=min_points).corr(pair[target])
+        segment_ids = _rolling_segment_ids(pair.index, sample_period_ns(frame))
+        rolling = pd.concat(
+            [
+                shifted.loc[segment.index]
+                .rolling(window=window_size, min_periods=min_points)
+                .corr(pair.loc[segment.index, target])
+                for _, segment in pair.groupby(segment_ids, sort=False)
+            ]
+        )
         if target_mask is not None:
             rolling = rolling.where(target_mask.reindex(rolling.index).fillna(False).astype(bool))
         rolling = rolling.replace([np.inf, -np.inf], np.nan).dropna()
@@ -796,6 +804,14 @@ def rolling_corr_scores(
         stability = max(0.0, min(1.0, abs_median * float(sign_consistency) * (1.0 - min(1.0, iqr))))
         rows.append({"variable": variable, "best_lag": best_lag, "best_score": best_score, "rolling_corr_median": float(rolling.median()), "rolling_abs_corr_median": abs_median, "rolling_corr_iqr": iqr, "rolling_sign_consistency": float(sign_consistency), "valid_window_count": int(len(rolling)), "rolling_stability": stability})
     return pd.DataFrame(rows, columns=cols)
+
+
+def _rolling_segment_ids(index: pd.DatetimeIndex, period_ns: int | None) -> pd.Series:
+    if period_ns is None or len(index) < 2:
+        return pd.Series(0, index=index, dtype=int)
+    breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
+    breaks.iloc[0] = False
+    return breaks.cumsum().astype(int)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:

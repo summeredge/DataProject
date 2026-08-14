@@ -15,6 +15,7 @@ def _write_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file_id: str)
     frame = pd.DataFrame(
         {
             "time": pd.date_range("2026-08-14 08:00", periods=12, freq="15min"),
+            "alt_time": pd.date_range("2026-08-15 08:00", periods=12, freq="15min"),
             "target": range(12),
         }
     )
@@ -37,11 +38,11 @@ def _post(monkeypatch: pytest.MonkeyPatch, response, **form: str) -> dict[str, o
     return response(object())
 
 
-def _trend_params(file_id: str) -> dict[str, list[str]]:
+def _trend_params(file_id: str, time_column: str = "time") -> dict[str, list[str]]:
     values = {
         "file_id": file_id,
         "encoding": "utf-8-sig",
-        "time_column": "time",
+        "time_column": time_column,
         "variables": "target",
         "trend_start": "",
         "trend_end": "",
@@ -156,6 +157,118 @@ def test_new_upload_context_does_not_inherit_exclude_windows(tmp_path, monkeypat
 
     assert second_trend["excludeWindows"] == []
     assert second_trend["excludeWindowStats"]["excluded_rows"] == 0
+
+
+def test_exclude_window_context_cache_evicts_oldest_and_keeps_latest(tmp_path, monkeypatch):
+    file_ids = [f"{index:032x}" for index in range(web.MAX_EXCLUDE_WINDOW_CONTEXTS + 1)]
+    for file_id in file_ids:
+        _write_upload(tmp_path, monkeypatch, file_id)
+        web._trend_response(_trend_params(file_id))
+
+    assert len(web.EXCLUDE_WINDOW_CONTEXTS) == web.MAX_EXCLUDE_WINDOW_CONTEXTS
+    assert (file_ids[0], "time") not in web.EXCLUDE_WINDOW_CONTEXTS
+    assert (file_ids[-1], "time") in web.EXCLUDE_WINDOW_CONTEXTS
+    assert web._resolve_upload(file_ids[0]).exists()
+
+    latest = _post(
+        monkeypatch,
+        web._exclude_window_response,
+        file_id=file_ids[-1],
+        time_column="time",
+        encoding="utf-8-sig",
+        start="2026-08-14T08:00:00",
+        end="2026-08-14T08:15:00",
+    )
+    trend = web._trend_response(_trend_params(file_ids[-1]))
+
+    assert latest["excludeWindowStats"]["excluded_rows"] == 2
+    assert trend["excludeWindows"] == latest["excludeWindows"]
+
+
+def test_exclude_window_contexts_are_isolated_by_time_column(tmp_path, monkeypatch):
+    file_id = "e" * 32
+    _write_upload(tmp_path, monkeypatch, file_id)
+    _post(
+        monkeypatch,
+        web._exclude_window_response,
+        file_id=file_id,
+        time_column="time",
+        encoding="utf-8-sig",
+        start="2026-08-14T08:00:00",
+        end="2026-08-14T08:15:00",
+    )
+
+    alternate = web._trend_response(_trend_params(file_id, time_column="alt_time"))
+    original = web._trend_response(_trend_params(file_id))
+
+    assert alternate["excludeWindows"] == []
+    assert len(original["excludeWindows"]) == 1
+
+
+def test_exclude_window_apis_do_not_trigger_or_change_formal_analysis(tmp_path, monkeypatch):
+    file_id = "f" * 32
+    _write_upload(tmp_path, monkeypatch, file_id)
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "run"
+    run_dir.mkdir(parents=True)
+    ranked_path = run_dir / "ranked_features.csv"
+    ranked = pd.DataFrame(
+        {"variable": ["A", "B"], "final_score": [0.8, 0.5], "driver_rank": [1, 2]}
+    )
+    ranked.to_csv(ranked_path, index=False, encoding="utf-8-sig")
+    before = ranked_path.read_bytes()
+    monkeypatch.setattr(web, "RUNS_DIR", runs_dir)
+    calls: list[str] = []
+
+    def unexpected_runner(*_args, **_kwargs):
+        calls.append("runner")
+        raise AssertionError("排除窗口操作不得启动分析")
+
+    for name in (
+        "_analyze_response",
+        "run_initial_screening_workflow",
+        "run_enhanced_screening_for_active_branch",
+        "run_granger_for_active_branch",
+        "run_model_for_active_branch",
+        "run_causal_review_for_active_branch",
+        "run_xgb_for_active_branch",
+    ):
+        monkeypatch.setattr(web, name, unexpected_runner)
+
+    base = {"file_id": file_id, "time_column": "time", "encoding": "utf-8-sig"}
+    _post(
+        monkeypatch,
+        web._exclude_window_response,
+        **base,
+        start="2026-08-14T08:00:00",
+        end="2026-08-14T08:30:00",
+    )
+    _post(
+        monkeypatch,
+        web._restore_exclude_window_response,
+        file_id=file_id,
+        time_column="time",
+        index="0",
+    )
+    _post(
+        monkeypatch,
+        web._exclude_window_response,
+        **base,
+        start="2026-08-14T09:00:00",
+        end="2026-08-14T09:30:00",
+    )
+    _post(
+        monkeypatch,
+        web._restore_all_exclude_windows_response,
+        file_id=file_id,
+        time_column="time",
+    )
+    web._trend_response(_trend_params(file_id))
+
+    assert calls == []
+    assert ranked_path.read_bytes() == before
+    pd.testing.assert_frame_equal(pd.read_csv(ranked_path, encoding="utf-8-sig"), ranked)
+    assert list(runs_dir.iterdir()) == [run_dir]
 
 
 def test_exclude_window_ui_reuses_trend_selection_and_renders_background_markers():

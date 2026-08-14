@@ -112,7 +112,8 @@ MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
 MAX_TREND_TOTAL_POINTS = 300000
-EXCLUDE_WINDOW_CONTEXTS: dict[str, dict[str, Any]] = {}
+MAX_EXCLUDE_WINDOW_CONTEXTS = 4
+EXCLUDE_WINDOW_CONTEXTS: dict[tuple[str, str], dict[str, Any]] = {}
 EXCLUDE_WINDOW_CONTEXTS_LOCK = threading.Lock()
 INITIAL_SCREENING_COLUMNS = (
     "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
@@ -364,9 +365,11 @@ def _exclude_window_context(
     encoding: str,
 ) -> dict[str, Any]:
     file_id = _validate_file_id(file_id)
+    context_key = (file_id, time_column)
     with EXCLUDE_WINDOW_CONTEXTS_LOCK:
-        existing = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
-        if existing is not None and existing["time_column"] == time_column:
+        existing = EXCLUDE_WINDOW_CONTEXTS.pop(context_key, None)
+        if existing is not None:
+            EXCLUDE_WINDOW_CONTEXTS[context_key] = existing
             return existing
 
     path = _resolve_upload(file_id)
@@ -381,19 +384,24 @@ def _exclude_window_context(
         "exclude_windows": [],
     }
     with EXCLUDE_WINDOW_CONTEXTS_LOCK:
-        existing = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
-        if existing is not None and existing["time_column"] == time_column:
+        existing = EXCLUDE_WINDOW_CONTEXTS.pop(context_key, None)
+        if existing is not None:
+            EXCLUDE_WINDOW_CONTEXTS[context_key] = existing
             return existing
-        EXCLUDE_WINDOW_CONTEXTS[file_id] = context
+        EXCLUDE_WINDOW_CONTEXTS[context_key] = context
+        while len(EXCLUDE_WINDOW_CONTEXTS) > MAX_EXCLUDE_WINDOW_CONTEXTS:
+            EXCLUDE_WINDOW_CONTEXTS.pop(next(iter(EXCLUDE_WINDOW_CONTEXTS)))
         return context
 
 
 def _existing_exclude_window_context(file_id: str, time_column: str) -> dict[str, Any]:
     file_id = _validate_file_id(file_id)
+    context_key = (file_id, time_column)
     with EXCLUDE_WINDOW_CONTEXTS_LOCK:
-        context = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
-        if context is None or context["time_column"] != time_column:
+        context = EXCLUDE_WINDOW_CONTEXTS.pop(context_key, None)
+        if context is None:
             raise ValueError("当前数据上下文没有排除窗口状态")
+        EXCLUDE_WINDOW_CONTEXTS[context_key] = context
         return context
 
 

@@ -154,3 +154,30 @@ Regression test added
 **Related Files**
 - chem_ts_corr/web.py
 - tests/test_web_variable_select_search.py
+
+## [ERR-20260814-001] pytest 目标文件不存在
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+定向回归命令引用了不存在的 `tests/test_preprocess.py`，pytest 在收集前退出。
+
+### 错误信息
+```
+ERROR: file or directory not found: tests/test_preprocess.py
+```
+
+### 上下文
+- 执行预处理与排除窗口定向测试时手工指定了错误测试文件名。
+
+### 建议修复
+在指定测试文件前，先用项目文件检索确认实际测试文件名；本次已改用现有的
+`test_lowpass_preprocessing.py`、`test_diff_interval_preprocessing.py` 与
+`test_causal_preprocessing.py` 并通过。
+
+### 元数据
+- Reproducible: yes
+
+---

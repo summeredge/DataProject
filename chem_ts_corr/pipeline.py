@@ -13,11 +13,17 @@ import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.data import (
+    apply_exclude_windows,
     drop_excluded_columns,
+    exclude_window_stats,
     load_timeseries_csv,
     select_numeric_frame,
 )
-from chem_ts_corr.preprocess import preprocess_frame, resolve_diff_interval
+from chem_ts_corr.preprocess import (
+    RESAMPLE_BY_PHYSICAL_GAPS_ATTR,
+    preprocess_frame,
+    resolve_diff_interval,
+)
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze_numeric_frame
 
@@ -42,7 +48,21 @@ CONTEXT_FIELDS = [
     "effective_diff_interval_minutes",
     "resample_rule",
     "branch_selection_status",
+    "exclude_windows",
+    "original_rows",
+    "exclude_window_count",
+    "excluded_rows",
+    "remaining_rows",
+    "excluded_ratio",
 ]
+EXCLUSION_CONTEXT_DEFAULTS = {
+    "exclude_windows": [],
+    "original_rows": 0,
+    "exclude_window_count": 0,
+    "excluded_rows": 0,
+    "remaining_rows": 0,
+    "excluded_ratio": 0.0,
+}
 REQUIRED_FORMAL_SCREENING_FILES = [
     "ranked_features.csv",
     "recommended_candidates.csv",
@@ -83,19 +103,7 @@ def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, fl
     pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
-    raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
-    raw = drop_excluded_columns(
-        raw,
-        config.excluded_columns,
-        protected_columns=[
-            config.time_column,
-            config.target,
-            config.segment_column,
-            *(config.capacity_columns or []),
-            *(config.residual_control_columns or []),
-            *(config.force_include_variables or []),
-        ],
-    )
+    raw = load_analysis_source_frame(config)
     read_data_seconds = time.perf_counter() - read_started
 
     analysis_started = time.perf_counter()
@@ -151,19 +159,7 @@ def run_initial_screening_branch(
     pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
-    raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
-    raw = drop_excluded_columns(
-        raw,
-        config.excluded_columns,
-        protected_columns=[
-            config.time_column,
-            config.target,
-            config.segment_column,
-            *(config.capacity_columns or []),
-            *(config.residual_control_columns or []),
-            *(config.force_include_variables or []),
-        ],
-    )
+    raw = load_analysis_source_frame(config)
     read_data_seconds = time.perf_counter() - read_started
 
     analysis_started = time.perf_counter()
@@ -479,6 +475,7 @@ def run_initial_screening_workflow(
     formal state is cleared.
     """
     _validate_workflow_mode(config.preprocess_mode)
+    _analysis_exclude_window_stats(config)
     _reject_locked_run(config.output_dir)
     _clear_previous_formal_state(
         config.output_dir, preprocess_mode=config.preprocess_mode
@@ -654,6 +651,7 @@ def _build_preprocessing_context(
         effective_diff_points, effective_diff_interval_minutes = (
             _effective_diff_params(config)
         )
+    exclusion_stats = _analysis_exclude_window_stats(config)
     return {
         "selected_preprocessing_mode": mode,
         "active_screening_branch": active_screening_branch,
@@ -668,6 +666,8 @@ def _build_preprocessing_context(
         "effective_diff_interval_minutes": effective_diff_interval_minutes,
         "resample_rule": config.resample_rule,
         "branch_selection_status": branch_selection_status,
+        "exclude_windows": [dict(window) for window in config.exclude_windows],
+        **exclusion_stats,
     }
 
 
@@ -680,11 +680,31 @@ def _effective_diff_params(config: AnalysisConfig) -> tuple[int, float]:
     return int(effective_points), float(effective_interval_minutes)
 
 
-def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
-    raw = load_timeseries_csv(
-        config.input_path, config.time_column, encoding=config.encoding
-    )
-    raw = drop_excluded_columns(
+def load_analysis_source_frame(
+    config: AnalysisConfig,
+    *,
+    load_frame=None,
+    drop_columns=None,
+    extra_protected_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    if load_frame is None:
+        raw = load_timeseries_csv(
+            config.input_path, config.time_column, encoding=config.encoding
+        )
+    else:
+        raw = load_frame(
+            config.input_path, config.time_column, encoding=config.encoding
+        )
+    original_rows = len(raw)
+    if config.exclude_windows:
+        raw = apply_exclude_windows(raw, config.exclude_windows)
+    else:
+        raw = raw.copy(deep=True)
+    if len(raw) < original_rows:
+        raw.attrs[RESAMPLE_BY_PHYSICAL_GAPS_ATTR] = True
+    if drop_columns is None:
+        drop_columns = drop_excluded_columns
+    raw = drop_columns(
         raw,
         config.excluded_columns,
         protected_columns=[
@@ -694,9 +714,23 @@ def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
             *(config.capacity_columns or []),
             *(config.residual_control_columns or []),
             *(config.force_include_variables or []),
+            *(extra_protected_columns or []),
         ],
     )
+    return raw
+
+
+def _analysis_exclude_window_stats(config: AnalysisConfig) -> dict[str, int | float]:
+    raw = load_timeseries_csv(
+        config.input_path, config.time_column, encoding=config.encoding
+    )
+    return exclude_window_stats(raw, config.exclude_windows)
+
+
+def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
+    raw = load_analysis_source_frame(config)
     numeric = select_numeric_frame(raw, config.target)
+    numeric.attrs = dict(raw.attrs)
     protected = [
         config.target,
         config.segment_column,
@@ -746,6 +780,8 @@ def _read_preprocessing_context(run_dir: Path) -> dict[str, object]:
         raise ValueError(
             f"initial_screening_context_invalid: {path}"
         ) from exc
+    if isinstance(data, dict):
+        data = {**EXCLUSION_CONTEXT_DEFAULTS, **data}
     _validate_context(data)
     return data
 
@@ -757,6 +793,8 @@ def _validate_context(data: object) -> None:
     missing = [field for field in CONTEXT_FIELDS if field not in data]
     if missing:
         raise ValueError(f"{prefix} missing fields {missing}")
+    if not isinstance(data["exclude_windows"], list):
+        raise ValueError(f"{prefix} exclude_windows must be a list")
 
     status = data["branch_selection_status"]
     selected = data["selected_preprocessing_mode"]
@@ -1572,4 +1610,5 @@ def _downstream_config_from_context(
             else None
         ),
         resample_rule=context["resample_rule"],
+        exclude_windows=[dict(window) for window in context["exclude_windows"]],
     )

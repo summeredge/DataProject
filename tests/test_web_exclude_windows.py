@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -269,6 +270,57 @@ def test_exclude_window_apis_do_not_trigger_or_change_formal_analysis(tmp_path, 
     assert ranked_path.read_bytes() == before
     pd.testing.assert_frame_equal(pd.read_csv(ranked_path, encoding="utf-8-sig"), ranked)
     assert list(runs_dir.iterdir()) == [run_dir]
+
+
+def test_analyze_snapshots_exclude_windows_into_run_config(tmp_path, monkeypatch):
+    file_id = "1" * 32
+    _write_upload(tmp_path, monkeypatch, file_id)
+    _post(
+        monkeypatch,
+        web._exclude_window_response,
+        file_id=file_id,
+        time_column="time",
+        encoding="utf-8-sig",
+        start="2026-08-14T08:00:00",
+        end="2026-08-14T08:15:00",
+    )
+    threads: list[object] = []
+
+    class FakeThread:
+        def __init__(self, *, target, args, daemon):
+            self.args = args
+            threads.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(web, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(
+        web,
+        "_multipart_form",
+        lambda _handler: {
+            "file_id": file_id,
+            "time_column": "time",
+            "target": "target",
+            "preprocess_mode": "raw",
+            "resample_rule": "",
+        },
+    )
+    monkeypatch.setattr(web.threading, "Thread", FakeThread)
+    monkeypatch.setattr(
+        web, "_validate_analysis_excluded_columns", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(web, "_cleanup_tasks_locked", lambda **_kwargs: None)
+
+    response = web._analyze_response(object())
+
+    config = threads[0].args[1]
+    expected = [{"start": "2026-08-14T08:00:00", "end": "2026-08-14T08:15:00"}]
+    assert config.exclude_windows == expected
+    web._write_run_config(tmp_path / "run", config, file_id)
+    assert json.loads((tmp_path / "run" / "run_config.json").read_text(encoding="utf-8"))["exclude_windows"] == expected
+    with web.TASKS_LOCK:
+        web.TASKS.pop(response["task_id"], None)
 
 
 def test_exclude_window_ui_reuses_trend_selection_and_renders_background_markers():

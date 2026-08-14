@@ -115,8 +115,10 @@ def _analyze_numeric_frame_core(
 
     _progress(progress_callback, "预处理中")
     numeric = select_numeric_frame(frame, config.target)
+    numeric.attrs = dict(frame.attrs)
     roles = load_roles(config, list(numeric.columns))
     numeric = apply_ignore_roles(numeric, roles, config.target)
+    numeric.attrs = dict(frame.attrs)
     diag = diagnostics(numeric, roles)
     raw_segment_mask = operating_segment_mask(
         numeric,

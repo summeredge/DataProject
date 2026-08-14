@@ -51,6 +51,7 @@ class AnalysisConfig:
     manual_closed_loop_variables: list[str] = field(default_factory=list)
     manual_non_closed_loop_variables: list[str] = field(default_factory=list)
     excluded_columns: list[str] = field(default_factory=list)
+    exclude_windows: list[dict[str, str]] = field(default_factory=list)
     exclude_control_columns_from_candidates: bool = True
     roles_path: Path | None = None
     random_state: int = 42

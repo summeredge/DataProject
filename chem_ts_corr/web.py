@@ -38,6 +38,7 @@ from chem_ts_corr.pipeline import (
     run_enhanced_screening_for_active_branch,
     run_granger_for_active_branch,
     run_initial_screening_workflow,
+    load_analysis_source_frame,
     run_model_for_active_branch,
     run_xgb_for_active_branch,
 )
@@ -620,6 +621,20 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         skip_model_lift=False,
         skip_rolling_corr=False,
     )
+    try:
+        exclude_context = _exclude_window_context(
+            file_id, time_column, resolved_encoding
+        )
+    except ValueError as exc:
+        if str(exc) != "Invalid file id":
+            raise
+        exclude_windows = []
+    else:
+        with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+            exclude_windows = [
+                dict(window) for window in exclude_context["exclude_windows"]
+            ]
+    config = replace(config, exclude_windows=exclude_windows)
     task_id = uuid.uuid4().hex
     now = time.time()
     with TASKS_LOCK:
@@ -1775,18 +1790,18 @@ def _numeric_frame(
     from chem_ts_corr.data import select_numeric_frame
     from chem_ts_corr.screening import apply_ignore_roles, load_roles
 
-    raw = load_timeseries_csv(config.input_path, config.time_column, encoding=config.encoding)
-    raw = drop_excluded_columns(
-        raw,
-        config.excluded_columns,
-        protected_columns=[
-            config.time_column,
-            *_protected_validation_columns(config, protected_columns),
-        ],
+    raw = load_analysis_source_frame(
+        config,
+        load_frame=load_timeseries_csv,
+        drop_columns=drop_excluded_columns,
+        extra_protected_columns=protected_columns,
     )
     numeric = select_numeric_frame(raw, config.target)
+    numeric.attrs = dict(raw.attrs)
     roles = load_roles(config, list(numeric.columns))
-    return apply_ignore_roles(numeric, roles, config.target)
+    numeric = apply_ignore_roles(numeric, roles, config.target)
+    numeric.attrs = dict(raw.attrs)
+    return numeric
 
 
 def _protected_validation_columns(
@@ -1914,6 +1929,7 @@ def _scaled_frame_cache_key(
         tuple(config.residual_control_columns or []),
         tuple(config.force_include_variables or []),
         tuple(config.excluded_columns or []),
+        tuple((window["start"], window["end"]) for window in config.exclude_windows),
         protected_columns,
         config.resample_rule,
         config.min_valid_ratio,
@@ -3308,7 +3324,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="trendSelectionInfo" class="help" aria-live="polite">可在趋势绘图区横向拖动选择时间窗口。</div>
         <section class="exclude-windows" aria-labelledby="excludeWindowsTitle">
           <h3 id="excludeWindowsTitle">已标记排除时间段</h3>
-          <div class="help">排除窗口当前仅用于趋势页标记，尚未接入分析流程。</div>
+          <div class="help">排除窗口将在下一次分析时生效；修改不会重算已有分析结果。</div>
           <div id="excludeWindowList" class="exclude-window-list empty">尚未添加排除窗口。</div>
           <div id="excludeWindowStats" class="help">已标记：0 个窗口 / 0 点（0.0%）</div>
           <div class="actions"><button id="restoreAllExcludeWindows" type="button" class="secondary" disabled>恢复所有数据</button></div>
@@ -4952,7 +4968,7 @@ async function addExcludeWindow() {
     trendSelection = null;
     updateTrendSelectionInfo();
     if (lastTrendSeries.length) renderTrendChart(lastTrendSeries, lastTrendAxisMode);
-    setStatus("已加入排除窗口；该标记尚未接入分析流程。", "success");
+    setStatus("已加入排除窗口；将在下一次分析时生效。", "success");
   } catch (error) {
     setStatus(error.message || String(error), "error");
   }

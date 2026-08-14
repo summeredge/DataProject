@@ -36,7 +36,7 @@ final_score 降序。
 -   闭环状态影响排序
 -   综合结果覆盖
 
-## 排除窗口数据选择契约（PR-TR1）
+## 排除窗口数据选择契约（PR-TR1 / PR-TR3）
 
 `exclude_windows` 使用以下唯一结构，字段只能为 `start` 和 `end`：
 
@@ -64,7 +64,14 @@ final_score 降序。
 - PR-TR2 的趋势页以当前上传数据上下文为唯一状态源，提供选区加入、窗口列表、背景标记、
   单窗口恢复和清空全部窗口。相关 payload 使用 `excludeWindows` 与
   `excludeWindowStats`，统计直接复用上述统一规则；
-- PR-TR2 的排除窗口尚未接入实际分析流程，趋势页标记不表示数据已从分析中删除。
+- Web 启动分析时把当前窗口复制到本次 `AnalysisConfig`，并写入 `run_config.json`；窗口
+  仅在下一次新分析生效，修改趋势页状态不会重算或修改已有运行；
+- 正式分析按“完整上传数据 → `apply_exclude_windows()` → 重采样 → 预处理 → 初筛 →
+  downstream”执行。Raw 与 Processed 分支使用同一排除后输入；由排除造成的物理断点不得被
+  重采样插值、前向填充、滤波/去趋势状态或滞后/差分跨越；
+- 每个运行的 `preprocessing_context.json` 冻结 `exclude_windows` 和上述统计。Downstream
+  只读取该冻结 context，不读取当前 Web 排除窗口状态；排除本身不得进入 `final_score`、评分
+  算法、初筛排序、Top-K 或候选池。
 
 ## 数据质量风险语义
 
@@ -231,6 +238,12 @@ selected_preprocessing_mode
 active_screening_branch
 active_preprocessing_mode
 branch_selection_status
+exclude_windows
+original_rows
+excluded_rows
+remaining_rows
+excluded_ratio
+exclude_window_count
 ```
 
 约束：
@@ -413,6 +426,8 @@ branch_selection_status
   resample 规则，不得重新实现 round / sampling interval / effective points
   数学规则；
 - `resample_rule`：记录真实配置，无配置为 `null`；
+- `exclude_windows`：本次运行启动时的窗口快照；统计字段复用排除窗口数据选择契约，记录
+  完整上传数据相对该快照的行数与比例，不能作为评分、排序或风险字段；
 - 不适用、尚未计算、尚未确认的字段统一使用 JSON `null`，禁止用 `0`、
   `0.0`、`false`、`""` 代替缺失；真实有效 `0.0` 不得被转换为缺失。
 
@@ -438,7 +453,7 @@ run_causal_review_for_active_branch(run_dir, ...)
 ```text
 读取并验证 preprocessing_context.json
 → 验证正式 root 初筛输入
-→ 解析 active preprocessing 配置
+→ 解析 active preprocessing 与排除窗口配置
 → begin_downstream_stage(run_dir)（首次通过创建 screening_downstream.lock）
 → causal preprocessing / active causal transform / target mask / standardize
 → 调用现有增强筛选 / 普通 Granger / 模型 service
@@ -459,6 +474,8 @@ run_causal_review_for_active_branch(run_dir, ...)
   `None` 语义）；`resample_rule` 来自 `context.resample_rule`；
   `selected_preprocessing_mode` 只表示用户最初选择，不得覆盖
   `active_preprocessing_mode`；
+- `exclude_windows` 以 context 为准，必须覆盖调用方或当前 Web 状态；downstream 重读上传
+  数据时仍通过唯一的 `apply_exclude_windows()` 入口过滤，统计字段只作运行元数据；
 - 构造正式 downstream config 必须通过 `dataclasses.replace`，不得原地修改
   调用方 config；
 - 增强筛选、普通 Granger、RF/SHAP 与 conditional Granger/三级复核必须

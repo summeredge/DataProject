@@ -27,18 +27,25 @@
 -   综合复核 → 覆盖初筛结果
 -   未执行分析 → 展示分析结论
 
-## 排除窗口（PR-TR1 / PR-TR2）
+## 排除窗口（PR-TR1 / PR-TR2 / PR-TR3）
 
 完整上传数据始终保留。`exclude_windows` 只是本次分析的数据选择条件：在重采样和
 预处理之前按闭区间 `start <= timestamp <= end` 过滤；清空 `exclude_windows` 即等价于
 恢复全部数据。排除窗口不是风险标签，不得改变 `final_score` 或评分算法。
 
-PR-TR2 已实现趋势选区 → 当前上传数据上下文的 `exclude_windows` → 窗口列表与趋势背景
-标记 → 单窗口恢复 → 恢复所有数据。状态仅保存在当前 Web 运行内，并按上传文件与时间列
-隔离；新数据上下文不会继承旧窗口。
+趋势页维护当前上传数据上下文的 `exclude_windows`，按上传文件与时间列隔离；新上传数据
+不会继承旧窗口。加入、恢复或恢复全部只改变该待分析状态，趋势仍展示完整上传数据。
 
-排除窗口仍未接入初筛或任何后续分析流程，也不修改趋势数据本身；PR-TR2 的页面标记不
-表示数据已从分析中删除。
+Web 启动分析时将窗口快照写入本次 `AnalysisConfig` 和 `run_config.json`。正式数据流固定为：
+
+```text
+完整上传数据 → apply_exclude_windows → 重采样 → 预处理 → 初筛 → 后续阶段
+```
+
+Raw 与 Processed 分支通过同一数据入口获取同一批排除后的时间点；排除形成的物理断点不得
+被重采样插值、前向填充、低通状态、去趋势或滞后/差分跨越。`preprocessing_context.json`
+冻结窗口及其统计；所有 downstream runner 仅从该 context 构造配置，之后在 Web 中改变窗口
+不会改变已创建运行或其后续阶段输入。
 
 ## 预处理模式
 
@@ -104,6 +111,7 @@ run_initial_screening_comparison():
 run_initial_screening_workflow():
   preprocess_mode 只能为 raw / lowpass / lowpass_detrend / lowpass_diff
   旧模式（detrend / diff / detrend_diff）必须明确拒绝
+  完整上传数据 → apply_exclude_windows → 重采样 → 预处理
   → raw:
       仅运行 raw branch
       → 事务性 promotion 到正式 root

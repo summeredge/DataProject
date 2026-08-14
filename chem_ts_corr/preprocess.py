@@ -15,6 +15,7 @@ from chem_ts_corr.time_axis import (
 
 
 LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
+RESAMPLE_BY_PHYSICAL_GAPS_ATTR = "resample_by_physical_gaps"
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ def preprocess_frame(
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     if resample_rule:
-        frame = frame.resample(resample_rule).median()
+        frame = _resample_frame(frame, resample_rule, period_ns)
         period_ns = infer_sample_period_ns(frame.index)
 
     valid_ratio = frame.notna().mean()
@@ -115,7 +116,26 @@ def preprocess_frame(
             keep.add(col)
     keep_columns = [c for c in frame.columns if c in keep]
 
-    cleaned = frame[keep_columns].interpolate(method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area)
+    selected = frame[keep_columns]
+    if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
+        groups = _contiguous_segment_ids(selected.index, period_ns)
+        cleaned = pd.concat(
+            [
+                group.interpolate(
+                    method="time",
+                    limit=max_interpolate_gap_points,
+                    limit_area=interpolate_limit_area,
+                )
+                for _, group in selected.groupby(groups, sort=False)
+            ]
+        ).reindex(selected.index)
+        cleaned.attrs = dict(frame.attrs)
+    else:
+        cleaned = selected.interpolate(
+            method="time",
+            limit=max_interpolate_gap_points,
+            limit_area=interpolate_limit_area,
+        )
     cleaned = cleaned.dropna(axis=1, how="all")
     rows_before_dropna = int(len(cleaned))
     cleaned = cleaned.dropna(axis=0, how="any")
@@ -153,7 +173,7 @@ def preprocess_frame_causal(
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     if resample_rule:
-        frame = frame.resample(resample_rule).median()
+        frame = _resample_frame(frame, resample_rule, period_ns)
         period_ns = infer_sample_period_ns(frame.index)
     if target not in frame.columns:
         raise ValueError("Target column was removed during preprocessing")
@@ -418,11 +438,37 @@ def detrend_moving_average(
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     window = max(3, int(window))
-    trend = frame.rolling(window=window, center=True, min_periods=max(2, window // 4)).mean()
+    min_periods = max(2, window // 4)
+    if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
+        groups = _contiguous_segment_ids(frame.index, period_ns)
+        trend = pd.concat(
+            [
+                group.rolling(window=window, center=True, min_periods=min_periods).mean()
+                for _, group in frame.groupby(groups, sort=False)
+            ]
+        ).reindex(frame.index)
+    else:
+        trend = frame.rolling(window=window, center=True, min_periods=min_periods).mean()
     detrended = frame - trend
-    transformed = detrended.interpolate(
-        method="time", limit=max_interpolate_gap_points, limit_area=interpolate_limit_area
-    ).dropna()
+    if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
+        groups = _contiguous_segment_ids(detrended.index, period_ns)
+        transformed = pd.concat(
+            [
+                group.interpolate(
+                    method="time",
+                    limit=max_interpolate_gap_points,
+                    limit_area=interpolate_limit_area,
+                )
+                for _, group in detrended.groupby(groups, sort=False)
+            ]
+        ).reindex(detrended.index)
+    else:
+        transformed = detrended.interpolate(
+            method="time",
+            limit=max_interpolate_gap_points,
+            limit_area=interpolate_limit_area,
+        )
+    transformed = transformed.dropna()
     return preserve_sample_period(transformed, period_ns)
 
 
@@ -561,3 +607,34 @@ def _contiguous_segment_ids(index: pd.Index, period_ns: int | None) -> pd.Series
     breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
     breaks.iloc[0] = False
     return breaks.cumsum().astype(int)
+
+
+def _resample_frame(
+    frame: pd.DataFrame,
+    rule: str,
+    period_ns: int | None,
+) -> pd.DataFrame:
+    if not frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
+        return frame.resample(rule).median()
+    groups = _contiguous_segment_ids(frame.index, period_ns)
+    try:
+        resample_period_ns = int(pd.tseries.frequencies.to_offset(rule).nanos)
+    except ValueError:
+        resample_period_ns = period_ns
+    parts: list[pd.DataFrame] = []
+    for _, group in frame.groupby(groups, sort=False):
+        part = group.resample(rule).median()
+        if parts and not part.empty:
+            previous = parts[-1]
+            if not previous.empty and (
+                part.index[0].value - previous.index[-1].value <= resample_period_ns
+            ):
+                previous = previous.iloc[:-1]
+                if previous.empty:
+                    parts.pop()
+                else:
+                    parts[-1] = previous
+        parts.append(part)
+    result = pd.concat(parts).sort_index() if parts else frame.iloc[0:0].copy()
+    result.attrs = dict(frame.attrs)
+    return result

@@ -61,7 +61,10 @@ final_score 降序。
   `excluded_ratio`、`exclude_window_count`。其中 `remaining_rows = original_rows -
   excluded_rows`，`excluded_ratio = excluded_rows / original_rows`；原始行数为 `0` 时
   比例为 `0.0`，重叠窗口不重复计数，`exclude_window_count` 为有效配置的窗口数量；
-- 本 PR 仅实现数据层过滤和统计，后续 PR 才会将其接入实际分析流程。
+- PR-TR2 的趋势页以当前上传数据上下文为唯一状态源，提供选区加入、窗口列表、背景标记、
+  单窗口恢复和清空全部窗口。相关 payload 使用 `excludeWindows` 与
+  `excludeWindowStats`，统计直接复用上述统一规则；
+- PR-TR2 的排除窗口尚未接入实际分析流程，趋势页标记不表示数据已从分析中删除。
 
 ## 数据质量风险语义
 

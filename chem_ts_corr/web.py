@@ -25,6 +25,7 @@ from chem_ts_corr.data import (
     EXCEL_SUFFIXES,
     TEXT_SUFFIXES,
     drop_excluded_columns,
+    exclude_window_stats,
     load_timeseries_csv,
     normalize_excluded_columns,
     read_timeseries_table,
@@ -111,6 +112,8 @@ MAX_SCALED_FRAME_CACHE = 4
 TARGET_SEGMENT_MASK_ATTR = "target_operating_segment_mask"
 CORRELATION_DIRECTION_EPSILON = 0.05
 MAX_TREND_TOTAL_POINTS = 300000
+EXCLUDE_WINDOW_CONTEXTS: dict[str, dict[str, Any]] = {}
+EXCLUDE_WINDOW_CONTEXTS_LOCK = threading.Lock()
 INITIAL_SCREENING_COLUMNS = (
     "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
@@ -228,6 +231,15 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/analyze":
                 self._send_json(_analyze_response(self))
                 return
+            if self.path == "/api/exclude_window":
+                self._send_json(_exclude_window_response(self))
+                return
+            if self.path == "/api/restore_exclude_window":
+                self._send_json(_restore_exclude_window_response(self))
+                return
+            if self.path == "/api/restore_all_exclude_windows":
+                self._send_json(_restore_all_exclude_windows_response(self))
+                return
             if self.path == "/api/confirm_initial_screening_branch":
                 self._send_json(_confirm_initial_screening_branch_response(self))
                 return
@@ -344,6 +356,97 @@ def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     upload_path.write_bytes(raw)
 
     return {"file_id": file_id, "filename": filename}
+
+
+def _exclude_window_context(
+    file_id: str,
+    time_column: str,
+    encoding: str,
+) -> dict[str, Any]:
+    file_id = _validate_file_id(file_id)
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        existing = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
+        if existing is not None and existing["time_column"] == time_column:
+            return existing
+
+    path = _resolve_upload(file_id)
+    frame = load_timeseries_csv(
+        path,
+        time_column,
+        encoding=_resolve_encoding(path, encoding),
+    )
+    context = {
+        "time_column": time_column,
+        "frame": frame,
+        "exclude_windows": [],
+    }
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        existing = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
+        if existing is not None and existing["time_column"] == time_column:
+            return existing
+        EXCLUDE_WINDOW_CONTEXTS[file_id] = context
+        return context
+
+
+def _existing_exclude_window_context(file_id: str, time_column: str) -> dict[str, Any]:
+    file_id = _validate_file_id(file_id)
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        context = EXCLUDE_WINDOW_CONTEXTS.get(file_id)
+        if context is None or context["time_column"] != time_column:
+            raise ValueError("当前数据上下文没有排除窗口状态")
+        return context
+
+
+def _exclude_window_payload(context: dict[str, Any]) -> dict[str, Any]:
+    windows = [dict(window) for window in context["exclude_windows"]]
+    return {
+        "excludeWindows": windows,
+        "excludeWindowStats": exclude_window_stats(context["frame"], windows),
+    }
+
+
+def _exclude_window_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    context = _exclude_window_context(
+        _field(form, "file_id"),
+        _field(form, "time_column"),
+        _field(form, "encoding", "utf-8-sig"),
+    )
+    window = {"start": _field(form, "start"), "end": _field(form, "end")}
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        windows = [*context["exclude_windows"], window]
+        exclude_window_stats(context["frame"], windows)
+        context["exclude_windows"] = windows
+        return _exclude_window_payload(context)
+
+
+def _restore_exclude_window_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    context = _existing_exclude_window_context(
+        _field(form, "file_id"), _field(form, "time_column")
+    )
+    try:
+        index = int(_field(form, "index"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("排除窗口索引无效") from exc
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        windows = context["exclude_windows"]
+        if index < 0 or index >= len(windows):
+            raise ValueError("排除窗口不存在")
+        context["exclude_windows"] = [
+            window for position, window in enumerate(windows) if position != index
+        ]
+        return _exclude_window_payload(context)
+
+
+def _restore_all_exclude_windows_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    context = _existing_exclude_window_context(
+        _field(form, "file_id"), _field(form, "time_column")
+    )
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        context["exclude_windows"] = []
+        return _exclude_window_payload(context)
 
 
 def _columns_response(file_id: str, encoding: str) -> dict[str, Any]:
@@ -1954,6 +2057,14 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
     if len(variables) > 8:
         raise ValueError("最多选择 8 个趋势变量")
 
+    exclude_window_payload = _exclude_window_payload(
+        _exclude_window_context(
+            _single(params, "file_id"),
+            _single(params, "time_column"),
+            _single(params, "encoding", "utf-8-sig"),
+        )
+    )
+
     transformed, raw_rows, max_points = _chart_frame_from_params(
         params,
         variables,
@@ -1977,6 +2088,7 @@ def _trend_response(params: dict[str, list[str]]) -> dict[str, Any]:
         "rows": int(len(transformed)),
         "raw_rows": int(raw_rows),
         "max_points": int(max_points),
+        **exclude_window_payload,
     }
 
 
@@ -2618,6 +2730,11 @@ INDEX_HTML = r"""<!doctype html>
     .legend { display:flex; justify-content:center; gap:16px; flex-wrap:wrap; color:var(--muted); font-size:var(--font-base); }
     .trend-stats { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:10px; align-items:start; }
     .trend-stats.empty { display:block; color:var(--muted); font-size:var(--font-sm); }
+    .exclude-windows { margin:12px 0; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--surface-muted); }
+    .exclude-windows h3 { margin:0 0 6px; font-size:var(--font-sm); }
+    .exclude-window-list { display:grid; gap:6px; margin:8px 0; }
+    .exclude-window-item { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:var(--font-sm); }
+    .exclude-window-item button { flex:0 0 auto; }
     .trend-stat-card { min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:8px; background:var(--panel); padding:10px; }
     .trend-stat-card h3 { margin:0 0 8px; font-size:var(--font-sm); overflow-wrap:anywhere; }
     .trend-stat-card dl { display:grid; gap:4px; margin:0; }
@@ -3178,8 +3295,16 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="actions">
           <button id="clearTrendSelection" type="button" class="secondary" disabled>清除选择</button>
+          <button id="addExcludeWindow" type="button" disabled>加入排除窗口</button>
         </div>
         <div id="trendSelectionInfo" class="help" aria-live="polite">可在趋势绘图区横向拖动选择时间窗口。</div>
+        <section class="exclude-windows" aria-labelledby="excludeWindowsTitle">
+          <h3 id="excludeWindowsTitle">已标记排除时间段</h3>
+          <div class="help">排除窗口当前仅用于趋势页标记，尚未接入分析流程。</div>
+          <div id="excludeWindowList" class="exclude-window-list empty">尚未添加排除窗口。</div>
+          <div id="excludeWindowStats" class="help">已标记：0 个窗口 / 0 点（0.0%）</div>
+          <div class="actions"><button id="restoreAllExcludeWindows" type="button" class="secondary" disabled>恢复所有数据</button></div>
+        </section>
         <div id="trendChart" class="chart empty">选择 1 到 4 个数据后点击“显示趋势”。</div>
         <div id="trendLegend" class="legend"></div>
         <div id="trendStats" class="trend-stats empty">选择数据并点击“显示趋势”后显示统计摘要。</div>
@@ -3407,6 +3532,8 @@ let trendAutoWindowActive = false;
 let trendDefaultStart = "";
 let trendDefaultEnd = "";
 let trendSelection = null;
+let excludeWindows = [];
+let excludeWindowStats = { exclude_window_count: 0, excluded_rows: 0, excluded_ratio: 0 };
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
 const lagProfileCache = new Map();
@@ -3425,6 +3552,8 @@ el("trendStart").addEventListener("input", markTrendTimeRangeManual);
 el("trendEnd").addEventListener("input", markTrendTimeRangeManual);
 el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);
 el("clearTrendSelection").addEventListener("click", clearTrendSelection);
+el("addExcludeWindow").addEventListener("click", addExcludeWindow);
+el("restoreAllExcludeWindows").addEventListener("click", restoreAllExcludeWindows);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("preprocessMode").addEventListener("change", updatePreprocessControls);
 el("confirmRawBranch").addEventListener("click", () => confirmInitialScreeningBranch("raw"));
@@ -3660,6 +3789,7 @@ async function uploadFile() {
     form.append("file", file);
     const data = await postForm("/api/upload", form);
     fileId = data.file_id;
+    updateExcludeWindowState([], null);
     recognizedColumns = [];
     recognizedNumericColumns = [];
     setExcludedColumnSelection([]);
@@ -4742,9 +4872,11 @@ function formatTrendDuration(milliseconds) {
 
 function updateTrendSelectionInfo() {
   const button = el("clearTrendSelection");
+  const addButton = el("addExcludeWindow");
   const info = el("trendSelectionInfo");
-  if (!button || !info) return;
+  if (!button || !addButton || !info) return;
   button.disabled = !trendSelection;
+  addButton.disabled = !trendSelection;
   if (!trendSelection) {
     info.textContent = "可在趋势绘图区横向拖动选择时间窗口。";
     return;
@@ -4763,6 +4895,89 @@ function setTrendWindowFromSelection(start, end) {
   updateTrendSelectionInfo();
 }
 
+function updateExcludeWindowState(windows, stats) {
+  excludeWindows = Array.isArray(windows) ? windows : [];
+  excludeWindowStats = stats || { exclude_window_count: 0, excluded_rows: 0, excluded_ratio: 0 };
+  renderExcludeWindows();
+}
+
+function renderExcludeWindows() {
+  const list = el("excludeWindowList");
+  const stats = el("excludeWindowStats");
+  const restoreAll = el("restoreAllExcludeWindows");
+  if (!list || !stats || !restoreAll) return;
+  const count = Number(excludeWindowStats.exclude_window_count || 0);
+  const rows = Number(excludeWindowStats.excluded_rows || 0);
+  const ratio = Number(excludeWindowStats.excluded_ratio || 0);
+  stats.textContent = `已标记：${count} 个窗口 / ${rows.toLocaleString("zh-CN")} 点（${(ratio * 100).toFixed(1)}%）`;
+  restoreAll.disabled = !excludeWindows.length;
+  if (!excludeWindows.length) {
+    list.className = "exclude-window-list empty";
+    list.textContent = "尚未添加排除窗口。";
+    return;
+  }
+  list.className = "exclude-window-list";
+  list.innerHTML = excludeWindows.map((window, index) =>
+    `<div class="exclude-window-item"><span>${escapeHtml(String(window.start))} ～ ${escapeHtml(String(window.end))}</span><button type="button" class="secondary" data-exclude-window-index="${index}">恢复</button></div>`
+  ).join("");
+  list.querySelectorAll("[data-exclude-window-index]").forEach((button) => {
+    button.addEventListener("click", () => restoreExcludeWindow(Number(button.dataset.excludeWindowIndex)));
+  });
+}
+
+function trendWindowTimestamp(milliseconds) {
+  const date = new Date(milliseconds - new Date(milliseconds).getTimezoneOffset() * 60000);
+  return date.toISOString().slice(0, 19);
+}
+
+async function addExcludeWindow() {
+  if (!trendSelection || !fileId) return;
+  try {
+    const form = new FormData();
+    form.append("file_id", fileId);
+    form.append("time_column", el("timeColumn").value);
+    form.append("encoding", "auto");
+    form.append("start", trendWindowTimestamp(trendSelection.start));
+    form.append("end", trendWindowTimestamp(trendSelection.end));
+    const data = await postForm("/api/exclude_window", form);
+    updateExcludeWindowState(data.excludeWindows, data.excludeWindowStats);
+    trendSelection = null;
+    updateTrendSelectionInfo();
+    if (lastTrendSeries.length) renderTrendChart(lastTrendSeries, lastTrendAxisMode);
+    setStatus("已加入排除窗口；该标记尚未接入分析流程。", "success");
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  }
+}
+
+async function restoreExcludeWindow(index) {
+  try {
+    const form = new FormData();
+    form.append("file_id", fileId);
+    form.append("time_column", el("timeColumn").value);
+    form.append("index", String(index));
+    const data = await postForm("/api/restore_exclude_window", form);
+    updateExcludeWindowState(data.excludeWindows, data.excludeWindowStats);
+    if (lastTrendSeries.length) renderTrendChart(lastTrendSeries, lastTrendAxisMode);
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  }
+}
+
+async function restoreAllExcludeWindows() {
+  if (!excludeWindows.length || !window.confirm("确定恢复所有数据吗？\n这将清除当前全部排除窗口。")) return;
+  try {
+    const form = new FormData();
+    form.append("file_id", fileId);
+    form.append("time_column", el("timeColumn").value);
+    const data = await postForm("/api/restore_all_exclude_windows", form);
+    updateExcludeWindowState(data.excludeWindows, data.excludeWindowStats);
+    if (lastTrendSeries.length) renderTrendChart(lastTrendSeries, lastTrendAxisMode);
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  }
+}
+
 async function drawTrend() {
   try {
     const variables = Array.from(new Set([el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value, el("trendVar5").value, el("trendVar6").value, el("trendVar7").value, el("trendVar8").value].filter(Boolean)));
@@ -4775,6 +4990,7 @@ async function drawTrend() {
     const response = await fetch(`/api/trend?${params.toString()}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "趋势图生成失败");
+    updateExcludeWindowState(data.excludeWindows, data.excludeWindowStats);
     const series = data.series || [];
     lastTrendSeries = series;
     lastTrendAxisMode = el("trendAxisMode").value;
@@ -5073,6 +5289,15 @@ function renderTrendChart(series, axisMode) {
     }).filter(Boolean).join(" ");
     return `<polyline points="${points}" fill="none" stroke="${trendColors[idx % trendColors.length]}" stroke-width="2.2"/>`;
   }).join("");
+  const excludeWindowMarkup = excludeWindows.map((window) => {
+    const start = timestampMilliseconds(window.start);
+    const end = timestampMilliseconds(window.end);
+    if (start === null || end === null) return "";
+    const leftTime = Math.max(timeStart, Math.min(start, end));
+    const rightTime = Math.min(timeEnd, Math.max(start, end));
+    if (leftTime > rightTime) return "";
+    return `<rect data-exclude-window x="${timeToX(leftTime)}" y="${pad.top}" width="${Math.max(1, timeToX(rightTime) - timeToX(leftTime))}" height="${height - pad.top - pad.bottom}" fill="#b45309" fill-opacity=".16" pointer-events="none"/>`;
+  }).join("");
   const currentSelection = trendSelection && trendSelection.start >= timeStart && trendSelection.end <= timeEnd
     ? trendSelection
     : null;
@@ -5091,6 +5316,7 @@ function renderTrendChart(series, axisMode) {
     ${axisMode === "independent" ? `<line x1="${width - pad.right}" y1="${pad.top}" x2="${width - pad.right}" y2="${height - pad.bottom}" stroke="#9aa4b2"/>` : ""}
     ${rightTickSvg}
     <text x="${pad.left}" y="18" font-size="12" fill="#5f6b7a">${escapeHtml(axisNote)}</text>
+    ${excludeWindowMarkup}
     ${paths}
     ${selectionMarkup}
     <rect id="trendSelectionHitbox" x="${pad.left}" y="${pad.top}" width="${plotWidth}" height="${height - pad.top - pad.bottom}" fill="transparent" style="cursor:crosshair;touch-action:none"/>

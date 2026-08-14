@@ -38,6 +38,7 @@ def _run_trend_js(script_body):
             "const escapeHtml = (value) => String(value == null ? '' : value).replace(/[&<>\"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[ch]));",
             "const trendColors = ['#176b87', '#c2410c', '#6d28d9', '#15803d', '#b91c1c', '#ca8a04', '#a21caf', '#475569'];",
             "let trendSelection = null;",
+            "let excludeWindows = [];",
             "let lastTrendSeries = [];",
             _trend_js_block(),
             script_body,

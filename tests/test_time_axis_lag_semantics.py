@@ -9,7 +9,7 @@ from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
 from chem_ts_corr.modeling import build_lag_features
 from chem_ts_corr.preprocess import preprocess_frame, segment_by_load
 from chem_ts_corr.screening import regime_scores
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, lagged_series, sample_period_ns
 from chem_ts_corr.xgb_validation import build_xgb_feature_sets
 
 
@@ -72,6 +72,27 @@ def test_lagged_series_does_not_cross_datetime_breakpoint():
 
     assert pd.isna(shifted.loc["2026-01-01 01:00"])
     assert shifted.loc["2026-01-01 01:05"] == 3.0
+
+
+def test_lagged_series_does_not_cross_forced_physical_breakpoint():
+    index = pd.date_range("2026-01-01 08:00", periods=5, freq="5min")
+    series = pd.Series(range(len(index)), index=index, dtype=float)
+    series.attrs[PHYSICAL_GAP_STARTS_ATTR] = (index[3],)
+
+    shifted = lagged_series(series, index, 1, period_ns=5 * 60 * 1_000_000_000)
+
+    assert pd.isna(shifted.loc[index[3]])
+    assert shifted.loc[index[4]] == 3.0
+
+
+def test_compute_lag_scores_does_not_count_forced_break_pair():
+    index = pd.date_range("2026-01-01 08:00", periods=12, freq="5min")
+    frame = pd.DataFrame({"target": range(12), "x": range(12)}, index=index)
+    frame.attrs[PHYSICAL_GAP_STARTS_ATTR] = (index[6],)
+
+    scores = compute_lag_scores(frame, "target", 1, lag_values=[1])
+
+    assert int(scores.iloc[0]["n"]) == 10
 
 
 def test_preprocess_dropna_preserves_original_sample_period():
@@ -144,6 +165,32 @@ def test_model_and_xgb_features_do_not_bridge_datetime_gap():
     assert after_gap not in xgb_features.index
 
 
+def test_model_and_xgb_features_do_not_bridge_forced_breakpoint():
+    frame = _lagged_frame(1, rows=120)
+    forced_start = frame.index[41]
+    frame.attrs[PHYSICAL_GAP_STARTS_ATTR] = (forced_start,)
+
+    model_features, _ = build_lag_features(
+        frame,
+        "target",
+        max_lag=1,
+        candidate_variables=["x"],
+        max_features=2,
+        best_lags={"x": 1},
+    )
+    xgb_features = build_xgb_feature_sets(
+        frame,
+        "target",
+        pd.DataFrame([{"variable": "x", "screening_lag": 1}]),
+        max_lag=1,
+        baseline_lags=[1],
+        candidate_lag_radius=0,
+    ).features
+
+    assert forced_start not in model_features.index
+    assert forced_start not in xgb_features.index
+
+
 def test_granger_uses_gap_safe_alignment_for_datetime_breaks():
     frame = _lagged_frame(1, rows=240)
     frame["x"] += np.random.default_rng(7).normal(scale=0.05, size=len(frame))
@@ -157,6 +204,18 @@ def test_granger_uses_gap_safe_alignment_for_datetime_breaks():
         maxlag=2,
         diagnostics=diagnostics,
     )
+
+    assert result.loc[0, "status"] == "ok"
+    assert diagnostics.fallback_count == 2
+
+
+def test_granger_uses_time_aware_alignment_for_forced_breaks():
+    frame = _lagged_frame(1, rows=240)
+    frame["x"] += np.random.default_rng(17).normal(scale=0.05, size=len(frame))
+    frame.attrs[PHYSICAL_GAP_STARTS_ATTR] = (frame.index[80],)
+    diagnostics = _GrangerDiagnostics()
+
+    result = run_granger_tests(frame, target="target", variables=["x"], maxlag=2, diagnostics=diagnostics)
 
     assert result.loc[0, "status"] == "ok"
     assert diagnostics.fallback_count == 2
@@ -184,3 +243,22 @@ def test_conditional_granger_applies_segment_mask_only_at_target_time():
     assert result["status"] == "ok"
     assert int(result["best_lag"]) == 1
     assert int(result["n_rows"]) == int(target_mask.sum()) - 1
+
+
+def test_conditional_granger_excludes_forced_break_lag_rows():
+    frame = _lagged_frame(1, rows=240)
+    forced_start = frame.index[80]
+    frame.attrs[PHYSICAL_GAP_STARTS_ATTR] = (forced_start,)
+
+    result = run_conditional_granger_tests(
+        frame,
+        target="target",
+        variables=["x"],
+        maxlag=1,
+        min_rows=40,
+        candidate_lags={"x": [1]},
+        baseline_maxlag=1,
+    ).iloc[0]
+
+    assert result["status"] == "ok"
+    assert int(result["n_rows"]) == len(frame) - 2

@@ -7,6 +7,7 @@ import pandas as pd
 
 from chem_ts_corr.config import NOT_IMPLEMENTED_PREPROCESS_MODES
 from chem_ts_corr.time_axis import (
+    PHYSICAL_GAP_STARTS_ATTR,
     SAMPLE_PERIOD_NS_ATTR,
     infer_sample_period_ns,
     preserve_sample_period,
@@ -16,7 +17,7 @@ from chem_ts_corr.time_axis import (
 
 LOWPASS_PHYSICAL_GAP_FACTOR = 1.5
 RESAMPLE_BY_PHYSICAL_GAPS_ATTR = "resample_by_physical_gaps"
-RESAMPLE_PHYSICAL_GAP_STARTS_ATTR = "resample_physical_gap_starts"
+RESAMPLE_PHYSICAL_GAP_STARTS_ATTR = PHYSICAL_GAP_STARTS_ATTR
 
 
 @dataclass(frozen=True)
@@ -214,7 +215,9 @@ def standardize_frame(
         scale_=fit_frame.std(ddof=0).replace(0, 1),
         feature_names=tuple(fit_frame.columns),
     )
-    return preserve_sample_period(scaler.transform(frame), sample_period_ns(frame))
+    transformed = scaler.transform(frame)
+    transformed.attrs = dict(frame.attrs)
+    return preserve_sample_period(transformed, sample_period_ns(frame))
 
 
 def transform_frame(

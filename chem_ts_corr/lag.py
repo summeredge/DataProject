@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.common import benjamini_hochberg
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
 
 NEAR_PEAK_SCORE_RATIO = 0.95
 TEMPORAL_NEUTRAL_BAND_POINTS = 1
@@ -90,6 +90,7 @@ def compute_lag_scores(
     target_series = frame[target]
     scan_lags = tuple(range(-max_lag, max_lag + 1)) if lag_values is None else tuple(lag_values)
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     resolved_mask = (
         target_mask.reindex(frame.index).fillna(False).astype(bool)
         if target_mask is not None
@@ -102,7 +103,13 @@ def compute_lag_scores(
         series = frame[variable]
         for lag in scan_lags:
             lag = int(lag)
-            shifted = lagged_series(series, target_series.index, lag, period_ns=period_ns)
+            shifted = lagged_series(
+                series,
+                target_series.index,
+                lag,
+                period_ns=period_ns,
+                forced_starts=forced_starts,
+            )
             if resolved_mask is not None:
                 shifted = shifted.where(resolved_mask)
             stats = _aligned_corr_stats(shifted, target_series)

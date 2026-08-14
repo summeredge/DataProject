@@ -8,7 +8,7 @@ from chem_ts_corr.feature_alignment import (
     predict_tabular_model,
     validate_feature_alignment,
 )
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
 
 
 def build_lag_features(
@@ -23,13 +23,14 @@ def build_lag_features(
 ) -> tuple[pd.DataFrame, pd.Series]:
     feature_parts: list[pd.Series] = []
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     for variable in candidate_variables:
         if variable == target:
             continue
         selected_lags = _selected_lags(best_lags.get(variable) if best_lags else None, max_lag, lag_mode)
         for lag in selected_lags:
             feature_parts.append(
-                lagged_series(frame[variable], frame.index, lag, period_ns=period_ns).rename(
+                lagged_series(frame[variable], frame.index, lag, period_ns=period_ns, forced_starts=forced_starts).rename(
                     f"{variable}__lag_{lag}"
                 )
             )

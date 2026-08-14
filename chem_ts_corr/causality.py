@@ -13,7 +13,7 @@ from chem_ts_corr.feature_alignment import (
     predict_linear_model,
     predict_named_matrix_model,
 )
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
 
 
 _GRANGER_COLUMNS = [
@@ -79,6 +79,7 @@ def run_granger_tests(
     active_diagnostics = diagnostics if diagnostics is not None else _GrangerDiagnostics()
     restricted_cache: dict[_RestrictedCacheKey, _RestrictedPath] = {}
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     resolved_target_mask = (
         target_mask.reindex(frame.index).fillna(False).astype(bool)
         if target_mask is not None
@@ -115,7 +116,9 @@ def run_granger_tests(
             continue
 
         try:
-            if resolved_target_mask is not None or _has_datetime_gaps(pair.index, period_ns):
+            if resolved_target_mask is not None or _has_datetime_gaps(
+                pair.index, period_ns, forced_starts
+            ):
                 lag_results = _time_aware_granger_ssr_ftests(
                     pair,
                     target,
@@ -124,6 +127,7 @@ def run_granger_tests(
                     period_ns=period_ns,
                     diagnostics=active_diagnostics,
                     target_mask=resolved_target_mask,
+                    forced_starts=forced_starts,
                 )
             else:
                 lag_results = _fast_granger_ssr_ftests(
@@ -212,10 +216,17 @@ def run_granger_tests(
     return result_frame.reindex(columns=_GRANGER_COLUMNS)
 
 
-def _has_datetime_gaps(index: pd.Index, period_ns: int | None) -> bool:
+def _has_datetime_gaps(
+    index: pd.Index,
+    period_ns: int | None,
+    forced_starts: tuple[object, ...] | list[object] = (),
+) -> bool:
     if not isinstance(index, pd.DatetimeIndex) or period_ns is None or len(index) < 2:
         return False
-    return bool(np.any(np.diff(index.asi8) != int(period_ns)))
+    return bool(
+        np.any(np.diff(index.asi8) != int(period_ns))
+        or (forced_starts and bool(index.isin(pd.DatetimeIndex(forced_starts)).any()))
+    )
 
 
 def _time_aware_granger_ssr_ftests(
@@ -227,6 +238,7 @@ def _time_aware_granger_ssr_ftests(
     period_ns: int | None,
     diagnostics: _GrangerDiagnostics,
     target_mask: pd.Series | None = None,
+    forced_starts: tuple[object, ...] | list[object] = (),
 ) -> dict[int, tuple[float, float]]:
     output: dict[int, tuple[float, float]] = {}
     columns: dict[str, pd.Series] = {"__target_current": pair[target]}
@@ -236,10 +248,10 @@ def _time_aware_granger_ssr_ftests(
         target_column = f"__target_lag_{offset}"
         variable_column = f"__variable_lag_{offset}"
         columns[target_column] = lagged_series(
-            pair[target], pair.index, offset, period_ns=period_ns
+            pair[target], pair.index, offset, period_ns=period_ns, forced_starts=forced_starts
         )
         columns[variable_column] = lagged_series(
-            pair[variable], pair.index, offset, period_ns=period_ns
+            pair[variable], pair.index, offset, period_ns=period_ns, forced_starts=forced_starts
         )
         target_lag_columns.append(target_column)
         variable_lag_columns.append(variable_column)

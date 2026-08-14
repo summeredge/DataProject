@@ -5,6 +5,7 @@ import pandas as pd
 
 
 SAMPLE_PERIOD_NS_ATTR = "lag_sample_period_ns"
+PHYSICAL_GAP_STARTS_ATTR = "resample_physical_gap_starts"
 
 
 def infer_sample_period_ns(index: pd.Index) -> int | None:
@@ -37,12 +38,32 @@ def preserve_sample_period(
     return frame
 
 
+def physical_gap_starts(frame: pd.DataFrame | pd.Series) -> tuple[pd.Timestamp, ...]:
+    values = frame.attrs.get(PHYSICAL_GAP_STARTS_ATTR, ())
+    return tuple(pd.Timestamp(value) for value in values)
+
+
+def physical_segment_ids(
+    index: pd.DatetimeIndex,
+    period_ns: int | None,
+    forced_starts: tuple[object, ...] | list[object] = (),
+) -> pd.Series:
+    if period_ns is None or len(index) < 2:
+        return pd.Series(0, index=index, dtype=int)
+    breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
+    if forced_starts:
+        breaks |= index.isin(pd.DatetimeIndex(forced_starts))
+    breaks.iloc[0] = False
+    return breaks.cumsum().astype(int)
+
+
 def lagged_series(
     series: pd.Series,
     target_index: pd.Index,
     lag: int,
     *,
     period_ns: int | None = None,
+    forced_starts: tuple[object, ...] | list[object] | None = None,
 ) -> pd.Series:
     lag = int(lag)
     if (
@@ -56,5 +77,13 @@ def lagged_series(
             source_index = target_index - pd.to_timedelta(lag * resolved_period, unit="ns")
             shifted = series.reindex(source_index)
             shifted.index = target_index
+            starts = physical_gap_starts(series) if forced_starts is None else forced_starts
+            for start in starts:
+                start = pd.Timestamp(start)
+                crosses_break = (
+                    ((source_index < start) & (target_index >= start))
+                    | ((target_index < start) & (source_index >= start))
+                )
+                shifted = shifted.mask(crosses_break)
             return shifted
     return series.reindex(target_index).shift(lag)

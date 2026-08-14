@@ -13,7 +13,7 @@ from chem_ts_corr.feature_alignment import (
     predict_tabular_model,
 )
 
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
 
 try:
     from xgboost import XGBRegressor
@@ -442,6 +442,7 @@ def build_xgb_feature_sets(
     target_mask: pd.Series | None = None,
 ) -> XGBFeatureSets:
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     prepared = prepare_xgb_validation_frame(frame, target, candidate_pool, control_columns)
     pool = candidate_pool.copy(deep=True) if candidate_pool is not None else pd.DataFrame()
     baseline = normalize_positive_lags([1, *baseline_lags], max_lag)
@@ -458,7 +459,7 @@ def build_xgb_feature_sets(
         name = f"{variable}__lag_{lag}"
         if name not in feature_data:
             feature_data[name] = lagged_series(
-                prepared[variable], prepared.index, lag, period_ns=period_ns
+                prepared[variable], prepared.index, lag, period_ns=period_ns, forced_starts=forced_starts
             )
             used_lags.append(lag)
         return name

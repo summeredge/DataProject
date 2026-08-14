@@ -13,7 +13,12 @@ from chem_ts_corr.common import to_float
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.feature_alignment import fit_linear_model, predict_linear_model
 from chem_ts_corr.lag import build_lag_peak_quality, compute_lag_scores, summarize_best_lags
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import (
+    lagged_series,
+    physical_gap_starts,
+    physical_segment_ids,
+    sample_period_ns,
+)
 
 ROLES = {"TIME", "Y", "CAPACITY", "MV", "PV", "DV", "IGNORE"}
 CONTROL_REFERENCE_COLUMNS = (
@@ -506,6 +511,7 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
     rows: list[dict[str, object]] = []
     ar_lags = list(range(1, min(max_lag, 6) + 1))
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     for variable in candidate_variables:
         if variable == target or variable not in frame.columns:
             continue
@@ -521,11 +527,11 @@ def model_lift_scores(frame: pd.DataFrame, target: str, candidate_variables: lis
         dataset[target] = frame[target]
         for lag in ar_lags:
             dataset[f"{target}__lag_{lag}"] = lagged_series(
-                frame[target], frame.index, lag, period_ns=period_ns
+                frame[target], frame.index, lag, period_ns=period_ns, forced_starts=forced_starts
             )
         for lag in candidate_lags:
             lagged_candidate = lagged_series(
-                frame[variable], frame.index, lag, period_ns=period_ns
+                frame[variable], frame.index, lag, period_ns=period_ns, forced_starts=forced_starts
             )
             dataset[f"{variable}__lag_{lag}"] = lagged_candidate
             # PR-8C nonlinear_stable_driver: expose a quadratic incremental basis.
@@ -782,9 +788,17 @@ def rolling_corr_scores(
         else:
             best_lag, best_score = prepared
         shifted = lagged_series(
-            pair[variable], pair.index, best_lag, period_ns=sample_period_ns(frame)
+            pair[variable],
+            pair.index,
+            best_lag,
+            period_ns=sample_period_ns(frame),
+            forced_starts=physical_gap_starts(frame),
         )
-        segment_ids = _rolling_segment_ids(pair.index, sample_period_ns(frame))
+        segment_ids = physical_segment_ids(
+            pair.index,
+            sample_period_ns(frame),
+            physical_gap_starts(frame),
+        )
         rolling = pd.concat(
             [
                 shifted.loc[segment.index]
@@ -804,14 +818,6 @@ def rolling_corr_scores(
         stability = max(0.0, min(1.0, abs_median * float(sign_consistency) * (1.0 - min(1.0, iqr))))
         rows.append({"variable": variable, "best_lag": best_lag, "best_score": best_score, "rolling_corr_median": float(rolling.median()), "rolling_abs_corr_median": abs_median, "rolling_corr_iqr": iqr, "rolling_sign_consistency": float(sign_consistency), "valid_window_count": int(len(rolling)), "rolling_stability": stability})
     return pd.DataFrame(rows, columns=cols)
-
-
-def _rolling_segment_ids(index: pd.DatetimeIndex, period_ns: int | None) -> pd.Series:
-    if period_ns is None or len(index) < 2:
-        return pd.Series(0, index=index, dtype=int)
-    breaks = index.to_series().diff().ne(pd.to_timedelta(period_ns, unit="ns"))
-    breaks.iloc[0] = False
-    return breaks.cumsum().astype(int)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
@@ -938,6 +944,7 @@ def _redundant_proxy_variables(
     if frame is None or not target or target not in frame.columns:
         return set()
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     residual_map = residual_map or {}
     stability_map = stability_map or {}
     diag_map = diag_map or {}
@@ -960,8 +967,8 @@ def _redundant_proxy_variables(
         for right in candidates[index + 1 :]:
             pair = pd.DataFrame(
                 {
-                    left: lagged_series(frame[left], frame.index, candidate_lags[left], period_ns=period_ns),
-                    right: lagged_series(frame[right], frame.index, candidate_lags[right], period_ns=period_ns),
+                    left: lagged_series(frame[left], frame.index, candidate_lags[left], period_ns=period_ns, forced_starts=forced_starts),
+                    right: lagged_series(frame[right], frame.index, candidate_lags[right], period_ns=period_ns, forced_starts=forced_starts),
                 }
             ).dropna()
             if len(pair) < 30 or abs(float(pair[left].corr(pair[right]))) < 0.995:

@@ -109,6 +109,21 @@ def test_rolling_correlation_does_not_cross_exclusion_gap(tmp_path):
     assert int(result.iloc[0]["valid_window_count"]) == 30
 
 
+def test_rolling_correlation_restarts_at_resampled_forced_break(tmp_path):
+    config = _config(
+        tmp_path,
+        exclude_windows=[{"start": "2026-08-14T08:14:00", "end": "2026-08-14T08:14:00"}],
+    )
+    _write_input(config)
+    resampled = preprocess_frame(load_analysis_source_frame(config), "target", "5min", 0.7)
+
+    result = rolling_corr_scores(
+        resampled, "target", ["predictor"], max_lag=1, window=12, min_periods=6
+    )
+
+    assert int(result.iloc[0]["valid_window_count"]) == 8
+
+
 def test_rolling_correlation_keeps_existing_contiguous_behavior(tmp_path):
     config = _config(tmp_path)
     _write_input(config, periods=40)

@@ -5,7 +5,7 @@ import pandas as pd
 
 from chem_ts_corr.common import benjamini_hochberg
 from chem_ts_corr.feature_alignment import fit_named_matrix_model, predict_named_matrix_model
-from chem_ts_corr.time_axis import lagged_series, sample_period_ns
+from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
 
 
 OUT_COLS = [
@@ -53,6 +53,7 @@ def run_conditional_granger_tests(
     baseline_lag_limit = maxlag if baseline_maxlag is None else min(maxlag, max(1, int(baseline_maxlag)))
     rows: list[dict[str, object]] = []
     period_ns = sample_period_ns(frame)
+    forced_starts = physical_gap_starts(frame)
     resolved_target_mask = (
         target_mask.reindex(frame.index).fillna(False).astype(bool)
         if target_mask is not None
@@ -126,13 +127,13 @@ def run_conditional_granger_tests(
         y_lag_cols = []
         for lag in range(1, baseline_lag_limit + 1):
             col = f"__target_lag_{lag}"
-            base_df[col] = lagged_series(y_series, frame.index, lag, period_ns=period_ns)
+            base_df[col] = lagged_series(y_series, frame.index, lag, period_ns=period_ns, forced_starts=forced_starts)
             y_lag_cols.append(col)
         control_lag_cols = []
         for c, series in control_series.items():
             for lag in range(1, baseline_lag_limit + 1):
                 col = f"__control__{len(control_lag_cols)}__lag_{lag}"
-                base_df[col] = lagged_series(series, frame.index, lag, period_ns=period_ns)
+                base_df[col] = lagged_series(series, frame.index, lag, period_ns=period_ns, forced_starts=forced_starts)
                 control_lag_cols.append(col)
         base_cols = y_lag_cols + control_lag_cols
 
@@ -140,7 +141,7 @@ def run_conditional_granger_tests(
             # full model adds exactly the candidate lag being tested.
             x_lag_col = f"__candidate_lag_{lag}"
             df = base_df.assign(
-                **{x_lag_col: lagged_series(x_series, frame.index, lag, period_ns=period_ns)}
+                **{x_lag_col: lagged_series(x_series, frame.index, lag, period_ns=period_ns, forced_starts=forced_starts)}
             )
             if resolved_target_mask is not None:
                 df = df.loc[resolved_target_mask]

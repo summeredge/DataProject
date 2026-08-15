@@ -26,6 +26,7 @@ from chem_ts_corr.preprocess import (
 )
 from chem_ts_corr.report import write_outputs
 from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze_numeric_frame
+from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, physical_gap_starts
 
 
 SCREENING_BRANCH_NAMES = frozenset({"raw", "processed"})
@@ -680,6 +681,19 @@ def _effective_diff_params(config: AnalysisConfig) -> tuple[int, float]:
     return int(effective_points), float(effective_interval_minutes)
 
 
+def _exclude_window_gap_starts(
+    source: pd.DataFrame,
+    retained: pd.DataFrame,
+) -> tuple[pd.Timestamp, ...]:
+    """Return the first retained timestamp after each internally excluded run."""
+    if not isinstance(source.index, pd.DatetimeIndex) or not len(source):
+        return ()
+    kept = pd.Series(source.index.isin(retained.index), index=source.index)
+    follows_exclusion = ~kept.shift(fill_value=True)
+    has_prior_kept = kept.cumsum().sub(kept).astype(bool)
+    return tuple(source.index[(kept & follows_exclusion & has_prior_kept).to_numpy()])
+
+
 def load_analysis_source_frame(
     config: AnalysisConfig,
     *,
@@ -697,7 +711,13 @@ def load_analysis_source_frame(
         )
     original_rows = len(raw)
     if config.exclude_windows:
-        raw = apply_exclude_windows(raw, config.exclude_windows)
+        retained = apply_exclude_windows(raw, config.exclude_windows)
+        gap_starts = _exclude_window_gap_starts(raw, retained)
+        raw = retained
+        if gap_starts:
+            raw.attrs[PHYSICAL_GAP_STARTS_ATTR] = tuple(
+                dict.fromkeys((*physical_gap_starts(raw), *gap_starts))
+            )
     else:
         raw = raw.copy(deep=True)
     if len(raw) < original_rows:

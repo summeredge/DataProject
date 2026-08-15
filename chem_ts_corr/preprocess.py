@@ -11,6 +11,7 @@ from chem_ts_corr.time_axis import (
     SAMPLE_PERIOD_NS_ATTR,
     infer_sample_period_ns,
     preserve_sample_period,
+    preserve_time_axis_metadata,
     sample_period_ns,
 )
 
@@ -532,7 +533,8 @@ def difference_by_contiguous_segment(frame: pd.DataFrame) -> pd.DataFrame:
         period_ns,
         frame.attrs.get(RESAMPLE_PHYSICAL_GAP_STARTS_ATTR, ()),
     )
-    return preserve_sample_period(frame.groupby(groups).diff(), period_ns)
+    differenced = preserve_sample_period(frame.groupby(groups).diff(), period_ns)
+    return preserve_time_axis_metadata(frame, differenced)
 
 
 def _validate_diff_interval_minutes(

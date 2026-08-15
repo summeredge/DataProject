@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from chem_ts_corr import web
@@ -16,8 +17,10 @@ from chem_ts_corr.pipeline import (
     run_initial_screening_comparison,
     run_initial_screening_workflow,
 )
-from chem_ts_corr.preprocess import preprocess_frame, transform_frame
+from chem_ts_corr.lag import compute_lag_scores, summarize_best_lags
+from chem_ts_corr.preprocess import difference_by_contiguous_segment, preprocess_frame, transform_frame
 from chem_ts_corr.screening import rolling_corr_scores
+from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, lagged_series, physical_gap_starts, sample_period_ns
 
 
 def _config(tmp_path: Path, **overrides) -> AnalysisConfig:
@@ -76,6 +79,88 @@ def test_exclusion_gap_resets_lowpass_and_prevents_cross_gap_difference(tmp_path
 
     assert lowpass.loc[times[6], "target"] == source.loc[times[6], "target"]
     assert times[6] not in diff.index
+
+
+def test_no_resample_exclusion_forces_all_lags_to_stay_within_segments(tmp_path):
+    config = _config(
+        tmp_path,
+        exclude_windows=[{"start": "2026-08-14T08:02:00", "end": "2026-08-14T08:02:00"}],
+    )
+    times = _write_input(config, periods=8)
+    source = load_analysis_source_frame(config)
+    period_ns = sample_period_ns(source)
+
+    assert physical_gap_starts(source) == (times[3],)
+    assert pd.isna(lagged_series(source["predictor"], source.index, 1, period_ns=period_ns).loc[times[3]])
+    assert pd.isna(lagged_series(source["predictor"], source.index, 2, period_ns=period_ns).loc[times[3]])
+    assert pd.isna(lagged_series(source["predictor"], source.index, 3, period_ns=period_ns).loc[times[3]])
+    assert pd.isna(lagged_series(source["predictor"], source.index, -2, period_ns=period_ns).loc[times[1]])
+    assert lagged_series(source["predictor"], source.index, 1, period_ns=period_ns).loc[times[4]] == source.loc[times[3], "predictor"]
+
+    scores = compute_lag_scores(source, "target", 3, lag_values=[-3, -2, -1, 1, 2, 3])
+    assert int(scores.loc[scores["lag"].eq(2), "n"].iloc[0]) == len(source) - 4
+    assert int(scores.loc[scores["lag"].eq(-2), "n"].iloc[0]) == len(source) - 4
+
+
+def test_exclusion_gap_metadata_only_marks_internal_removed_runs(tmp_path):
+    config = _config(
+        tmp_path,
+        exclude_windows=[
+            {"start": "2026-08-14T07:00:00", "end": "2026-08-14T07:30:00"},
+            {"start": "2026-08-14T08:00:00", "end": "2026-08-14T08:01:00"},
+            {"start": "2026-08-14T08:04:00", "end": "2026-08-14T08:05:00"},
+            {"start": "2026-08-14T08:05:00", "end": "2026-08-14T08:06:00"},
+            {"start": "2026-08-14T08:08:00", "end": "2026-08-14T08:08:00"},
+            {"start": "2026-08-14T09:00:00", "end": "2026-08-14T09:30:00"},
+        ],
+    )
+    times = _write_input(config, periods=9)
+
+    source = load_analysis_source_frame(config)
+
+    assert physical_gap_starts(source) == (times[7],)
+
+
+def test_initial_lag_direction_stays_valid_without_crossing_exclusion_gap(tmp_path):
+    config = _config(
+        tmp_path,
+        max_lag=3,
+        exclude_windows=[{"start": "2026-08-14T08:10:00", "end": "2026-08-14T08:10:00"}],
+    )
+    times = pd.date_range("2026-08-14 08:00", periods=30, freq="1min")
+    target = np.random.default_rng(20260815).normal(size=len(times))
+    predictor = np.empty(len(times))
+    predictor[:-2] = target[2:]
+    predictor[-2:] = 0.0
+    pd.DataFrame({"time": times, "target": target, "predictor": predictor}).to_csv(
+        config.input_path, index=False, encoding="utf-8-sig"
+    )
+
+    source = load_analysis_source_frame(config)
+    scores = compute_lag_scores(source, "target", config.max_lag)
+    best = summarize_best_lags(scores).set_index("variable").loc["predictor"]
+
+    assert pd.isna(
+        lagged_series(
+            source["predictor"], source.index, 2, period_ns=sample_period_ns(source)
+        ).loc[times[11]]
+    )
+    assert int(best["lag"]) == 2
+
+
+def test_innovation_difference_retains_exclusion_gap_metadata(tmp_path):
+    config = _config(
+        tmp_path,
+        exclude_windows=[{"start": "2026-08-14T08:02:00", "end": "2026-08-14T08:02:00"}],
+    )
+    times = _write_input(config, periods=8)
+    source = load_analysis_source_frame(config)
+
+    innovation = difference_by_contiguous_segment(source)
+
+    assert sample_period_ns(innovation) == sample_period_ns(source)
+    assert innovation.attrs[PHYSICAL_GAP_STARTS_ATTR] == (times[3],)
+    assert pd.isna(lagged_series(innovation["predictor"], innovation.index, 2, period_ns=sample_period_ns(innovation)).loc[times[3]])
 
 
 def test_resample_keeps_legal_boundary_bins_without_merging_segments(tmp_path):

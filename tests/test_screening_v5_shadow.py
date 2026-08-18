@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
+from chem_ts_corr import pipeline, service
+from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.pipeline import (
+    FORMAL_SCREENING_FILES,
+    MODEL_DOWNSTREAM_FORMAL_INPUT_FILES,
+    CAUSAL_REVIEW_FORMAL_INPUT_FILES,
+    DOWNSTREAM_FORMAL_INPUT_FILES,
+    REQUIRED_FORMAL_SCREENING_FILES,
+    XGB_FORMAL_INPUT_FILES,
+    confirm_initial_screening_branch,
+    run_initial_screening_branch,
+    run_initial_screening_workflow,
+)
 from chem_ts_corr.screening import (
     V5_SHADOW_COMPARISON_COLUMNS,
     V5_SHADOW_SUMMARY_COLUMNS,
@@ -271,3 +286,218 @@ def test_v5_formula_source_excludes_existing_stability_strength_field():
     assert "rolling_stability" not in source
     assert "regime_stability_final" not in source
     assert "rolling_abs_corr_median" not in source
+
+
+def _write_shadow_input(
+    root: Path,
+    *,
+    with_regime: bool,
+    skip_rolling_corr: bool = False,
+) -> AnalysisConfig:
+    root.mkdir(parents=True, exist_ok=True)
+    rows = 240
+    index = pd.date_range("2026-01-01", periods=rows, freq="min")
+    t = np.arange(rows, dtype=float)
+    frame = pd.DataFrame(
+        {
+            "target": np.sin(t / 9.0),
+            "candidate": np.sin((t - 2.0) / 9.0),
+            "other": np.cos(t / 13.0),
+        },
+        index=index,
+    )
+    if with_regime:
+        frame["capacity"] = np.linspace(-1.0, 1.0, rows)
+    input_path = root / "input.csv"
+    table = frame.copy()
+    table.insert(0, "time", index)
+    table.to_csv(input_path, index=False, encoding="utf-8-sig")
+    return AnalysisConfig(
+        input_path=input_path,
+        time_column="time",
+        target="target",
+        output_dir=root,
+        max_lag=3,
+        top_k=3,
+        preprocess_mode="raw",
+        segment_column="capacity" if with_regime else None,
+        capacity_columns=["capacity"] if with_regime else [],
+        residual_control_columns=["capacity"] if with_regime else [],
+        skip_model_lift=True,
+        skip_rolling_corr=skip_rolling_corr,
+    )
+
+
+def _shadow_paths(root: Path) -> tuple[Path, Path, Path]:
+    branch = root / "screening_branches" / "raw"
+    return (
+        branch / "ranked_features.csv",
+        branch / "screening_v5_shadow_comparison.csv",
+        branch / "screening_v5_shadow_summary.csv",
+    )
+
+
+def test_initial_branch_writes_real_shadow_evidence_after_formal_v4(tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=True)
+
+    run_initial_screening_branch(config, branch="raw")
+
+    ranked_path, comparison_path, summary_path = _shadow_paths(tmp_path)
+    assert ranked_path.exists()
+    assert comparison_path.exists()
+    assert summary_path.exists()
+    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
+
+    ranked = pd.read_csv(ranked_path, encoding="utf-8-sig")
+    comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
+    residual = pd.read_csv(
+        tmp_path / "screening_branches" / "raw" / "residual_corr_scores.csv",
+        encoding="utf-8-sig",
+    )
+    row = comparison.loc[comparison["variable"].eq("candidate")].iloc[0]
+    formal = ranked.loc[ranked["variable"].eq("candidate")].iloc[0]
+    residual_row = residual.loc[residual["variable"].eq("candidate")].iloc[0]
+
+    assert row["final_score_v4"] == pytest.approx(formal["final_score"])
+    assert row["rank_v4"] == pytest.approx(formal["driver_rank"])
+    assert pd.notna(row["rolling_support"])
+    assert pd.notna(row["regime_support"])
+    assert row["residual_status"] == residual_row["residual_status"]
+    assert row["residual_corr"] == pytest.approx(residual_row["residual_corr"])
+    if residual_row["residual_status"] == "ok":
+        assert row["residual_support"] == pytest.approx(
+            min(max(float(residual_row["residual_corr"]), 0.0), 1.0)
+        )
+    assert row["base_score_v5"] == pytest.approx(
+        row["association_score"] * row["data_quality_score"]
+    )
+
+
+def test_shadow_without_regime_basis_keeps_regime_support_missing(tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=False)
+
+    run_initial_screening_branch(config, branch="raw")
+
+    comparison = pd.read_csv(_shadow_paths(tmp_path)[1], encoding="utf-8-sig")
+    candidate = comparison.loc[comparison["variable"].eq("candidate")].iloc[0]
+    assert pd.notna(candidate["rolling_support"])
+    assert pd.isna(candidate["regime_support"])
+    assert pd.notna(candidate["stability_support"])
+
+
+def test_shadow_stability_does_not_change_formal_v4_or_candidate_outputs(tmp_path):
+    enabled_root = tmp_path / "enabled"
+    disabled_root = tmp_path / "disabled"
+    enabled = _write_shadow_input(enabled_root, with_regime=True, skip_rolling_corr=False)
+    disabled = _write_shadow_input(disabled_root, with_regime=True, skip_rolling_corr=True)
+
+    run_initial_screening_branch(enabled, branch="raw")
+    run_initial_screening_branch(disabled, branch="raw")
+
+    for filename in ["ranked_features.csv", "recommended_candidates.csv"]:
+        left = pd.read_csv(
+            enabled_root / "screening_branches" / "raw" / filename,
+            encoding="utf-8-sig",
+        )
+        right = pd.read_csv(
+            disabled_root / "screening_branches" / "raw" / filename,
+            encoding="utf-8-sig",
+        )
+        pd.testing.assert_frame_equal(left, right, check_dtype=False)
+
+
+def test_shadow_failure_clears_old_sidecars_but_keeps_formal_outputs(
+    monkeypatch,
+    tmp_path,
+):
+    config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
+    branch_dir = tmp_path / "screening_branches" / "raw"
+    branch_dir.mkdir(parents=True)
+    for name in [
+        "screening_v5_shadow_comparison.csv",
+        "screening_v5_shadow_summary.csv",
+    ]:
+        (branch_dir / name).write_text("old-shadow", encoding="utf-8")
+
+    def fail_shadow(*args, **kwargs):
+        raise RuntimeError("synthetic shadow failure")
+
+    monkeypatch.setattr(pipeline, "build_v5_shadow_comparison", fail_shadow)
+    with pytest.raises(RuntimeError, match="synthetic shadow failure"):
+        run_initial_screening_branch(config, branch="raw")
+
+    assert not (branch_dir / "screening_v5_shadow_comparison.csv").exists()
+    assert not (branch_dir / "screening_v5_shadow_summary.csv").exists()
+    assert (branch_dir / "ranked_features.csv").exists()
+
+
+def test_shadow_evidence_failure_fails_closed_without_blocking_formal_output(
+    monkeypatch,
+    tmp_path,
+):
+    config = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=False)
+
+    def fail_evidence(*args, **kwargs):
+        raise RuntimeError("synthetic evidence failure")
+
+    monkeypatch.setattr(service, "_v5_shadow_stability_evidence", fail_evidence)
+    run_initial_screening_branch(config, branch="raw")
+
+    ranked_path, comparison_path, summary_path = _shadow_paths(tmp_path)
+    assert ranked_path.exists()
+    assert comparison_path.exists()
+    assert summary_path.exists()
+    comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
+    assert comparison["rolling_support"].isna().all()
+    assert comparison["regime_support"].isna().all()
+
+
+def test_shadow_sidecars_are_not_formal_or_downstream_inputs():
+    shadow_names = {
+        "screening_v5_shadow_comparison.csv",
+        "screening_v5_shadow_summary.csv",
+    }
+    for file_set in [
+        REQUIRED_FORMAL_SCREENING_FILES,
+        FORMAL_SCREENING_FILES,
+        DOWNSTREAM_FORMAL_INPUT_FILES,
+        MODEL_DOWNSTREAM_FORMAL_INPUT_FILES,
+        CAUSAL_REVIEW_FORMAL_INPUT_FILES,
+        XGB_FORMAL_INPUT_FILES,
+    ]:
+        assert not shadow_names.intersection(file_set)
+
+
+def test_shadow_sidecars_stay_in_raw_and_processed_branches_after_confirmation(tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=True)
+    processed_config = AnalysisConfig(
+        **{
+            **config.__dict__,
+            "preprocess_mode": "lowpass",
+        }
+    )
+
+    run_initial_screening_workflow(processed_config)
+    raw_dir = tmp_path / "screening_branches" / "raw"
+    processed_dir = tmp_path / "screening_branches" / "processed"
+    for branch_dir in [raw_dir, processed_dir]:
+        assert (branch_dir / "screening_v5_shadow_comparison.csv").exists()
+        assert (branch_dir / "screening_v5_shadow_summary.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
+
+    confirm_initial_screening_branch(tmp_path, branch="processed")
+    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
+
+
+def test_raw_only_promotion_does_not_copy_shadow_sidecars_to_root(tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
+
+    run_initial_screening_workflow(config)
+
+    raw_dir = tmp_path / "screening_branches" / "raw"
+    assert (raw_dir / "screening_v5_shadow_comparison.csv").exists()
+    assert (raw_dir / "screening_v5_shadow_summary.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -45,6 +45,8 @@ class AnalysisTables:
     lag_peak_quality: pd.DataFrame
     rolling_corr_scores: pd.DataFrame
     metrics: dict[str, float | str]
+    shadow_regime_stability: pd.DataFrame = field(default_factory=pd.DataFrame)
+    shadow_rolling_corr_scores: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def run_xgb_analysis(
@@ -94,13 +96,20 @@ def analyze_initial_screening_branch_frame(
     branch/mode pair. The formal ``analyze_numeric_frame()`` guard remains
     enforced for all other callers.
     """
-    return _analyze_numeric_frame_core(frame, config, progress_callback=progress_callback)
+    return _analyze_numeric_frame_core(
+        frame,
+        config,
+        progress_callback=progress_callback,
+        include_v5_shadow=True,
+    )
 
 
 def _analyze_numeric_frame_core(
     frame: pd.DataFrame,
     config: AnalysisConfig,
     progress_callback=None,
+    *,
+    include_v5_shadow: bool = False,
 ) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,
@@ -233,13 +242,146 @@ def _analyze_numeric_frame_core(
         residual_top_k=config.top_k,
     )
     recommended = prioritize_recommended_candidates(recommended, residual_output)
+    shadow_regime_stability = pd.DataFrame()
+    shadow_rolling = pd.DataFrame()
+    if include_v5_shadow:
+        _progress(progress_callback, "正在计算 V5 Shadow 稳定性证据")
+        try:
+            shadow_regime_stability, shadow_rolling = _v5_shadow_stability_evidence(
+                scaled,
+                config,
+                raw_ranked,
+                analysis_target_mask,
+            )
+        except Exception:
+            # Shadow evidence is sidecar-only: a failed optional calculation
+            # must fail closed without blocking formal V4 output generation.
+            variables = (
+                raw_ranked["variable"].astype(str).tolist()
+                if "variable" in raw_ranked.columns
+                else []
+            )
+            shadow_regime_stability = _empty_v5_shadow_regime_stability()
+            shadow_rolling = _skipped_rolling_corr_scores(variables)
     importance = pd.DataFrame()
     granger = pd.DataFrame()
     metrics: dict[str, float | str] = {}
 
     metrics.update({"rows_after_segment": float(raw_segment_mask.sum()), "rows_after_preprocess": float(target_mask.sum()), "variables": float(len(scaled.columns)), "effective_variables": float(len(ranked)), "raw_candidate_count": float(recommended["selected_by_raw"].sum()), "residual_candidate_count": float(recommended["selected_by_residual"].sum()), "candidate_overlap_count": float((recommended["selected_by_raw"] & recommended["selected_by_residual"]).sum()), "forced_only_candidate_count": float((recommended["candidate_source"] == "force_included").sum() + ((recommended["candidate_source"] == "control_reference") & recommended["force_included"]).sum()), "recommended_candidate_count": float(len(recommended)), "control_reference_count": float(ranked["is_control_reference"].sum()), "max_lag": float(config.max_lag), "top_k": float(config.top_k), "missing_force_include": ",".join(missing_forced), "protected_low_variance_columns": ",".join(cleaned.attrs.get("protected_low_variance_columns", []))})
 
-    return AnalysisTables(ranked, recommended, lag_scores, granger, importance, diag, residual_output, regime_output, risks, lift, lag_peak, rolling, metrics)
+    return AnalysisTables(
+        ranked,
+        recommended,
+        lag_scores,
+        granger,
+        importance,
+        diag,
+        residual_output,
+        regime_output,
+        risks,
+        lift,
+        lag_peak,
+        rolling,
+        metrics,
+        shadow_regime_stability=shadow_regime_stability,
+        shadow_rolling_corr_scores=shadow_rolling,
+    )
+
+
+def _v5_shadow_stability_evidence(
+    scaled: pd.DataFrame,
+    config: AnalysisConfig,
+    raw_ranked: pd.DataFrame,
+    target_mask: pd.Series | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute stability evidence after formal V4 tables are frozen.
+
+    The returned frames are sidecar-only.  They are deliberately not passed
+    to ``risk_flags`` or ``final_ranked_features`` and are not part of the
+    formal ``AnalysisTables`` evidence fields.
+    """
+    from chem_ts_corr.screening import (
+        prepare_best_lag_evidence,
+        regime_scores,
+        rolling_corr_scores,
+    )
+
+    variables = (
+        raw_ranked["variable"].astype(str).tolist()
+        if not raw_ranked.empty and "variable" in raw_ranked.columns
+        else []
+    )
+    if not variables:
+        return pd.DataFrame(), pd.DataFrame()
+
+    best_lag_evidence, _ = prepare_best_lag_evidence(
+        scaled,
+        config.target,
+        variables,
+        config.max_lag,
+        ranked=raw_ranked,
+        allow_ranked_reuse=True,
+        ranked_source_frame=scaled,
+        target_mask=target_mask,
+    )
+    if config.skip_rolling_corr:
+        shadow_rolling = _skipped_rolling_corr_scores(variables)
+    else:
+        shadow_rolling = rolling_corr_scores(
+            scaled,
+            config.target,
+            variables,
+            config.max_lag,
+            best_lag_evidence=best_lag_evidence,
+            target_mask=target_mask,
+        )
+
+    regime_column = _v5_shadow_regime_column(scaled, config)
+    if regime_column is None:
+        _, shadow_regime = regime_scores(
+            scaled,
+            config.target,
+            None,
+            config.max_lag,
+            target_mask=target_mask,
+        )
+        return shadow_regime, shadow_rolling
+
+    best_lags = {
+        variable: evidence["best_lag"]
+        for variable, evidence in best_lag_evidence.items()
+        if evidence["best_lag"] is not None
+    }
+    _, shadow_regime = regime_scores(
+        scaled,
+        config.target,
+        regime_column,
+        config.max_lag,
+        best_lags=best_lags,
+        target_mask=target_mask,
+    )
+    return shadow_regime, shadow_rolling
+
+
+def _v5_shadow_regime_column(
+    scaled: pd.DataFrame,
+    config: AnalysisConfig,
+) -> str | None:
+    candidates = [
+        config.segment_column,
+        *(config.capacity_columns or []),
+        *(config.residual_control_columns or []),
+    ]
+    for candidate in candidates:
+        if candidate and candidate != config.target and candidate in scaled.columns:
+            return candidate
+    return None
+
+
+def _empty_v5_shadow_regime_stability() -> pd.DataFrame:
+    from chem_ts_corr.screening import REGIME_STABILITY_COLUMNS
+
+    return pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
 
 
 def _innovation_evidence(

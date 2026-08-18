@@ -25,6 +25,13 @@ from chem_ts_corr.preprocess import (
     resolve_diff_interval,
 )
 from chem_ts_corr.report import write_outputs
+from chem_ts_corr.screening import (
+    V5_SHADOW_COMPARISON_FILENAME,
+    V5_SHADOW_SUMMARY_FILENAME,
+    build_v5_shadow_comparison,
+    build_v5_shadow_summary,
+    write_v5_shadow_outputs,
+)
 from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze_numeric_frame
 from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, physical_gap_starts
 
@@ -98,6 +105,10 @@ XGB_FORMAL_INPUT_FILES = [
     "ranked_features.csv",
     "final_review_summary.csv",
 ]
+V5_SHADOW_OUTPUT_FILES = (
+    V5_SHADOW_COMPARISON_FILENAME,
+    V5_SHADOW_SUMMARY_FILENAME,
+)
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
@@ -157,6 +168,7 @@ def run_initial_screening_branch(
     _validate_screening_branch(branch, config.preprocess_mode)
     branch_dir = config.output_dir / "screening_branches" / branch
     _clear_branch_formal_outputs(branch_dir)
+    _clear_branch_shadow_outputs(branch_dir)
     pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
@@ -188,6 +200,19 @@ def run_initial_screening_branch(
         lag_peak_quality=tables.lag_peak_quality,
         rolling_corr_scores=tables.rolling_corr_scores,
     )
+    try:
+        shadow_comparison = build_v5_shadow_comparison(
+            tables.ranked_features,
+            residual_corr_scores=tables.residual_corr_scores,
+            rolling_corr_scores=getattr(tables, "shadow_rolling_corr_scores", None),
+            regime_stability=getattr(tables, "shadow_regime_stability", None),
+            risk_flags=tables.risk_flags,
+        )
+        shadow_summary = build_v5_shadow_summary(shadow_comparison)
+        write_v5_shadow_outputs(branch_dir, shadow_comparison, shadow_summary)
+    except Exception:
+        _clear_branch_shadow_outputs(branch_dir)
+        raise
     write_outputs_seconds = time.perf_counter() - write_started
     _progress(progress_callback, "分析完成")
     return {
@@ -632,6 +657,12 @@ def _clear_branch_formal_outputs(branch_dir: Path) -> None:
     run-root files are never touched.
     """
     for name in FORMAL_SCREENING_FILES:
+        (branch_dir / name).unlink(missing_ok=True)
+
+
+def _clear_branch_shadow_outputs(branch_dir: Path) -> None:
+    """Remove only this branch's previous V5 Shadow sidecar files."""
+    for name in V5_SHADOW_OUTPUT_FILES:
         (branch_dir / name).unlink(missing_ok=True)
 
 

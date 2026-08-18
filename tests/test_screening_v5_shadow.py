@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import inspect
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from chem_ts_corr import pipeline, service
+from chem_ts_corr import pipeline, screening, service
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.pipeline import (
     FORMAL_SCREENING_FILES,
@@ -121,6 +123,82 @@ def test_v5_missing_stability_does_not_penalize_or_fake_zero():
     assert pd.isna(result["stability_support"])
     assert result["stability_bonus_rate"] == pytest.approx(0.0)
     assert result["shadow_final_score_v5"] == pytest.approx(result["base_score_v5"])
+
+
+def test_v5_support_statuses_distinguish_skipped_failures_insufficient_and_zero():
+    rolling_zero = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        rolling_sign_consistency=0.0,
+        rolling_corr_iqr=0.0,
+        rolling_support_status="ok",
+    )
+    rolling_skipped = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        rolling_sign_consistency=1.0,
+        rolling_corr_iqr=0.0,
+        rolling_support_status="not_computed",
+    )
+    rolling_failed = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        rolling_support_status="calculation_failed",
+    )
+    rolling_insufficient = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        rolling_support_status="insufficient_data",
+    )
+    regime_zero = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        regime_coverage=1.0,
+        regime_strength_consistency=1.0,
+        regime_sign_consistency=0.0,
+        regime_lag_consistency=1.0,
+        regime_support_status="ok",
+    )
+    regime_no_basis = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        regime_support_status="no_regime_basis",
+    )
+    regime_insufficient = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        regime_support_status="insufficient_regimes",
+    )
+    regime_metrics = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        regime_support_status="insufficient_metrics",
+    )
+    regime_failed = compute_v5_shadow_components(
+        association_score=0.8,
+        data_quality_score=1.0,
+        regime_support_status="calculation_failed",
+    )
+
+    assert rolling_zero["rolling_support"] == pytest.approx(0.0)
+    assert rolling_zero["rolling_support_status"] == "ok"
+    for result, status in [
+        (rolling_skipped, "not_computed"),
+        (rolling_failed, "calculation_failed"),
+        (rolling_insufficient, "insufficient_data"),
+    ]:
+        assert pd.isna(result["rolling_support"])
+        assert result["rolling_support_status"] == status
+    assert regime_zero["regime_support"] == pytest.approx(0.0)
+    assert regime_zero["regime_support_status"] == "ok"
+    for result, status in [
+        (regime_no_basis, "no_regime_basis"),
+        (regime_insufficient, "insufficient_regimes"),
+        (regime_metrics, "insufficient_metrics"),
+        (regime_failed, "calculation_failed"),
+    ]:
+        assert pd.isna(result["regime_support"])
+        assert result["regime_support_status"] == status
 
 
 def test_v5_total_support_bonus_is_capped_at_twenty_percent():
@@ -361,7 +439,9 @@ def test_initial_branch_writes_real_shadow_evidence_after_formal_v4(tmp_path):
     assert row["final_score_v4"] == pytest.approx(formal["final_score"])
     assert row["rank_v4"] == pytest.approx(formal["driver_rank"])
     assert pd.notna(row["rolling_support"])
+    assert row["rolling_support_status"] == "ok"
     assert pd.notna(row["regime_support"])
+    assert row["regime_support_status"] == "ok"
     assert row["residual_status"] == residual_row["residual_status"]
     assert row["residual_corr"] == pytest.approx(residual_row["residual_corr"])
     if residual_row["residual_status"] == "ok":
@@ -382,6 +462,7 @@ def test_shadow_without_regime_basis_keeps_regime_support_missing(tmp_path):
     candidate = comparison.loc[comparison["variable"].eq("candidate")].iloc[0]
     assert pd.notna(candidate["rolling_support"])
     assert pd.isna(candidate["regime_support"])
+    assert candidate["regime_support_status"] == "no_regime_basis"
     assert pd.notna(candidate["stability_support"])
 
 
@@ -423,12 +504,70 @@ def test_shadow_failure_clears_old_sidecars_but_keeps_formal_outputs(
         raise RuntimeError("synthetic shadow failure")
 
     monkeypatch.setattr(pipeline, "build_v5_shadow_comparison", fail_shadow)
-    with pytest.raises(RuntimeError, match="synthetic shadow failure"):
-        run_initial_screening_branch(config, branch="raw")
+    timings = run_initial_screening_branch(config, branch="raw")
 
+    assert set(timings) == {
+        "read_data_seconds",
+        "analysis_core_seconds",
+        "write_outputs_seconds",
+        "pipeline_total_seconds",
+    }
     assert not (branch_dir / "screening_v5_shadow_comparison.csv").exists()
     assert not (branch_dir / "screening_v5_shadow_summary.csv").exists()
     assert (branch_dir / "ranked_features.csv").exists()
+
+
+def test_shadow_failure_does_not_block_raw_workflow_promotion(monkeypatch, tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
+
+    def fail_shadow(*args, **kwargs):
+        raise RuntimeError("synthetic shadow failure")
+
+    monkeypatch.setattr(pipeline, "build_v5_shadow_comparison", fail_shadow)
+    result = run_initial_screening_workflow(config)
+
+    assert result["branch"] == "raw"
+    assert (tmp_path / "ranked_features.csv").exists()
+    context = json.loads(
+        (tmp_path / "preprocessing_context.json").read_text(encoding="utf-8")
+    )
+    assert context["branch_selection_status"] == "not_required"
+    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
+    assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
+    assert not (tmp_path / "screening_branches" / "raw" / "screening_v5_shadow_comparison.csv").exists()
+
+
+def test_shadow_failure_does_not_block_processed_workflow(monkeypatch, tmp_path):
+    base = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=True)
+    config = replace(base, preprocess_mode="lowpass")
+    original_build = pipeline.build_v5_shadow_comparison
+    calls = 0
+
+    def fail_processed_shadow(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic processed shadow failure")
+        return original_build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        pipeline,
+        "build_v5_shadow_comparison",
+        fail_processed_shadow,
+    )
+    run_initial_screening_workflow(config)
+
+    branches_root = tmp_path / "screening_branches"
+    assert (branches_root / "raw" / "ranked_features.csv").exists()
+    assert (branches_root / "processed" / "ranked_features.csv").exists()
+    assert (tmp_path / "preprocessing_comparison.csv").exists()
+    context = json.loads(
+        (tmp_path / "preprocessing_context.json").read_text(encoding="utf-8")
+    )
+    assert context["branch_selection_status"] == "awaiting_confirmation"
+    assert (branches_root / "raw" / "screening_v5_shadow_comparison.csv").exists()
+    assert not (branches_root / "processed" / "screening_v5_shadow_comparison.csv").exists()
+    assert not (branches_root / "processed" / "screening_v5_shadow_summary.csv").exists()
 
 
 def test_shadow_evidence_failure_fails_closed_without_blocking_formal_output(
@@ -450,6 +589,112 @@ def test_shadow_evidence_failure_fails_closed_without_blocking_formal_output(
     comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
     assert comparison["rolling_support"].isna().all()
     assert comparison["regime_support"].isna().all()
+    assert comparison["rolling_support_status"].eq("calculation_failed").all()
+    assert comparison["regime_support_status"].eq("calculation_failed").all()
+
+
+def test_shadow_rolling_and_regime_failures_are_isolated(monkeypatch, tmp_path):
+    original_rolling_scores = screening.rolling_corr_scores
+    rolling_failure_root = tmp_path / "rolling_failure"
+    rolling_config = _write_shadow_input(
+        rolling_failure_root,
+        with_regime=True,
+        skip_rolling_corr=False,
+    )
+
+    def fail_rolling(*args, **kwargs):
+        raise RuntimeError("synthetic rolling failure")
+
+    monkeypatch.setattr(screening, "rolling_corr_scores", fail_rolling)
+    run_initial_screening_branch(rolling_config, branch="raw")
+    rolling_comparison = pd.read_csv(
+        _shadow_paths(rolling_failure_root)[1], encoding="utf-8-sig"
+    )
+    rolling_row = rolling_comparison.loc[
+        rolling_comparison["variable"].eq("candidate")
+    ].iloc[0]
+    assert pd.isna(rolling_row["rolling_support"])
+    assert rolling_row["rolling_support_status"] == "calculation_failed"
+    assert pd.notna(rolling_row["regime_support"])
+    assert rolling_row["regime_support_status"] == "ok"
+    assert rolling_row["stability_support"] == pytest.approx(
+        rolling_row["regime_support"]
+    )
+
+    monkeypatch.setattr(screening, "rolling_corr_scores", original_rolling_scores)
+    regime_failure_root = tmp_path / "regime_failure"
+    regime_config = _write_shadow_input(
+        regime_failure_root,
+        with_regime=True,
+        skip_rolling_corr=False,
+    )
+
+    def fail_regime(*args, **kwargs):
+        raise RuntimeError("synthetic regime failure")
+
+    monkeypatch.setattr(screening, "regime_scores", fail_regime)
+    run_initial_screening_branch(regime_config, branch="raw")
+    regime_comparison = pd.read_csv(
+        _shadow_paths(regime_failure_root)[1], encoding="utf-8-sig"
+    )
+    regime_row = regime_comparison.loc[
+        regime_comparison["variable"].eq("candidate")
+    ].iloc[0]
+    assert pd.notna(regime_row["rolling_support"])
+    assert regime_row["rolling_support_status"] == "ok"
+    assert pd.isna(regime_row["regime_support"])
+    assert regime_row["regime_support_status"] == "calculation_failed"
+    assert regime_row["stability_support"] == pytest.approx(
+        regime_row["rolling_support"]
+    )
+
+
+@pytest.mark.parametrize("mode", ["lowpass_detrend", "lowpass_diff"])
+def test_processed_shadow_regime_uses_level_basis_and_processed_correlations(
+    monkeypatch,
+    tmp_path,
+    mode,
+):
+    config = replace(
+        _write_shadow_input(tmp_path / mode, with_regime=True),
+        preprocess_mode=mode,
+    )
+    raw = pipeline.load_analysis_source_frame(config)
+    captured: dict[str, pd.Series | None] = {}
+    original_regime_scores = screening.regime_scores
+
+    def capture_regime_inputs(*args, **kwargs):
+        processed = args[0]
+        capacity_column = args[2]
+        basis = kwargs.get("regime_basis")
+        captured["processed_capacity"] = processed[capacity_column].copy()
+        captured["processed_target"] = processed[config.target].copy()
+        captured["basis"] = (
+            None if basis is None else basis[capacity_column].copy()
+        )
+        return original_regime_scores(*args, **kwargs)
+
+    monkeypatch.setattr(screening, "regime_scores", capture_regime_inputs)
+    service.analyze_initial_screening_branch_frame(raw, config)
+
+    basis = captured["basis"]
+    processed_target = captured["processed_target"]
+    processed_capacity = captured["processed_capacity"]
+    assert basis is not None
+    assert processed_target is not None
+    assert processed_capacity is not None
+    assert basis.index.equals(processed_capacity.index)
+    expected_level = pd.Series(
+        np.linspace(-1.0, 1.0, len(raw)),
+        index=raw.index,
+        name="capacity",
+    ).reindex(basis.index)
+    pd.testing.assert_series_equal(basis, expected_level)
+    raw_target = raw[config.target].reindex(processed_target.index)
+    assert not np.allclose(
+        processed_target.to_numpy(dtype=float),
+        raw_target.to_numpy(dtype=float),
+    )
 
 
 def test_shadow_sidecars_are_not_formal_or_downstream_inputs():

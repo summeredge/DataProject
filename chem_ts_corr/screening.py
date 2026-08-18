@@ -126,7 +126,9 @@ V5_SHADOW_COMPARISON_COLUMNS = [
     "residual_support",
     "residual_bonus_rate",
     "rolling_support",
+    "rolling_support_status",
     "regime_support",
+    "regime_support_status",
     "stability_support",
     "stability_bonus_rate",
     "support_bonus_rate",
@@ -166,8 +168,10 @@ def compute_v5_shadow_components(
     regime_sign_consistency: object = np.nan,
     regime_lag_consistency: object = np.nan,
     regime_evidence_status: object = None,
+    rolling_support_status: object = None,
+    regime_support_status: object = None,
     temporal_direction_status: object = None,
-) -> dict[str, float | str]:
+) -> dict[str, object]:
     """Compute the isolated V5 Shadow score decomposition for one variable.
 
     This function intentionally accepts only the V5 evidence inputs.  It does
@@ -189,16 +193,18 @@ def compute_v5_shadow_components(
         0.10 * residual_support if pd.notna(residual_support) else 0.0
     )
 
-    rolling_support = _v5_rolling_support(
+    rolling_support, rolling_status = _v5_rolling_support(
         rolling_sign_consistency,
         rolling_corr_iqr,
+        rolling_support_status,
     )
-    regime_support = _v5_regime_support(
+    regime_support, regime_status = _v5_regime_support(
         regime_coverage,
         regime_strength_consistency,
         regime_sign_consistency,
         regime_lag_consistency,
         regime_evidence_status,
+        regime_support_status,
     )
     if pd.notna(rolling_support) and pd.notna(regime_support):
         stability_support = float(np.sqrt(rolling_support * regime_support))
@@ -235,7 +241,9 @@ def compute_v5_shadow_components(
         "residual_support": residual_support,
         "residual_bonus_rate": float(residual_bonus),
         "rolling_support": rolling_support,
+        "rolling_support_status": rolling_status,
         "regime_support": regime_support,
+        "regime_support_status": regime_status,
         "stability_support": stability_support,
         "stability_bonus_rate": float(stability_bonus),
         "support_bonus_rate": support_bonus,
@@ -289,6 +297,9 @@ def build_v5_shadow_comparison(
         residual_status = _v5_prefer_source_value(
             residual, row, "residual_status", default="not_computed"
         )
+        regime_evidence_status = _v5_prefer_source_value(
+            regime, row, "regime_evidence_status"
+        )
         temporal_status = row.get("temporal_direction_status", pd.NA)
         components = compute_v5_shadow_components(
             association_score=association,
@@ -300,6 +311,9 @@ def build_v5_shadow_comparison(
             ),
             rolling_corr_iqr=_v5_prefer_source_value(
                 rolling, row, "rolling_corr_iqr"
+            ),
+            rolling_support_status=_v5_prefer_source_value(
+                rolling, row, "rolling_support_status", default=None
             ),
             regime_coverage=_v5_prefer_source_value(
                 regime, row, "regime_coverage"
@@ -313,8 +327,12 @@ def build_v5_shadow_comparison(
             regime_lag_consistency=_v5_prefer_source_value(
                 regime, row, "regime_lag_consistency"
             ),
-            regime_evidence_status=_v5_prefer_source_value(
-                regime, row, "regime_evidence_status"
+            regime_evidence_status=regime_evidence_status,
+            regime_support_status=_v5_prefer_source_value(
+                regime,
+                row,
+                "regime_support_status",
+                default=regime_evidence_status,
             ),
             temporal_direction_status=temporal_status,
         )
@@ -438,12 +456,25 @@ def _v5_status_is(value: object, expected: str) -> bool:
     return str(value) == expected
 
 
-def _v5_rolling_support(sign_consistency: object, corr_iqr: object) -> float:
+def _v5_rolling_support(
+    sign_consistency: object,
+    corr_iqr: object,
+    status: object = None,
+) -> tuple[float, str]:
+    status_value = _v5_status_value(status)
+    if status_value is not None and status_value != "ok":
+        if status_value not in {
+            "not_computed",
+            "calculation_failed",
+            "insufficient_data",
+        }:
+            status_value = "calculation_failed"
+        return np.nan, status_value
     sign = _v5_number(sign_consistency)
     iqr = _v5_number(corr_iqr)
     if pd.isna(sign) or pd.isna(iqr):
-        return np.nan
-    return float(np.clip(sign * (1.0 - min(1.0, iqr)), 0.0, 1.0))
+        return np.nan, "insufficient_data" if status_value == "ok" else "not_computed"
+    return float(np.clip(sign * (1.0 - min(1.0, iqr)), 0.0, 1.0)), "ok"
 
 
 def _v5_regime_support(
@@ -452,17 +483,13 @@ def _v5_regime_support(
     sign_consistency: object,
     lag_consistency: object,
     evidence_status: object,
-) -> float:
-    if evidence_status is not None and not pd.isna(evidence_status):
-        unavailable = {
-            "not_computed",
-            "unavailable",
-            "insufficient_regimes",
-            "insufficient_metrics",
-            "fit_failed",
-        }
-        if str(evidence_status) in unavailable:
-            return np.nan
+    support_status: object = None,
+) -> tuple[float, str]:
+    status_value = _v5_regime_status(support_status)
+    if status_value is None:
+        status_value = _v5_regime_status(evidence_status)
+    if status_value is not None and status_value != "ok":
+        return np.nan, status_value
     values = [_v5_number(value) for value in [
         coverage,
         strength_consistency,
@@ -470,15 +497,50 @@ def _v5_regime_support(
         lag_consistency,
     ]]
     if any(pd.isna(value) for value in values):
-        return np.nan
+        return np.nan, "insufficient_metrics" if status_value == "ok" else "no_regime_basis"
     coverage_value, strength, sign, lag = values
-    return float(
-        np.clip(
-            coverage_value * sign * (0.60 * strength + 0.40 * lag),
-            0.0,
-            1.0,
-        )
+    return (
+        float(
+            np.clip(
+                coverage_value * sign * (0.60 * strength + 0.40 * lag),
+                0.0,
+                1.0,
+            )
+        ),
+        "ok",
     )
+
+
+def _v5_status_value(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return str(value)
+
+
+def _v5_regime_status(value: object) -> str | None:
+    status = _v5_status_value(value)
+    if status is None:
+        return None
+    if status in {
+        "ok",
+        "no_regime_basis",
+        "insufficient_regimes",
+        "insufficient_metrics",
+        "calculation_failed",
+    }:
+        return status
+    if status in {"full_coverage", "partial_coverage"}:
+        return "ok"
+    if status in {"not_computed", "unavailable"}:
+        return "no_regime_basis"
+    if status == "fit_failed":
+        return "calculation_failed"
+    return "calculation_failed"
 
 
 def _v5_source_lookup(source: pd.DataFrame | None) -> pd.DataFrame:
@@ -813,12 +875,16 @@ def regime_scores(
     max_lag: int,
     best_lags: Mapping[str, int] | None = None,
     target_mask: pd.Series | None = None,
+    regime_basis: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     score_cols = ["variable", "regime", "regime_row_count", "score", "signed_corr", "lag", "direction", "p_value", "r2"]
-    if not capacity_column or capacity_column not in frame.columns:
+    basis_frame = frame if regime_basis is None else regime_basis
+    if not capacity_column or capacity_column not in basis_frame.columns:
         return pd.DataFrame(columns=score_cols), pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
 
-    capacity = pd.to_numeric(frame[capacity_column], errors="coerce")
+    capacity = pd.to_numeric(
+        basis_frame[capacity_column].reindex(frame.index), errors="coerce"
+    )
     resolved_mask = (
         target_mask.reindex(frame.index).fillna(False).astype(bool)
         if target_mask is not None

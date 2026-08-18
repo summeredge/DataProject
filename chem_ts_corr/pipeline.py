@@ -212,7 +212,6 @@ def run_initial_screening_branch(
         write_v5_shadow_outputs(branch_dir, shadow_comparison, shadow_summary)
     except Exception:
         _clear_branch_shadow_outputs(branch_dir)
-        raise
     write_outputs_seconds = time.perf_counter() - write_started
     _progress(progress_callback, "分析完成")
     return {

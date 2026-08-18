@@ -252,17 +252,29 @@ def _analyze_numeric_frame_core(
                 config,
                 raw_ranked,
                 analysis_target_mask,
+                regime_level_frame=_v5_shadow_regime_level_frame(
+                    cleaned,
+                    transformed,
+                    scaled,
+                    config,
+                ),
             )
         except Exception:
-            # Shadow evidence is sidecar-only: a failed optional calculation
-            # must fail closed without blocking formal V4 output generation.
+            # This is only an unexpected orchestration fallback.  Rolling and
+            # regime errors inside the Shadow helper are isolated separately.
             variables = (
                 raw_ranked["variable"].astype(str).tolist()
                 if "variable" in raw_ranked.columns
                 else []
             )
-            shadow_regime_stability = _empty_v5_shadow_regime_stability()
-            shadow_rolling = _skipped_rolling_corr_scores(variables)
+            shadow_regime_stability = _v5_shadow_regime_status_frame(
+                variables,
+                "calculation_failed",
+            )
+            shadow_rolling = _v5_shadow_rolling_status_frame(
+                variables,
+                "calculation_failed",
+            )
     importance = pd.DataFrame()
     granger = pd.DataFrame()
     metrics: dict[str, float | str] = {}
@@ -293,6 +305,8 @@ def _v5_shadow_stability_evidence(
     config: AnalysisConfig,
     raw_ranked: pd.DataFrame,
     target_mask: pd.Series | None,
+    *,
+    regime_level_frame: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Compute stability evidence after formal V4 tables are frozen.
 
@@ -314,36 +328,49 @@ def _v5_shadow_stability_evidence(
     if not variables:
         return pd.DataFrame(), pd.DataFrame()
 
-    best_lag_evidence, _ = prepare_best_lag_evidence(
-        scaled,
-        config.target,
-        variables,
-        config.max_lag,
-        ranked=raw_ranked,
-        allow_ranked_reuse=True,
-        ranked_source_frame=scaled,
-        target_mask=target_mask,
-    )
-    if config.skip_rolling_corr:
-        shadow_rolling = _skipped_rolling_corr_scores(variables)
-    else:
-        shadow_rolling = rolling_corr_scores(
+    try:
+        best_lag_evidence, _ = prepare_best_lag_evidence(
             scaled,
             config.target,
             variables,
             config.max_lag,
-            best_lag_evidence=best_lag_evidence,
+            ranked=raw_ranked,
+            allow_ranked_reuse=True,
+            ranked_source_frame=scaled,
             target_mask=target_mask,
         )
+    except Exception:
+        best_lag_evidence = {}
 
-    regime_column = _v5_shadow_regime_column(scaled, config)
+    if config.skip_rolling_corr:
+        shadow_rolling = _v5_shadow_rolling_status_frame(
+            variables,
+            "not_computed",
+        )
+    else:
+        try:
+            rolling = rolling_corr_scores(
+                scaled,
+                config.target,
+                variables,
+                config.max_lag,
+                best_lag_evidence=best_lag_evidence,
+                target_mask=target_mask,
+            )
+        except Exception:
+            shadow_rolling = _v5_shadow_rolling_status_frame(
+                variables,
+                "calculation_failed",
+            )
+        else:
+            shadow_rolling = _v5_normalize_shadow_rolling(rolling, variables)
+
+    basis_frame = scaled if regime_level_frame is None else regime_level_frame
+    regime_column = _v5_shadow_regime_column(basis_frame, config)
     if regime_column is None:
-        _, shadow_regime = regime_scores(
-            scaled,
-            config.target,
-            None,
-            config.max_lag,
-            target_mask=target_mask,
+        shadow_regime = _v5_shadow_regime_status_frame(
+            variables,
+            "no_regime_basis",
         )
         return shadow_regime, shadow_rolling
 
@@ -352,19 +379,28 @@ def _v5_shadow_stability_evidence(
         for variable, evidence in best_lag_evidence.items()
         if evidence["best_lag"] is not None
     }
-    _, shadow_regime = regime_scores(
-        scaled,
-        config.target,
-        regime_column,
-        config.max_lag,
-        best_lags=best_lags,
-        target_mask=target_mask,
-    )
+    try:
+        _, regime = regime_scores(
+            scaled,
+            config.target,
+            regime_column,
+            config.max_lag,
+            best_lags=best_lags,
+            target_mask=target_mask,
+            regime_basis=basis_frame,
+        )
+    except Exception:
+        shadow_regime = _v5_shadow_regime_status_frame(
+            variables,
+            "calculation_failed",
+        )
+    else:
+        shadow_regime = _v5_normalize_shadow_regime(regime, variables)
     return shadow_regime, shadow_rolling
 
 
 def _v5_shadow_regime_column(
-    scaled: pd.DataFrame,
+    frame: pd.DataFrame,
     config: AnalysisConfig,
 ) -> str | None:
     candidates = [
@@ -373,15 +409,181 @@ def _v5_shadow_regime_column(
         *(config.residual_control_columns or []),
     ]
     for candidate in candidates:
-        if candidate and candidate != config.target and candidate in scaled.columns:
+        if candidate and candidate != config.target and candidate in frame.columns:
             return candidate
     return None
 
 
-def _empty_v5_shadow_regime_stability() -> pd.DataFrame:
+def _v5_shadow_regime_level_frame(
+    cleaned: pd.DataFrame,
+    transformed: pd.DataFrame,
+    scaled: pd.DataFrame,
+    config: AnalysisConfig,
+) -> pd.DataFrame | None:
+    level_frame = transformed if config.preprocess_mode == "lowpass" else cleaned
+    column = _v5_shadow_regime_column(level_frame, config)
+    if column is None:
+        return None
+    basis = level_frame[[column]].reindex(scaled.index)
+    basis.attrs = dict(level_frame.attrs)
+    return basis
+
+
+def _v5_shadow_rolling_status_frame(
+    candidate_variables: list[str],
+    status: str,
+) -> pd.DataFrame:
+    frame = _skipped_rolling_corr_scores(candidate_variables)
+    frame["rolling_support_status"] = status
+    return frame
+
+
+def _v5_normalize_shadow_rolling(
+    result: pd.DataFrame,
+    candidate_variables: list[str],
+) -> pd.DataFrame:
+    defaults = _skipped_rolling_corr_scores(candidate_variables)
+    result_lookup = _v5_shadow_lookup(result)
+    rows: list[dict[str, object]] = []
+    value_columns = [column for column in defaults.columns if column != "variable"]
+    for variable in candidate_variables:
+        row = defaults.loc[defaults["variable"].eq(variable)].iloc[0].to_dict()
+        source = result_lookup.get(variable)
+        if source is None:
+            row["rolling_support_status"] = "insufficient_data"
+        else:
+            for column in value_columns:
+                if column in source.index and not _v5_shadow_missing(source[column]):
+                    row[column] = source[column]
+            source_status = source.get("rolling_support_status")
+            if source_status in {
+                "not_computed",
+                "calculation_failed",
+                "insufficient_data",
+            }:
+                row["rolling_support_status"] = source_status
+            elif _v5_shadow_finite(row["rolling_sign_consistency"]) and _v5_shadow_finite(
+                row["rolling_corr_iqr"]
+            ):
+                row["rolling_support_status"] = "ok"
+            else:
+                row["rolling_support_status"] = "insufficient_data"
+        rows.append(row)
+    return pd.DataFrame(rows, columns=defaults.columns)
+
+
+def _v5_shadow_regime_status_frame(
+    candidate_variables: list[str],
+    status: str,
+) -> pd.DataFrame:
     from chem_ts_corr.screening import REGIME_STABILITY_COLUMNS
 
-    return pd.DataFrame(columns=REGIME_STABILITY_COLUMNS)
+    columns = [*REGIME_STABILITY_COLUMNS, "regime_support_status"]
+    rows: list[dict[str, object]] = []
+    for variable in candidate_variables:
+        row = {column: np.nan for column in columns}
+        row["variable"] = variable
+        row["regime_evidence_status"] = status
+        row["regime_support_status"] = status
+        rows.append(row)
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _v5_normalize_shadow_regime(
+    result: pd.DataFrame,
+    candidate_variables: list[str],
+) -> pd.DataFrame:
+    from chem_ts_corr.screening import REGIME_STABILITY_COLUMNS
+
+    if result is None or result.empty:
+        return _v5_shadow_regime_status_frame(
+            candidate_variables,
+            "insufficient_regimes",
+        )
+    defaults = _v5_shadow_regime_status_frame(
+        candidate_variables,
+        "insufficient_metrics",
+    )
+    result_lookup = _v5_shadow_lookup(result)
+    value_columns = [column for column in REGIME_STABILITY_COLUMNS if column != "variable"]
+    rows: list[dict[str, object]] = []
+    metric_columns = [
+        "regime_coverage",
+        "regime_strength_consistency",
+        "regime_sign_consistency",
+        "regime_lag_consistency",
+    ]
+    for variable in candidate_variables:
+        row = defaults.loc[defaults["variable"].eq(variable)].iloc[0].to_dict()
+        source = result_lookup.get(variable)
+        if source is not None:
+            for column in value_columns:
+                if column in source.index and not _v5_shadow_missing(source[column]):
+                    row[column] = source[column]
+            raw_status = source.get(
+                "regime_support_status",
+                source.get("regime_evidence_status"),
+            )
+            status = _v5_shadow_regime_status(raw_status)
+            if status is None:
+                status = (
+                    "ok"
+                    if all(_v5_shadow_finite(row[column]) for column in metric_columns)
+                    else "insufficient_metrics"
+                )
+            elif status == "ok" and not all(
+                _v5_shadow_finite(row[column]) for column in metric_columns
+            ):
+                status = "insufficient_metrics"
+            row["regime_support_status"] = status
+        rows.append(row)
+    return pd.DataFrame(rows, columns=[*REGIME_STABILITY_COLUMNS, "regime_support_status"])
+
+
+def _v5_shadow_lookup(frame: pd.DataFrame | None) -> dict[str, pd.Series]:
+    if frame is None or frame.empty or "variable" not in frame.columns:
+        return {}
+    prepared = frame.copy(deep=True)
+    prepared["variable"] = prepared["variable"].astype(str)
+    return {
+        str(row["variable"]): row
+        for _, row in prepared.drop_duplicates("variable").iterrows()
+    }
+
+
+def _v5_shadow_missing(value: object) -> bool:
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _v5_shadow_finite(value: object) -> bool:
+    try:
+        return bool(np.isfinite(float(value)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _v5_shadow_regime_status(value: object) -> str | None:
+    if _v5_shadow_missing(value):
+        return None
+    status = str(value)
+    if status in {
+        "ok",
+        "no_regime_basis",
+        "insufficient_regimes",
+        "insufficient_metrics",
+        "calculation_failed",
+    }:
+        return status
+    if status in {"full_coverage", "partial_coverage"}:
+        return "ok"
+    if status in {"not_computed", "unavailable"}:
+        return "no_regime_basis"
+    if status == "fit_failed":
+        return "calculation_failed"
+    return "calculation_failed"
 
 
 def _innovation_evidence(
@@ -524,6 +726,7 @@ def _skipped_rolling_corr_scores(candidate_variables: list[str]) -> pd.DataFrame
         "rolling_sign_consistency",
         "valid_window_count",
         "rolling_stability",
+        "rolling_support_status",
     ]
     return pd.DataFrame(
         [
@@ -537,6 +740,7 @@ def _skipped_rolling_corr_scores(candidate_variables: list[str]) -> pd.DataFrame
                 "rolling_sign_consistency": pd.NA,
                 "valid_window_count": 0,
                 "rolling_stability": pd.NA,
+                "rolling_support_status": "not_computed",
             }
             for variable in candidate_variables
         ],

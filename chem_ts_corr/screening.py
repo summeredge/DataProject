@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Literal, TypedDict
 
 import numpy as np
@@ -109,6 +110,494 @@ REGIME_STABILITY_COLUMNS = [
 ]
 PRIMARY_RANK_COLUMN = "final_score"
 PRIMARY_SCORE_COLUMN = "final_score"
+
+V5_SHADOW_SCORE_METHOD = "initial_association_temporal_v5"
+V5_SHADOW_COMPARISON_FILENAME = "screening_v5_shadow_comparison.csv"
+V5_SHADOW_SUMMARY_FILENAME = "screening_v5_shadow_summary.csv"
+V5_SHADOW_COMPARISON_COLUMNS = [
+    "variable",
+    "final_score_v4",
+    "rank_v4",
+    "association_score",
+    "data_quality_score",
+    "base_score_v5",
+    "residual_corr",
+    "residual_status",
+    "residual_support",
+    "residual_bonus_rate",
+    "rolling_support",
+    "regime_support",
+    "stability_support",
+    "stability_bonus_rate",
+    "support_bonus_rate",
+    "evidence_score_v5",
+    "shadow_final_score_v5",
+    "rank_v5",
+    "rank_delta",
+    "score_delta",
+    "temporal_direction_status",
+    "risk_flags",
+]
+V5_SHADOW_SUMMARY_COLUMNS = [
+    "k",
+    "effective_k",
+    "top_k_overlap_count",
+    "top_k_overlap_ratio",
+    "top_k_overlap",
+    "top_k_entrants",
+    "top_k_dropouts",
+    "max_rank_rise_variable",
+    "max_rank_rise_delta",
+    "max_rank_drop_variable",
+    "max_rank_drop_delta",
+]
+
+
+def compute_v5_shadow_components(
+    *,
+    association_score: object,
+    data_quality_score: object,
+    residual_corr: object = np.nan,
+    residual_status: object = "not_computed",
+    rolling_sign_consistency: object = np.nan,
+    rolling_corr_iqr: object = np.nan,
+    regime_coverage: object = np.nan,
+    regime_strength_consistency: object = np.nan,
+    regime_sign_consistency: object = np.nan,
+    regime_lag_consistency: object = np.nan,
+    regime_evidence_status: object = None,
+    temporal_direction_status: object = None,
+) -> dict[str, float | str]:
+    """Compute the isolated V5 Shadow score decomposition for one variable.
+
+    This function intentionally accepts only the V5 evidence inputs.  It does
+    not read or mutate the formal V4 score, risk flags, or any later-stage
+    validation result.  Missing support evidence is represented by ``NaN``;
+    its bonus is zero so that missing and a measured zero remain distinct.
+    """
+    association = _v5_bounded_number(association_score)
+    quality = _v5_bounded_number(data_quality_score)
+    base = association * quality if pd.notna(association) and pd.notna(quality) else np.nan
+
+    residual_value = _v5_number(residual_corr)
+    residual_support = (
+        float(np.clip(residual_value, 0.0, 1.0))
+        if _v5_status_is(residual_status, "ok") and pd.notna(residual_value)
+        else np.nan
+    )
+    residual_bonus = (
+        0.10 * residual_support if pd.notna(residual_support) else 0.0
+    )
+
+    rolling_support = _v5_rolling_support(
+        rolling_sign_consistency,
+        rolling_corr_iqr,
+    )
+    regime_support = _v5_regime_support(
+        regime_coverage,
+        regime_strength_consistency,
+        regime_sign_consistency,
+        regime_lag_consistency,
+        regime_evidence_status,
+    )
+    if pd.notna(rolling_support) and pd.notna(regime_support):
+        stability_support = float(np.sqrt(rolling_support * regime_support))
+    elif pd.notna(rolling_support):
+        stability_support = rolling_support
+    elif pd.notna(regime_support):
+        stability_support = regime_support
+    else:
+        stability_support = np.nan
+    stability_bonus = (
+        0.10 * stability_support if pd.notna(stability_support) else 0.0
+    )
+
+    support_bonus = float(np.clip(residual_bonus + stability_bonus, 0.0, 0.20))
+    evidence = (
+        float(min(1.0, base * (1.0 + support_bonus)))
+        if pd.notna(base)
+        else np.nan
+    )
+    if _v5_status_is(temporal_direction_status, "target_leads_supported"):
+        shadow_final = (
+            float(min(evidence * TARGET_LEADS_PENALTY_RATE, TARGET_LEADS_SCORE_CAP))
+            if pd.notna(evidence)
+            else np.nan
+        )
+    else:
+        shadow_final = evidence
+
+    return {
+        "association_score": association,
+        "data_quality_score": quality,
+        "base_score_v5": base,
+        "residual_corr": residual_value,
+        "residual_support": residual_support,
+        "residual_bonus_rate": float(residual_bonus),
+        "rolling_support": rolling_support,
+        "regime_support": regime_support,
+        "stability_support": stability_support,
+        "stability_bonus_rate": float(stability_bonus),
+        "support_bonus_rate": support_bonus,
+        "evidence_score_v5": evidence,
+        "shadow_final_score_v5": shadow_final,
+    }
+
+
+def build_v5_shadow_comparison(
+    ranked_features: pd.DataFrame,
+    residual_corr_scores: pd.DataFrame | None = None,
+    rolling_corr_scores: pd.DataFrame | None = None,
+    regime_stability: pd.DataFrame | None = None,
+    risk_flags: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build an auditable V4/V5 comparison without changing formal screening.
+
+    ``ranked_features`` is the frozen formal V4 result.  The other frames are
+    optional, independently generated evidence tables.  The returned frame is
+    a new object and is suitable for ``write_v5_shadow_outputs``; no formal
+    CSV/API/table is written or modified by this function.
+    """
+    if ranked_features is None or ranked_features.empty:
+        return pd.DataFrame(columns=V5_SHADOW_COMPARISON_COLUMNS)
+    if "variable" not in ranked_features.columns:
+        raise ValueError("ranked_features must contain a variable column")
+
+    frame = ranked_features.copy(deep=True)
+    frame["variable"] = frame["variable"].astype(str)
+    frame = frame.drop_duplicates(subset=["variable"], keep="first").reset_index(drop=True)
+    frame = _v5_assign_formal_ranks(frame)
+
+    residual_lookup = _v5_source_lookup(residual_corr_scores)
+    rolling_lookup = _v5_source_lookup(rolling_corr_scores)
+    regime_lookup = _v5_source_lookup(regime_stability)
+    risk_lookup = _v5_source_lookup(risk_flags)
+
+    rows: list[dict[str, object]] = []
+    for _, row in frame.iterrows():
+        variable = str(row["variable"])
+        residual = _v5_lookup_row(residual_lookup, variable)
+        rolling = _v5_lookup_row(rolling_lookup, variable)
+        regime = _v5_lookup_row(regime_lookup, variable)
+        risk = _v5_lookup_row(risk_lookup, variable)
+
+        association = _v5_association_value(row)
+        quality = row.get("data_quality_score", np.nan)
+        residual_corr = _v5_prefer_source_value(
+            residual, row, "residual_corr", default=np.nan
+        )
+        residual_status = _v5_prefer_source_value(
+            residual, row, "residual_status", default="not_computed"
+        )
+        temporal_status = row.get("temporal_direction_status", pd.NA)
+        components = compute_v5_shadow_components(
+            association_score=association,
+            data_quality_score=quality,
+            residual_corr=residual_corr,
+            residual_status=residual_status,
+            rolling_sign_consistency=_v5_prefer_source_value(
+                rolling, row, "rolling_sign_consistency"
+            ),
+            rolling_corr_iqr=_v5_prefer_source_value(
+                rolling, row, "rolling_corr_iqr"
+            ),
+            regime_coverage=_v5_prefer_source_value(
+                regime, row, "regime_coverage"
+            ),
+            regime_strength_consistency=_v5_prefer_source_value(
+                regime, row, "regime_strength_consistency"
+            ),
+            regime_sign_consistency=_v5_prefer_source_value(
+                regime, row, "regime_sign_consistency"
+            ),
+            regime_lag_consistency=_v5_prefer_source_value(
+                regime, row, "regime_lag_consistency"
+            ),
+            regime_evidence_status=_v5_prefer_source_value(
+                regime, row, "regime_evidence_status"
+            ),
+            temporal_direction_status=temporal_status,
+        )
+        risk_value = _v5_prefer_source_value(risk, row, "risk_flags", default="")
+        rows.append(
+            {
+                "variable": variable,
+                "final_score_v4": row.get("final_score", np.nan),
+                "rank_v4": row.get("rank_v4", np.nan),
+                **components,
+                "residual_status": residual_status,
+                "rank_v5": np.nan,
+                "rank_delta": np.nan,
+                "score_delta": np.nan,
+                "temporal_direction_status": temporal_status,
+                "risk_flags": "" if pd.isna(risk_value) else risk_value,
+            }
+        )
+
+    comparison = pd.DataFrame(rows, columns=V5_SHADOW_COMPARISON_COLUMNS)
+    comparison["final_score_v4"] = pd.to_numeric(
+        comparison["final_score_v4"], errors="coerce"
+    )
+    comparison["rank_v4"] = pd.to_numeric(comparison["rank_v4"], errors="coerce")
+    comparison = _v5_assign_shadow_ranks(comparison)
+    comparison["rank_delta"] = (
+        pd.to_numeric(comparison["rank_v4"], errors="coerce")
+        - pd.to_numeric(comparison["rank_v5"], errors="coerce")
+    )
+    comparison["score_delta"] = (
+        pd.to_numeric(comparison["shadow_final_score_v5"], errors="coerce")
+        - pd.to_numeric(comparison["final_score_v4"], errors="coerce")
+    )
+    return comparison.loc[:, V5_SHADOW_COMPARISON_COLUMNS]
+
+
+def build_v5_shadow_summary(
+    comparison: pd.DataFrame,
+    top_ks: tuple[int, ...] = (10, 20, 30),
+) -> pd.DataFrame:
+    """Return objective Top-K overlap and rank-movement summaries."""
+    if comparison is None or comparison.empty:
+        return pd.DataFrame(columns=V5_SHADOW_SUMMARY_COLUMNS)
+    rows: list[dict[str, object]] = []
+    frame = comparison.copy(deep=True)
+    frame["variable"] = frame["variable"].astype(str)
+    for requested_k in top_ks:
+        k = int(requested_k)
+        if k <= 0:
+            continue
+        v4_available = pd.to_numeric(frame["rank_v4"], errors="coerce").notna().sum()
+        v5_available = pd.to_numeric(frame["rank_v5"], errors="coerce").notna().sum()
+        effective_k = min(k, int(v4_available), int(v5_available))
+        v4_names = _v5_top_variables(frame, "rank_v4", effective_k)
+        v5_names = _v5_top_variables(frame, "rank_v5", effective_k)
+        overlap = [name for name in v4_names if name in set(v5_names)]
+        entrants = [name for name in v5_names if name not in set(v4_names)]
+        dropouts = [name for name in v4_names if name not in set(v5_names)]
+        rise = _v5_extreme_rank_delta(frame, rising=True)
+        drop = _v5_extreme_rank_delta(frame, rising=False)
+        rows.append(
+            {
+                "k": k,
+                "effective_k": effective_k,
+                "top_k_overlap_count": len(overlap),
+                "top_k_overlap_ratio": len(overlap) / effective_k if effective_k else np.nan,
+                "top_k_overlap": ";".join(overlap),
+                "top_k_entrants": ";".join(entrants),
+                "top_k_dropouts": ";".join(dropouts),
+                "max_rank_rise_variable": rise[0],
+                "max_rank_rise_delta": rise[1],
+                "max_rank_drop_variable": drop[0],
+                "max_rank_drop_delta": drop[1],
+            }
+        )
+    return pd.DataFrame(rows, columns=V5_SHADOW_SUMMARY_COLUMNS)
+
+
+def write_v5_shadow_outputs(
+    output_dir: str | Path,
+    comparison: pd.DataFrame,
+    summary: pd.DataFrame | None = None,
+) -> dict[str, Path]:
+    """Write only the independent V5 Shadow comparison artifacts."""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    comparison_path = output_path / V5_SHADOW_COMPARISON_FILENAME
+    summary_path = output_path / V5_SHADOW_SUMMARY_FILENAME
+    comparison.loc[:, V5_SHADOW_COMPARISON_COLUMNS].to_csv(
+        comparison_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
+    (summary if summary is not None else build_v5_shadow_summary(comparison)).loc[
+        :, V5_SHADOW_SUMMARY_COLUMNS
+    ].to_csv(summary_path, index=False, encoding="utf-8-sig")
+    return {"comparison": comparison_path, "summary": summary_path}
+
+
+def _v5_number(value: object) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return numeric if np.isfinite(numeric) else np.nan
+
+
+def _v5_bounded_number(value: object) -> float:
+    numeric = _v5_number(value)
+    return float(np.clip(numeric, 0.0, 1.0)) if pd.notna(numeric) else np.nan
+
+
+def _v5_status_is(value: object, expected: str) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        return False
+    return str(value) == expected
+
+
+def _v5_rolling_support(sign_consistency: object, corr_iqr: object) -> float:
+    sign = _v5_number(sign_consistency)
+    iqr = _v5_number(corr_iqr)
+    if pd.isna(sign) or pd.isna(iqr):
+        return np.nan
+    return float(np.clip(sign * (1.0 - min(1.0, iqr)), 0.0, 1.0))
+
+
+def _v5_regime_support(
+    coverage: object,
+    strength_consistency: object,
+    sign_consistency: object,
+    lag_consistency: object,
+    evidence_status: object,
+) -> float:
+    if evidence_status is not None and not pd.isna(evidence_status):
+        unavailable = {
+            "not_computed",
+            "unavailable",
+            "insufficient_regimes",
+            "insufficient_metrics",
+            "fit_failed",
+        }
+        if str(evidence_status) in unavailable:
+            return np.nan
+    values = [_v5_number(value) for value in [
+        coverage,
+        strength_consistency,
+        sign_consistency,
+        lag_consistency,
+    ]]
+    if any(pd.isna(value) for value in values):
+        return np.nan
+    coverage_value, strength, sign, lag = values
+    return float(
+        np.clip(
+            coverage_value * sign * (0.60 * strength + 0.40 * lag),
+            0.0,
+            1.0,
+        )
+    )
+
+
+def _v5_source_lookup(source: pd.DataFrame | None) -> pd.DataFrame:
+    if source is None or source.empty or "variable" not in source.columns:
+        return pd.DataFrame()
+    prepared = source.copy(deep=True)
+    prepared["variable"] = prepared["variable"].astype(str)
+    return prepared.drop_duplicates(subset=["variable"], keep="first").set_index("variable")
+
+
+def _v5_lookup_row(source: pd.DataFrame, variable: str) -> pd.Series:
+    if source.empty or variable not in source.index:
+        return pd.Series(dtype=object)
+    value = source.loc[variable]
+    return value if isinstance(value, pd.Series) else pd.Series(value)
+
+
+def _v5_prefer_source_value(
+    source_row: pd.Series,
+    fallback_row: pd.Series,
+    column: str,
+    default: object = np.nan,
+) -> object:
+    if column in source_row.index:
+        value = source_row.get(column)
+        if not pd.isna(value):
+            return value
+    return fallback_row.get(column, default)
+
+
+def _v5_association_value(row: pd.Series) -> object:
+    association = _v5_number(row.get("association_score", np.nan))
+    if pd.notna(association):
+        return association
+    for column in ["raw_corr", "score"]:
+        value = _v5_number(row.get(column, np.nan))
+        if pd.notna(value):
+            return float(np.clip(value, 0.0, 1.0))
+    best_lag_corr = _v5_number(row.get("best_lag_corr", np.nan))
+    return float(np.clip(abs(best_lag_corr), 0.0, 1.0)) if pd.notna(best_lag_corr) else np.nan
+
+
+def _v5_assign_formal_ranks(frame: pd.DataFrame) -> pd.DataFrame:
+    ranked = frame.copy(deep=True)
+    provided = pd.to_numeric(
+        ranked["driver_rank"]
+        if "driver_rank" in ranked.columns
+        else pd.Series(np.nan, index=ranked.index),
+        errors="coerce",
+    )
+    if provided.notna().all():
+        ranked["rank_v4"] = provided.astype(int)
+        return ranked
+    score = pd.to_numeric(
+        ranked["final_score"]
+        if "final_score" in ranked.columns
+        else pd.Series(np.nan, index=ranked.index),
+        errors="coerce",
+    )
+    ranked["_v5_v4_score"] = score.fillna(-np.inf)
+    ranked = ranked.sort_values(
+        ["_v5_v4_score", "variable"],
+        ascending=[False, True],
+        kind="stable",
+    ).reset_index(drop=True)
+    ranked["rank_v4"] = np.arange(1, len(ranked) + 1)
+    return ranked.drop(columns=["_v5_v4_score"])
+
+
+def _v5_assign_shadow_ranks(comparison: pd.DataFrame) -> pd.DataFrame:
+    ranked = comparison.copy(deep=True)
+    ranked["_v5_score"] = pd.to_numeric(
+        ranked["shadow_final_score_v5"], errors="coerce"
+    )
+    ranked["_v5_base"] = pd.to_numeric(ranked["base_score_v5"], errors="coerce")
+    ranked["_v5_association"] = pd.to_numeric(
+        ranked["association_score"], errors="coerce"
+    )
+    ordered = ranked.loc[ranked["_v5_score"].notna()].sort_values(
+        ["_v5_score", "_v5_base", "_v5_association", "rank_v4", "variable"],
+        ascending=[False, False, False, True, True],
+        kind="stable",
+    )
+    rank_map = dict(zip(ordered["variable"], np.arange(1, len(ordered) + 1)))
+    ranked["rank_v5"] = ranked["variable"].map(rank_map)
+    return ranked.drop(columns=["_v5_score", "_v5_base", "_v5_association"])
+
+
+def _v5_top_variables(frame: pd.DataFrame, rank_column: str, count: int) -> list[str]:
+    if count <= 0:
+        return []
+    ranked = frame.copy(deep=True)
+    ranked["_v5_rank"] = pd.to_numeric(ranked[rank_column], errors="coerce")
+    return (
+        ranked.loc[ranked["_v5_rank"].notna()]
+        .sort_values(["_v5_rank", "variable"], kind="stable")
+        .head(count)["variable"]
+        .astype(str)
+        .tolist()
+    )
+
+
+def _v5_extreme_rank_delta(
+    frame: pd.DataFrame,
+    *,
+    rising: bool,
+) -> tuple[str, float]:
+    deltas = pd.to_numeric(frame["rank_delta"], errors="coerce")
+    valid = frame.loc[deltas.notna() & (deltas.gt(0) if rising else deltas.lt(0))].copy()
+    if valid.empty:
+        return "", np.nan
+    valid["_v5_delta"] = deltas.loc[valid.index]
+    valid = valid.sort_values(
+        ["_v5_delta", "variable"],
+        ascending=[not rising, True],
+        kind="stable",
+    )
+    row = valid.iloc[0]
+    return str(row["variable"]), float(row["_v5_delta"])
 
 
 class BestLagEvidence(TypedDict):

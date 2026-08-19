@@ -1645,6 +1645,11 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
 
     residual_map = residual.set_index("variable")["residual_corr"].to_dict() if not residual.empty and "residual_corr" in residual.columns else {}
     residual_cond_map = _residual_condition_number_map(residual)
+    residual_status_map = (
+        residual.set_index("variable")["residual_status"].to_dict()
+        if not residual.empty and "residual_status" in residual.columns
+        else {}
+    )
     stability_map = stability.set_index("variable").to_dict("index") if not stability.empty else {}
     diag_map = diag.set_index("variable").to_dict("index") if not diag.empty else {}
     lag_map = lag_peak_quality.set_index("variable").to_dict("index") if lag_peak_quality is not None and not lag_peak_quality.empty else {}
@@ -1667,6 +1672,8 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         variable = str(row.get("variable", ""))
         raw_corr = _safe_float(row.get("score", 0), default=0.0)
         residual_corr = _safe_float(residual_map.get(variable, raw_corr), default=raw_corr)
+        residual_status = str(residual_status_map.get(variable, "ok"))
+        residual_evidence_available = residual_status in {"ok", "rank_deficient"}
         regime_info = stability_map.get(variable, {})
         regime_stability = regime_info.get("regime_stability_final", np.nan)
         regime_status = str(regime_info.get("regime_evidence_status", ""))
@@ -1687,7 +1694,12 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         lag_value = int(_safe_float(row.get("lag", 0), default=0.0))
         formula_like = _looks_like_formula_variable(variable)
         strong_formula = formula_like and raw_corr > 0.98 and lag_value == 0
-        common_capacity = bool(control_columns) and raw_corr >= 0.5 and residual_corr < raw_corr * 0.65
+        common_capacity = (
+            bool(control_columns)
+            and residual_status == "ok"
+            and raw_corr >= 0.5
+            and residual_corr < raw_corr * 0.65
+        )
         temporal_status = lag_map.get(variable, {}).get("temporal_direction_status")
         target_leads = (
             isinstance(temporal_status, str)
@@ -1710,7 +1722,10 @@ def risk_flags(ranked: pd.DataFrame, residual: pd.DataFrame, stability: pd.DataF
         low_lift = str(lift_info.get("status", "")).startswith("ok") and _safe_float(
             lift_info.get("model_lift", 0.0), default=0.0
         ) < 0.01
-        residual_collinearity = _safe_float(residual_cond_map.get(variable, 0), default=0.0) > 1e8
+        residual_collinearity = (
+            residual_evidence_available
+            and _safe_float(residual_cond_map.get(variable, 0), default=0.0) > 1e8
+        )
 
         flags = [name for name, active in [
             ("formula_like", formula_like),

@@ -151,7 +151,7 @@ def test_residual_fit_failure_does_not_stop_other_candidates(monkeypatch):
     assert {"load", "good_candidate", "bad_candidate", "another_good_candidate"}.issubset(scores.index)
 
 
-def test_residual_output_isolated_from_same_configuration_initial_outputs(tmp_path, monkeypatch):
+def test_stage1_residual_evidence_feeds_risk_without_changing_score_or_rank(tmp_path, monkeypatch):
     frame = _frame()
     config = AnalysisConfig(
         input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
@@ -164,8 +164,20 @@ def test_residual_output_isolated_from_same_configuration_initial_outputs(tmp_pa
     monkeypatch.setattr(screening, "residual_corr_scores", original)
     with_output = analyze_numeric_frame(frame, config)
 
-    for name in ["ranked_features", "risk_flags"]:
-        pd.testing.assert_frame_equal(getattr(without_output, name), getattr(with_output, name))
+    score_fields = [
+        "variable", "final_score", "driver_rank",
+        "risk_penalty_rate", "risk_penalty", "risk_score_cap",
+    ]
+    pd.testing.assert_frame_equal(
+        without_output.ranked_features[score_fields],
+        with_output.ranked_features[score_fields],
+    )
+    without_common = without_output.risk_flags.set_index("variable").loc["common"]
+    with_common = with_output.risk_flags.set_index("variable").loc["common"]
+    assert bool(without_common["common_capacity_driver_flag"]) is False
+    assert bool(with_common["common_capacity_driver_flag"]) is True
+    assert "common_capacity_driver" not in str(without_common["risk_flags"])
+    assert "common_capacity_driver" in str(with_common["risk_flags"])
     assert set(without_output.recommended_candidates["variable"]).issubset(set(with_output.recommended_candidates["variable"]))
     assert with_output.residual_corr_scores.empty is False
 
@@ -178,3 +190,85 @@ def test_residual_output_isolated_from_same_configuration_initial_outputs(tmp_pa
     )
     payload = _build_result_payload("run", tmp_path, config)
     assert len(payload["residualScores"]) == len(with_output.residual_corr_scores) > 0
+
+
+def test_stage1_passes_the_same_evidence_frames_to_risk_flags(tmp_path, monkeypatch):
+    frame = _frame()
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
+        max_lag=3, top_k=2, residual_control_columns=["load"], enable_model=False,
+        skip_model_lift=True, skip_rolling_corr=True,
+    )
+    captured: dict[str, pd.DataFrame] = {}
+    original = screening.risk_flags
+
+    def capture(*args, **kwargs):
+        captured["residual"] = args[1]
+        captured["regime"] = args[2]
+        captured["rolling"] = args[7]
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(screening, "risk_flags", capture)
+    tables = analyze_numeric_frame(frame, config)
+
+    assert captured["residual"] is tables.residual_corr_scores
+    assert captured["regime"] is tables.shadow_regime_stability
+    assert captured["rolling"] is tables.shadow_rolling_corr_scores
+
+
+def test_stage1_residual_condition_number_restores_collinearity_risk(tmp_path):
+    rng = np.random.default_rng(4)
+    n = 180
+    index = pd.date_range("2026-01-01", periods=n, freq="min")
+    load = rng.normal(size=n)
+    load_copy = load + 1e-10 * rng.normal(size=n)
+    frame = pd.DataFrame(
+        {
+            "target": 2.0 * load + rng.normal(scale=0.1, size=n),
+            "candidate": 1.5 * load + rng.normal(scale=0.1, size=n),
+            "load": load,
+            "load_copy": load_copy,
+        },
+        index=index,
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
+        max_lag=3, top_k=3, residual_control_columns=["load", "load_copy"],
+        enable_model=False, skip_model_lift=True, skip_rolling_corr=True,
+    )
+
+    tables = analyze_numeric_frame(frame, config)
+    residual = tables.residual_corr_scores.set_index("variable").loc["candidate"]
+    risk = tables.risk_flags.set_index("variable").loc["candidate"]
+    ranked = tables.ranked_features.set_index("variable").loc["candidate"]
+
+    assert residual["residual_status"] == "ok"
+    assert float(residual["control_condition_number"]) > 1e8
+    assert bool(risk["residual_collinearity_flag"]) is True
+    assert "residual_collinearity" in risk["risk_flags"]
+    assert ranked["risk_penalty_rate"] == 0.0
+    assert ranked["risk_penalty"] == 0.0
+    assert ranked["risk_score_cap"] == 1.0
+
+
+def test_unavailable_residual_evidence_does_not_create_risk(tmp_path):
+    ranked = pd.DataFrame([{"variable": "candidate", "score": 0.9, "lag": 1}])
+    residual = pd.DataFrame(
+        [
+            {
+                "variable": "candidate",
+                "residual_corr": 0.0,
+                "residual_status": "fit_failed",
+                "control_condition_number": np.nan,
+            }
+        ]
+    )
+
+    risk = screening.risk_flags(
+        ranked, residual, pd.DataFrame(), pd.DataFrame(), {"candidate": "PV"}, ["load"]
+    ).iloc[0]
+
+    assert bool(risk["common_capacity_driver_flag"]) is False
+    assert bool(risk["residual_collinearity_flag"]) is False
+    assert "common_capacity_driver" not in risk["risk_flags"]
+    assert "residual_collinearity" not in risk["risk_flags"]

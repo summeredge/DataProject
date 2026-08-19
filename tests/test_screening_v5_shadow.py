@@ -440,6 +440,63 @@ def test_formal_v5_without_regime_basis_keeps_regime_support_missing(tmp_path):
     assert regime["regime_support_status"] == "no_regime_basis"
     assert rolling["rolling_support_status"] == "ok"
     assert tables.ranked_features["score_method"].eq("initial_association_temporal_v5").all()
+    risk = tables.risk_flags.set_index("variable").loc["candidate"]
+    assert "unstable_across_regimes" not in risk["risk_flags"]
+
+
+def test_formal_stage1_regime_evidence_restores_unstable_risk(tmp_path):
+    rows = 240
+    index = pd.date_range("2026-01-01", periods=rows, freq="min")
+    t = np.arange(rows, dtype=float)
+    target = np.sin(t / 7.0) + 0.2 * np.sin(t / 2.3)
+    capacity = np.linspace(-1.0, 1.0, rows)
+    sign = np.where(capacity <= 0.333, 1.0, np.where(capacity <= 0.667, 1.0, -1.0))
+    frame = pd.DataFrame(
+        {"target": target, "candidate": target * sign, "capacity": capacity},
+        index=index,
+    )
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
+        max_lag=3, top_k=3, segment_column="capacity", capacity_columns=["capacity"],
+        skip_model_lift=True, skip_rolling_corr=True,
+    )
+
+    tables = service.analyze_initial_screening_branch_frame(frame, config)
+    evidence = tables.shadow_regime_stability.set_index("variable").loc["candidate"]
+    risk = tables.risk_flags.set_index("variable").loc["candidate"]
+    ranked = tables.ranked_features.set_index("variable").loc["candidate"]
+
+    assert evidence["regime_evidence_status"] == "full_coverage"
+    assert evidence["regime_stability_final"] < screening.REGIME_UNSTABLE_THRESHOLD
+    assert "unstable_across_regimes" in risk["risk_flags"]
+    assert ranked["risk_penalty_rate"] == 0.0
+    assert ranked["risk_penalty"] == 0.0
+    assert ranked["risk_score_cap"] == 1.0
+
+
+def test_formal_stage1_rolling_evidence_restores_unstable_risk(tmp_path):
+    rows = 240
+    index = pd.date_range("2026-01-01", periods=rows, freq="min")
+    t = np.arange(rows, dtype=float)
+    target = np.sin(t / 7.0) + 0.2 * np.sin(t / 2.3)
+    candidate = target * np.where(t < rows / 2, 1.0, -1.0)
+    frame = pd.DataFrame({"target": target, "candidate": candidate}, index=index)
+    config = AnalysisConfig(
+        input_path=tmp_path / "input.csv", time_column="time", target="target", output_dir=tmp_path,
+        max_lag=3, top_k=3, skip_model_lift=True, skip_rolling_corr=False,
+    )
+
+    tables = service.analyze_initial_screening_branch_frame(frame, config)
+    evidence = tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
+    risk = tables.risk_flags.set_index("variable").loc["candidate"]
+    ranked = tables.ranked_features.set_index("variable").loc["candidate"]
+
+    assert evidence["rolling_support_status"] == "ok"
+    assert evidence["rolling_stability"] < 0.35
+    assert "unstable_over_time" in risk["risk_flags"]
+    assert ranked["risk_penalty_rate"] == 0.0
+    assert ranked["risk_penalty"] == 0.0
+    assert ranked["risk_score_cap"] == 1.0
 
 
 def test_formal_v5_support_never_reduces_base_score(tmp_path):
@@ -538,8 +595,10 @@ def test_v5_rolling_and_regime_failures_are_isolated(monkeypatch, tmp_path):
     rolling_tables = service.analyze_initial_screening_branch_frame(raw, rolling_config)
     rolling_row = rolling_tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
     regime_row = rolling_tables.shadow_regime_stability.set_index("variable").loc["candidate"]
+    rolling_risk = rolling_tables.risk_flags.set_index("variable").loc["candidate"]
     assert rolling_row["rolling_support_status"] == "calculation_failed"
     assert regime_row["regime_support_status"] == "ok"
+    assert "unstable_over_time" not in rolling_risk["risk_flags"]
 
     monkeypatch.setattr(screening, "rolling_corr_scores", original_rolling_scores)
 
@@ -550,8 +609,10 @@ def test_v5_rolling_and_regime_failures_are_isolated(monkeypatch, tmp_path):
     regime_tables = service.analyze_initial_screening_branch_frame(raw, rolling_config)
     rolling_row = regime_tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
     regime_row = regime_tables.shadow_regime_stability.set_index("variable").loc["candidate"]
+    regime_risk = regime_tables.risk_flags.set_index("variable").loc["candidate"]
     assert rolling_row["rolling_support_status"] == "ok"
     assert regime_row["regime_support_status"] == "calculation_failed"
+    assert "unstable_across_regimes" not in regime_risk["risk_flags"]
 
 
 @pytest.mark.parametrize("mode", ["lowpass_detrend", "lowpass_diff"])

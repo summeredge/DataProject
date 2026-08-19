@@ -198,9 +198,6 @@ def _analyze_numeric_frame_core(
             config.max_lag,
             target_mask=analysis_target_mask,
         )
-    # Residual evidence remains isolated from risk generation; formal V5 reads
-    # it only through the bounded positive support bonus.
-    residual_for_scoring = pd.DataFrame(columns=["variable"])
     regime_output = pd.DataFrame(columns=["variable"])
     lift = pd.DataFrame(columns=["variable"])
     rolling = pd.DataFrame(columns=["variable"])
@@ -235,13 +232,13 @@ def _analyze_numeric_frame_core(
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(
         raw_ranked,
-        residual_for_scoring,
-        regime_output,
+        residual_output,
+        v5_regime_stability,
         diag,
         roles,
         residual_controls,
         lag_peak,
-        rolling,
+        v5_rolling,
         lift,
         frame=scaled,
         target=config.target,

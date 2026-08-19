@@ -214,8 +214,11 @@ def test_regime_review_is_not_executed_by_initial_screening(tmp_path: Path):
 def test_outlier_and_lag_boundary_quality_signals_are_preserved(tmp_path: Path):
     _, _, ranked = _indexed("outlier_driven_correlation", tmp_path)
     row = ranked.loc["x_outlier"]
-    assert row["candidate_grade"] not in {"A", "B"}
-    assert float(row["data_quality_score"]) <= 1.0
+    assert "poor_data_quality" in str(row["risk_flags"])
+    assert 0.0 < float(row["data_quality_score"]) < 1.0
+    score = float(row["final_score"])
+    expected_grade = "A" if score >= 0.75 else "B" if score >= 0.60 else "C" if score >= 0.45 else "D" if score >= 0.30 else "E"
+    assert row["candidate_grade"] == expected_grade
 
     case, _, ranked = _indexed("lag_boundary_artifact", tmp_path / "boundary")
     row = ranked.loc["x_boundary"]

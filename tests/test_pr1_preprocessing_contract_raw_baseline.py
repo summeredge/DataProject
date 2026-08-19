@@ -40,19 +40,19 @@ RAW_BASELINE_VARIABLES = [
 
 RAW_BASELINE = {
     "final_score": {
-        "candidate_0": 0.9928057204912689,
-        "candidate_1": 0.9928057204912689,
-        "control_7": 0.9928057204912689,
-        "candidate_2": 0.9928057204912689,
-        "candidate_3": 0.9830826444525599,
-        "candidate_4": 0.954698946775768,
+        "candidate_0": 1.0,
+        "candidate_1": 1.0,
+        "control_7": 1.0,
+        "candidate_2": 1.0,
+        "candidate_3": 1.0,
+        "candidate_4": 1.0,
         "control_6": 0.25,
         "control_5": 0.25,
         "control_4": 0.25,
         "control_3": 0.25,
         "control_2": 0.25,
         "control_1": 0.25,
-        "control_0": 0.2460085982371364,
+        "control_0": 0.25,
     },
     "driver_rank": {
         "candidate_0": 1,
@@ -118,9 +118,9 @@ RAW_BASELINE = {
 
 # 推荐顺序与来源按 prioritize_recommended_candidates 的实际输出锁定。
 RAW_RECOMMENDED = [
+    {"variable": "candidate_3", "candidate_source": "raw_and_residual", "candidate_pool_rank": 4},
     {"variable": "candidate_2", "candidate_source": "raw_and_residual", "candidate_pool_rank": 3},
     {"variable": "candidate_0", "candidate_source": "raw_and_residual", "candidate_pool_rank": 1},
-    {"variable": "candidate_3", "candidate_source": "raw_and_residual", "candidate_pool_rank": 4},
     {"variable": "candidate_1", "candidate_source": "raw_and_residual", "candidate_pool_rank": 2},
     {"variable": "candidate_4", "candidate_source": "raw_and_residual", "candidate_pool_rank": 5},
 ]

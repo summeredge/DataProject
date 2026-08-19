@@ -98,6 +98,7 @@ def test_analyze_numeric_frame_reports_initial_stage_progress(tmp_path):
 
     assert "预处理中" in progress_messages
     assert "正在计算滞后相关" in progress_messages
+    assert "正在计算 V5 支持证据" in progress_messages
     assert "正在生成候选排序" in progress_messages
     assert tables.model_lift_scores.empty
     assert tables.rolling_corr_scores.empty
@@ -105,7 +106,7 @@ def test_analyze_numeric_frame_reports_initial_stage_progress(tmp_path):
     assert "skip_rolling_corr" not in tables.metrics
 
 
-def test_initial_stage_does_not_execute_followup_analyses(tmp_path, monkeypatch):
+def test_initial_stage_executes_only_formal_v5_support_not_followup_analyses(tmp_path, monkeypatch):
     from chem_ts_corr import screening
 
     n = 100
@@ -123,7 +124,7 @@ def test_initial_stage_does_not_execute_followup_analyses(tmp_path, monkeypatch)
 
     tables = analyze_numeric_frame(frame, config)
 
-    assert calls == []
+    assert calls == ["prepare_best_lag_evidence", "rolling_corr_scores"]
     assert tables.model_lift_scores.empty
     assert tables.rolling_corr_scores.empty
     assert "model_status" not in tables.metrics

@@ -59,8 +59,8 @@
     `recommended_use = poor_quality_variable`；
 -   严重质量超限（`missing_rate > 0.50`、`saturation_ratio > 0.80`、
     `abnormal_jump_ratio > 0.05`、`robust_outlier_ratio > 0.05`）只写入
-    `severe_data_quality`，作为一次强风险计数，`final_score` 上限为
-    `0.44`，`risk_cap_reason = severe_data_quality`；
+    `severe_data_quality`，作为一次强风险计数并保留候选分类/建议用途语义，但不再额外
+    cap `final_score`；
 -   普通与严重标记互斥，严重条件不得同时出现 `poor_data_quality`；
 -   严重阈值使用严格大于，恰好等于阈值不触发严重风险；
 -   `data_quality_score` 连续衰减且四项为零时为 `1.0`；
@@ -85,6 +85,32 @@
 - 新配置字段采用默认值时 Raw 输出不变。
 
 浮点断言使用合理容差，但不得宽泛到掩盖评分变化。
+
+## V5 正式评分验证与冻结
+
+正式 V5 契约测试固定验证：
+
+- `base_score = association_score × data_quality_score`；
+- Residual / Stability 仅正向奖励，系数分别为 `0.10`，总奖励上限为 `0.20`；
+- Residual `not_computed` 与真实 `0.0`、稳定性缺失/失败与真实 `0.0` 语义不同；
+- `target_leads_supported` 继续使用 `0.50` penalty 与 `0.25` cap；
+- formula leakage、severe data quality 及其他风险标记不改变正式 V5 数值评分；
+- `ranked_features.csv`、`driver_rank` 与 Raw Top-K 严格服从 V5 `final_score`；
+- 自动 Shadow sidecar 不再随正式流程重复生成，显式 V4/V5 诊断函数保留。
+
+参数冻结前使用仓库本地已有的 39,602 行实际工业时序数据，选择 3 个目标，并分别运行
+`raw` / `lowpass` / `lowpass_detrend` / `lowpass_diff`，共 12 个 A/B 场景。每个场景
+包含 13 个候选，因此 Top-20 / Top-30 按 `effective_k = 13` 评估。结果为：
+
+- Top-10 / Top-20 / Top-30 的 V4/V5 候选集合重合率均为 `1.0`；
+- 11 个场景排名完全一致，1 个场景仅相邻两项互换；
+- V5 基础分排名与含 bonus 排名的 Spearman 为 `0.994505` 至 `1.0`；
+- 最大实际 bonus rate 为 `0.134327`，未触及 `0.20` 上限；
+- 没有弱关联变量仅靠 bonus 新进入 Top-3，bonus 导致的最大名次变化为 1；
+- 所有 `target_leads_supported` 仍被压制，实际最大 V5 得分为 `0.070087`；
+- 四种预处理模式均未出现由 bonus 造成的系统性 Top-K 偏移。
+
+因此冻结默认 `Residual +10%`、`Stability +10%`、总上限 `20%`，不做参数调整。
 
 ## 预处理模式与配置字段测试
 

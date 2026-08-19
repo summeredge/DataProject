@@ -27,36 +27,36 @@ from chem_ts_corr.screening import (
     V5_SHADOW_SUMMARY_COLUMNS,
     build_v5_shadow_comparison,
     build_v5_shadow_summary,
-    compute_v5_shadow_components,
+    compute_v5_score_components,
     write_v5_shadow_outputs,
 )
 
 
 def test_v5_base_score_is_association_times_data_quality():
-    result = compute_v5_shadow_components(
+    result = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=0.5,
     )
 
     assert result["base_score_v5"] == pytest.approx(0.4)
     assert result["evidence_score_v5"] == pytest.approx(0.4)
-    assert result["shadow_final_score_v5"] == pytest.approx(0.4)
+    assert result["final_score_v5"] == pytest.approx(0.4)
 
 
 def test_v5_residual_bonus_requires_ok_and_preserves_zero_semantics():
-    supported = compute_v5_shadow_components(
+    supported = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         residual_corr=0.6,
         residual_status="ok",
     )
-    measured_zero = compute_v5_shadow_components(
+    measured_zero = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         residual_corr=0.0,
         residual_status="ok",
     )
-    unavailable_zero = compute_v5_shadow_components(
+    unavailable_zero = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         residual_corr=0.0,
@@ -69,29 +69,29 @@ def test_v5_residual_bonus_requires_ok_and_preserves_zero_semantics():
     assert measured_zero["residual_bonus_rate"] == pytest.approx(0.0)
     assert pd.isna(unavailable_zero["residual_support"])
     assert unavailable_zero["residual_bonus_rate"] == pytest.approx(0.0)
-    assert unavailable_zero["shadow_final_score_v5"] == pytest.approx(0.8)
+    assert unavailable_zero["final_score_v5"] == pytest.approx(0.8)
 
 
 def test_v5_residual_is_support_only_and_cannot_reduce_base_score():
-    low = compute_v5_shadow_components(
+    low = compute_v5_score_components(
         association_score=0.75,
         data_quality_score=0.8,
         residual_corr=0.01,
         residual_status="ok",
     )
-    high = compute_v5_shadow_components(
+    high = compute_v5_score_components(
         association_score=0.75,
         data_quality_score=0.8,
         residual_corr=0.99,
         residual_status="ok",
     )
 
-    assert low["shadow_final_score_v5"] >= low["base_score_v5"]
-    assert high["shadow_final_score_v5"] > low["shadow_final_score_v5"]
+    assert low["final_score_v5"] >= low["base_score_v5"]
+    assert high["final_score_v5"] > low["final_score_v5"]
 
 
 def test_v5_stability_uses_pure_consistency_and_geometric_merge():
-    result = compute_v5_shadow_components(
+    result = compute_v5_score_components(
         association_score=0.7,
         data_quality_score=1.0,
         rolling_sign_consistency=0.8,
@@ -113,7 +113,7 @@ def test_v5_stability_uses_pure_consistency_and_geometric_merge():
 
 
 def test_v5_missing_stability_does_not_penalize_or_fake_zero():
-    result = compute_v5_shadow_components(
+    result = compute_v5_score_components(
         association_score=0.7,
         data_quality_score=1.0,
     )
@@ -122,35 +122,35 @@ def test_v5_missing_stability_does_not_penalize_or_fake_zero():
     assert pd.isna(result["regime_support"])
     assert pd.isna(result["stability_support"])
     assert result["stability_bonus_rate"] == pytest.approx(0.0)
-    assert result["shadow_final_score_v5"] == pytest.approx(result["base_score_v5"])
+    assert result["final_score_v5"] == pytest.approx(result["base_score_v5"])
 
 
 def test_v5_support_statuses_distinguish_skipped_failures_insufficient_and_zero():
-    rolling_zero = compute_v5_shadow_components(
+    rolling_zero = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         rolling_sign_consistency=0.0,
         rolling_corr_iqr=0.0,
         rolling_support_status="ok",
     )
-    rolling_skipped = compute_v5_shadow_components(
+    rolling_skipped = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         rolling_sign_consistency=1.0,
         rolling_corr_iqr=0.0,
         rolling_support_status="not_computed",
     )
-    rolling_failed = compute_v5_shadow_components(
+    rolling_failed = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         rolling_support_status="calculation_failed",
     )
-    rolling_insufficient = compute_v5_shadow_components(
+    rolling_insufficient = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         rolling_support_status="insufficient_data",
     )
-    regime_zero = compute_v5_shadow_components(
+    regime_zero = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         regime_coverage=1.0,
@@ -159,22 +159,22 @@ def test_v5_support_statuses_distinguish_skipped_failures_insufficient_and_zero(
         regime_lag_consistency=1.0,
         regime_support_status="ok",
     )
-    regime_no_basis = compute_v5_shadow_components(
+    regime_no_basis = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         regime_support_status="no_regime_basis",
     )
-    regime_insufficient = compute_v5_shadow_components(
+    regime_insufficient = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         regime_support_status="insufficient_regimes",
     )
-    regime_metrics = compute_v5_shadow_components(
+    regime_metrics = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         regime_support_status="insufficient_metrics",
     )
-    regime_failed = compute_v5_shadow_components(
+    regime_failed = compute_v5_score_components(
         association_score=0.8,
         data_quality_score=1.0,
         regime_support_status="calculation_failed",
@@ -202,7 +202,7 @@ def test_v5_support_statuses_distinguish_skipped_failures_insufficient_and_zero(
 
 
 def test_v5_total_support_bonus_is_capped_at_twenty_percent():
-    result = compute_v5_shadow_components(
+    result = compute_v5_score_components(
         association_score=1.0,
         data_quality_score=1.0,
         residual_corr=1.0,
@@ -221,22 +221,22 @@ def test_v5_total_support_bonus_is_capped_at_twenty_percent():
 
 
 def test_v5_only_target_leads_status_applies_existing_penalty_and_cap():
-    target_leads = compute_v5_shadow_components(
+    target_leads = compute_v5_score_components(
         association_score=0.9,
         data_quality_score=1.0,
         residual_corr=1.0,
         residual_status="ok",
         temporal_direction_status="target_leads_supported",
     )
-    variable_leads = compute_v5_shadow_components(
+    variable_leads = compute_v5_score_components(
         association_score=0.9,
         data_quality_score=1.0,
         temporal_direction_status="variable_leads_supported",
     )
 
     assert target_leads["evidence_score_v5"] == pytest.approx(0.99)
-    assert target_leads["shadow_final_score_v5"] == pytest.approx(0.25)
-    assert variable_leads["shadow_final_score_v5"] == pytest.approx(0.9)
+    assert target_leads["final_score_v5"] == pytest.approx(0.25)
+    assert variable_leads["final_score_v5"] == pytest.approx(0.9)
 
 
 def test_v5_comparison_does_not_use_risk_flags_or_mutate_formal_frame():
@@ -359,7 +359,7 @@ def test_v5_writer_creates_only_shadow_artifacts_and_preserves_formal_file(tmp_p
 
 
 def test_v5_formula_source_excludes_existing_stability_strength_field():
-    source = inspect.getsource(compute_v5_shadow_components)
+    source = inspect.getsource(compute_v5_score_components)
 
     assert "rolling_stability" not in source
     assert "regime_stability_final" not in source
@@ -415,95 +415,52 @@ def _shadow_paths(root: Path) -> tuple[Path, Path, Path]:
     )
 
 
-def test_initial_branch_writes_real_shadow_evidence_after_formal_v4(tmp_path):
+def test_initial_branch_writes_formal_v5_without_automatic_shadow_sidecars(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=True)
 
     run_initial_screening_branch(config, branch="raw")
 
     ranked_path, comparison_path, summary_path = _shadow_paths(tmp_path)
-    assert ranked_path.exists()
-    assert comparison_path.exists()
-    assert summary_path.exists()
-    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
-
     ranked = pd.read_csv(ranked_path, encoding="utf-8-sig")
-    comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
-    residual = pd.read_csv(
-        tmp_path / "screening_branches" / "raw" / "residual_corr_scores.csv",
-        encoding="utf-8-sig",
-    )
-    row = comparison.loc[comparison["variable"].eq("candidate")].iloc[0]
-    formal = ranked.loc[ranked["variable"].eq("candidate")].iloc[0]
-    residual_row = residual.loc[residual["variable"].eq("candidate")].iloc[0]
-
-    assert row["final_score_v4"] == pytest.approx(formal["final_score"])
-    assert row["rank_v4"] == pytest.approx(formal["driver_rank"])
-    assert pd.notna(row["rolling_support"])
-    assert row["rolling_support_status"] == "ok"
-    assert pd.notna(row["regime_support"])
-    assert row["regime_support_status"] == "ok"
-    assert row["residual_status"] == residual_row["residual_status"]
-    assert row["residual_corr"] == pytest.approx(residual_row["residual_corr"])
-    if residual_row["residual_status"] == "ok":
-        assert row["residual_support"] == pytest.approx(
-            min(max(float(residual_row["residual_corr"]), 0.0), 1.0)
-        )
-    assert row["base_score_v5"] == pytest.approx(
-        row["association_score"] * row["data_quality_score"]
-    )
+    assert ranked["score_method"].eq("initial_association_temporal_v5").all()
+    assert ranked["final_score"].is_monotonic_decreasing
+    assert ranked["driver_rank"].tolist() == list(range(1, len(ranked) + 1))
+    assert not comparison_path.exists()
+    assert not summary_path.exists()
 
 
-def test_shadow_without_regime_basis_keeps_regime_support_missing(tmp_path):
+def test_formal_v5_without_regime_basis_keeps_regime_support_missing(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=False)
+    raw = pipeline.load_analysis_source_frame(config)
 
-    run_initial_screening_branch(config, branch="raw")
+    tables = service.analyze_initial_screening_branch_frame(raw, config)
 
-    comparison = pd.read_csv(_shadow_paths(tmp_path)[1], encoding="utf-8-sig")
-    candidate = comparison.loc[comparison["variable"].eq("candidate")].iloc[0]
-    assert pd.notna(candidate["rolling_support"])
-    assert pd.isna(candidate["regime_support"])
-    assert candidate["regime_support_status"] == "no_regime_basis"
-    assert pd.notna(candidate["stability_support"])
-
-
-def test_shadow_stability_does_not_change_formal_v4_or_candidate_outputs(tmp_path):
-    enabled_root = tmp_path / "enabled"
-    disabled_root = tmp_path / "disabled"
-    enabled = _write_shadow_input(enabled_root, with_regime=True, skip_rolling_corr=False)
-    disabled = _write_shadow_input(disabled_root, with_regime=True, skip_rolling_corr=True)
-
-    run_initial_screening_branch(enabled, branch="raw")
-    run_initial_screening_branch(disabled, branch="raw")
-
-    for filename in ["ranked_features.csv", "recommended_candidates.csv"]:
-        left = pd.read_csv(
-            enabled_root / "screening_branches" / "raw" / filename,
-            encoding="utf-8-sig",
-        )
-        right = pd.read_csv(
-            disabled_root / "screening_branches" / "raw" / filename,
-            encoding="utf-8-sig",
-        )
-        pd.testing.assert_frame_equal(left, right, check_dtype=False)
+    regime = tables.shadow_regime_stability.set_index("variable").loc["candidate"]
+    rolling = tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
+    assert regime["regime_support_status"] == "no_regime_basis"
+    assert rolling["rolling_support_status"] == "ok"
+    assert tables.ranked_features["score_method"].eq("initial_association_temporal_v5").all()
 
 
-def test_shadow_failure_clears_old_sidecars_but_keeps_formal_outputs(
-    monkeypatch,
-    tmp_path,
-):
+def test_formal_v5_support_never_reduces_base_score(tmp_path):
+    config = _write_shadow_input(tmp_path, with_regime=True)
+    raw = pipeline.load_analysis_source_frame(config)
+
+    tables = service.analyze_initial_screening_branch_frame(raw, config)
+    ranked = tables.ranked_features
+    base = ranked["association_score"] * ranked["data_quality_score"]
+    non_target_leads = ~ranked["temporal_direction_status"].eq("target_leads_supported")
+
+    assert (ranked.loc[non_target_leads, "final_score"] >= base.loc[non_target_leads] - 1e-12).all()
+
+
+def test_formal_branch_clears_obsolete_shadow_sidecars(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
     branch_dir = tmp_path / "screening_branches" / "raw"
     branch_dir.mkdir(parents=True)
-    for name in [
-        "screening_v5_shadow_comparison.csv",
-        "screening_v5_shadow_summary.csv",
-    ]:
+    for name in ["screening_v5_shadow_comparison.csv", "screening_v5_shadow_summary.csv"]:
         (branch_dir / name).write_text("old-shadow", encoding="utf-8")
 
-    def fail_shadow(*args, **kwargs):
-        raise RuntimeError("synthetic shadow failure")
-
-    monkeypatch.setattr(pipeline, "build_v5_shadow_comparison", fail_shadow)
     timings = run_initial_screening_branch(config, branch="raw")
 
     assert set(timings) == {
@@ -517,63 +474,34 @@ def test_shadow_failure_clears_old_sidecars_but_keeps_formal_outputs(
     assert (branch_dir / "ranked_features.csv").exists()
 
 
-def test_shadow_failure_does_not_block_raw_workflow_promotion(monkeypatch, tmp_path):
+def test_raw_workflow_promotes_formal_v5(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
 
-    def fail_shadow(*args, **kwargs):
-        raise RuntimeError("synthetic shadow failure")
-
-    monkeypatch.setattr(pipeline, "build_v5_shadow_comparison", fail_shadow)
     result = run_initial_screening_workflow(config)
 
     assert result["branch"] == "raw"
-    assert (tmp_path / "ranked_features.csv").exists()
-    context = json.loads(
-        (tmp_path / "preprocessing_context.json").read_text(encoding="utf-8")
-    )
+    ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    assert ranked["score_method"].eq("initial_association_temporal_v5").all()
+    context = json.loads((tmp_path / "preprocessing_context.json").read_text(encoding="utf-8"))
     assert context["branch_selection_status"] == "not_required"
-    assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
-    assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
-    assert not (tmp_path / "screening_branches" / "raw" / "screening_v5_shadow_comparison.csv").exists()
 
 
-def test_shadow_failure_does_not_block_processed_workflow(monkeypatch, tmp_path):
+def test_processed_workflow_keeps_both_formal_v5_branches(tmp_path):
     base = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=True)
     config = replace(base, preprocess_mode="lowpass")
-    original_build = pipeline.build_v5_shadow_comparison
-    calls = 0
 
-    def fail_processed_shadow(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise RuntimeError("synthetic processed shadow failure")
-        return original_build(*args, **kwargs)
-
-    monkeypatch.setattr(
-        pipeline,
-        "build_v5_shadow_comparison",
-        fail_processed_shadow,
-    )
     run_initial_screening_workflow(config)
 
     branches_root = tmp_path / "screening_branches"
-    assert (branches_root / "raw" / "ranked_features.csv").exists()
-    assert (branches_root / "processed" / "ranked_features.csv").exists()
+    for branch in ["raw", "processed"]:
+        ranked = pd.read_csv(branches_root / branch / "ranked_features.csv", encoding="utf-8-sig")
+        assert ranked["score_method"].eq("initial_association_temporal_v5").all()
     assert (tmp_path / "preprocessing_comparison.csv").exists()
-    context = json.loads(
-        (tmp_path / "preprocessing_context.json").read_text(encoding="utf-8")
-    )
+    context = json.loads((tmp_path / "preprocessing_context.json").read_text(encoding="utf-8"))
     assert context["branch_selection_status"] == "awaiting_confirmation"
-    assert (branches_root / "raw" / "screening_v5_shadow_comparison.csv").exists()
-    assert not (branches_root / "processed" / "screening_v5_shadow_comparison.csv").exists()
-    assert not (branches_root / "processed" / "screening_v5_shadow_summary.csv").exists()
 
 
-def test_shadow_evidence_failure_fails_closed_without_blocking_formal_output(
-    monkeypatch,
-    tmp_path,
-):
+def test_v5_support_evidence_failure_fails_closed_to_zero_bonus(monkeypatch, tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=False)
 
     def fail_evidence(*args, **kwargs):
@@ -582,71 +510,48 @@ def test_shadow_evidence_failure_fails_closed_without_blocking_formal_output(
     monkeypatch.setattr(service, "_v5_shadow_stability_evidence", fail_evidence)
     run_initial_screening_branch(config, branch="raw")
 
-    ranked_path, comparison_path, summary_path = _shadow_paths(tmp_path)
-    assert ranked_path.exists()
-    assert comparison_path.exists()
-    assert summary_path.exists()
-    comparison = pd.read_csv(comparison_path, encoding="utf-8-sig")
-    assert comparison["rolling_support"].isna().all()
-    assert comparison["regime_support"].isna().all()
-    assert comparison["rolling_support_status"].eq("calculation_failed").all()
-    assert comparison["regime_support_status"].eq("calculation_failed").all()
-
-
-def test_shadow_rolling_and_regime_failures_are_isolated(monkeypatch, tmp_path):
-    original_rolling_scores = screening.rolling_corr_scores
-    rolling_failure_root = tmp_path / "rolling_failure"
-    rolling_config = _write_shadow_input(
-        rolling_failure_root,
-        with_regime=True,
-        skip_rolling_corr=False,
+    ranked = pd.read_csv(_shadow_paths(tmp_path)[0], encoding="utf-8-sig")
+    residual = pd.read_csv(
+        tmp_path / "screening_branches" / "raw" / "residual_corr_scores.csv",
+        encoding="utf-8-sig",
     )
+    base = ranked["association_score"] * ranked["data_quality_score"]
+    no_temporal_penalty = ~ranked["temporal_direction_status"].eq("target_leads_supported")
+    unavailable_names = set(
+        residual.loc[~residual["residual_status"].eq("ok"), "variable"].astype(str)
+    )
+    residual_unavailable = ranked["variable"].astype(str).isin(unavailable_names)
+    selected = no_temporal_penalty & residual_unavailable
+    assert ranked["score_method"].eq("initial_association_temporal_v5").all()
+    assert np.allclose(ranked.loc[selected, "final_score"], base.loc[selected])
+
+
+def test_v5_rolling_and_regime_failures_are_isolated(monkeypatch, tmp_path):
+    original_rolling_scores = screening.rolling_corr_scores
+    rolling_config = _write_shadow_input(tmp_path / "rolling", with_regime=True)
+    raw = pipeline.load_analysis_source_frame(rolling_config)
 
     def fail_rolling(*args, **kwargs):
         raise RuntimeError("synthetic rolling failure")
 
     monkeypatch.setattr(screening, "rolling_corr_scores", fail_rolling)
-    run_initial_screening_branch(rolling_config, branch="raw")
-    rolling_comparison = pd.read_csv(
-        _shadow_paths(rolling_failure_root)[1], encoding="utf-8-sig"
-    )
-    rolling_row = rolling_comparison.loc[
-        rolling_comparison["variable"].eq("candidate")
-    ].iloc[0]
-    assert pd.isna(rolling_row["rolling_support"])
+    rolling_tables = service.analyze_initial_screening_branch_frame(raw, rolling_config)
+    rolling_row = rolling_tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
+    regime_row = rolling_tables.shadow_regime_stability.set_index("variable").loc["candidate"]
     assert rolling_row["rolling_support_status"] == "calculation_failed"
-    assert pd.notna(rolling_row["regime_support"])
-    assert rolling_row["regime_support_status"] == "ok"
-    assert rolling_row["stability_support"] == pytest.approx(
-        rolling_row["regime_support"]
-    )
+    assert regime_row["regime_support_status"] == "ok"
 
     monkeypatch.setattr(screening, "rolling_corr_scores", original_rolling_scores)
-    regime_failure_root = tmp_path / "regime_failure"
-    regime_config = _write_shadow_input(
-        regime_failure_root,
-        with_regime=True,
-        skip_rolling_corr=False,
-    )
 
     def fail_regime(*args, **kwargs):
         raise RuntimeError("synthetic regime failure")
 
     monkeypatch.setattr(screening, "regime_scores", fail_regime)
-    run_initial_screening_branch(regime_config, branch="raw")
-    regime_comparison = pd.read_csv(
-        _shadow_paths(regime_failure_root)[1], encoding="utf-8-sig"
-    )
-    regime_row = regime_comparison.loc[
-        regime_comparison["variable"].eq("candidate")
-    ].iloc[0]
-    assert pd.notna(regime_row["rolling_support"])
-    assert regime_row["rolling_support_status"] == "ok"
-    assert pd.isna(regime_row["regime_support"])
+    regime_tables = service.analyze_initial_screening_branch_frame(raw, rolling_config)
+    rolling_row = regime_tables.shadow_rolling_corr_scores.set_index("variable").loc["candidate"]
+    regime_row = regime_tables.shadow_regime_stability.set_index("variable").loc["candidate"]
+    assert rolling_row["rolling_support_status"] == "ok"
     assert regime_row["regime_support_status"] == "calculation_failed"
-    assert regime_row["stability_support"] == pytest.approx(
-        regime_row["rolling_support"]
-    )
 
 
 @pytest.mark.parametrize("mode", ["lowpass_detrend", "lowpass_diff"])
@@ -713,7 +618,7 @@ def test_shadow_sidecars_are_not_formal_or_downstream_inputs():
         assert not shadow_names.intersection(file_set)
 
 
-def test_shadow_sidecars_stay_in_raw_and_processed_branches_after_confirmation(tmp_path):
+def test_automatic_shadow_sidecars_are_absent_from_both_branches_and_promotion(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=True, skip_rolling_corr=True)
     processed_config = AnalysisConfig(
         **{
@@ -726,23 +631,25 @@ def test_shadow_sidecars_stay_in_raw_and_processed_branches_after_confirmation(t
     raw_dir = tmp_path / "screening_branches" / "raw"
     processed_dir = tmp_path / "screening_branches" / "processed"
     for branch_dir in [raw_dir, processed_dir]:
-        assert (branch_dir / "screening_v5_shadow_comparison.csv").exists()
-        assert (branch_dir / "screening_v5_shadow_summary.csv").exists()
+        assert not (branch_dir / "screening_v5_shadow_comparison.csv").exists()
+        assert not (branch_dir / "screening_v5_shadow_summary.csv").exists()
     assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
     assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
 
     confirm_initial_screening_branch(tmp_path, branch="processed")
     assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
     assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()
+    ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    assert ranked["score_method"].eq("initial_association_temporal_v5").all()
 
 
-def test_raw_only_promotion_does_not_copy_shadow_sidecars_to_root(tmp_path):
+def test_raw_only_promotion_does_not_create_shadow_sidecars(tmp_path):
     config = _write_shadow_input(tmp_path, with_regime=False, skip_rolling_corr=True)
 
     run_initial_screening_workflow(config)
 
     raw_dir = tmp_path / "screening_branches" / "raw"
-    assert (raw_dir / "screening_v5_shadow_comparison.csv").exists()
-    assert (raw_dir / "screening_v5_shadow_summary.csv").exists()
+    assert not (raw_dir / "screening_v5_shadow_comparison.csv").exists()
+    assert not (raw_dir / "screening_v5_shadow_summary.csv").exists()
     assert not (tmp_path / "screening_v5_shadow_comparison.csv").exists()
     assert not (tmp_path / "screening_v5_shadow_summary.csv").exists()

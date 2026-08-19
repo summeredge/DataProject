@@ -204,8 +204,8 @@ def build_markdown_summary(
 
     lines.extend(["", "## 初步得分构成 Top 15", ""])
     decomp_cols = [c for c in [
-        "variable", "final_score", "association_score", "data_quality_score",
-        "risk_penalty_rate", "risk_score_cap", "risk_cap_reason",
+        "variable", "score_method", "association_score", "data_quality_score",
+        "evidence_score", "final_score",
         "temporal_direction_status", "temporal_penalty_rate", "temporal_score_cap",
         "risk_flags", "recommended_use",
     ] if c in ranked_features.columns]
@@ -219,12 +219,12 @@ def build_markdown_summary(
 
     lines.extend([
         "", "## 辅助解释证据 Top 15", "",
-        "以下字段不参与初步final_score，仅用于解释和后续复核。", "",
+        "以下变化量与滞后质量字段不参与初步 final_score，仅用于解释和后续复核。", "",
     ])
     auxiliary_cols = [c for c in [
         "variable", "innovation_score", "innovation_status", "lag_quality",
         "lag_boundary_flag", "near_peak_lag_min", "near_peak_lag_max",
-        "near_peak_lag_count", "stability_score",
+        "near_peak_lag_count",
     ] if c in ranked_features.columns]
     auxiliary = ranked_features[auxiliary_cols].head(15) if auxiliary_cols else pd.DataFrame()
     lines.extend(_table_lines(auxiliary))
@@ -265,7 +265,8 @@ def build_markdown_summary(
             "",
             "## 解读提醒",
             "",
-            "- final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。",
+            "- final_score 以基础关联强度 × 数据质量为基线；Residual 与稳定性只提供冻结上限内的正向奖励。",
+            "- 风险标签本身不扣分或封顶；只有 target_leads_supported 会负向约束得分。",
             "- 时间方向状态仅判断变量是否在目标变化之前出现，不代表确定性因果或自动识别控制响应。",
             "- 当前摘要只解释初步分析已生成的相关性、滞后、数据质量和基础风险结果。",
             "- 增强筛选、Granger、模型分析和综合复核须在对应页面单独运行后解读。",

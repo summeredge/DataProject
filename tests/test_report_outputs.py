@@ -7,7 +7,8 @@ from chem_ts_corr.report import build_markdown_summary, build_recommended_candid
 
 def test_markdown_separates_initial_score_inputs_from_auxiliary_evidence():
     ranked = pd.DataFrame([{
-        "variable": "x", "final_score": 0.8, "association_score": 0.8,
+        "variable": "x", "score_method": "initial_association_temporal_v5",
+        "final_score": 0.8, "evidence_score": 0.8, "association_score": 0.8,
         "data_quality_score": 1.0, "risk_penalty_rate": 0.0,
         "risk_score_cap": 1.0, "risk_cap_reason": "",
         "temporal_direction_status": "direction_unresolved",
@@ -30,10 +31,12 @@ def test_markdown_separates_initial_score_inputs_from_auxiliary_evidence():
     )[0]
 
     assert "## 评分分解 Top 15" not in markdown
-    assert "以下字段不参与初步final_score，仅用于解释和后续复核。" in auxiliary
-    for field in ["innovation_score", "lag_quality", "stability_score"]:
+    assert "以下变化量与滞后质量字段不参与初步 final_score，仅用于解释和后续复核。" in auxiliary
+    for field in ["innovation_score", "lag_quality"]:
         assert field not in initial
         assert field in auxiliary
+    assert "stability_score" not in markdown
+    assert "evidence_score" in initial
 
 
 def test_state_indicator_is_reported_as_not_suitable_for_causal_conclusion():

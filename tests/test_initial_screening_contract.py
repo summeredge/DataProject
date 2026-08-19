@@ -318,11 +318,10 @@ def test_complete_initial_output_separates_candidates_through_payload(tmp_path: 
 
     _run_complete_initial_output(tmp_path / "without_roles", residual_controls=False)
     unmarked = pd.read_csv(tmp_path / "without_roles" / "ranked_features.csv", encoding="utf-8-sig")
-    pd.testing.assert_series_equal(
-        ranked.set_index("variable").loc[controls, "final_score"],
-        unmarked.set_index("variable").loc[controls, "final_score"],
-        check_names=False,
-    )
+    marked_scores = ranked.set_index("variable").loc[controls, "final_score"]
+    unmarked_scores = unmarked.set_index("variable").loc[controls, "final_score"]
+    assert (marked_scores >= unmarked_scores - 1e-12).all()
+    assert (marked_scores <= unmarked_scores.mul(1.20) + 1e-12).all()
 
 
 def test_forced_control_flows_to_causal_review_without_losing_role(tmp_path: Path):
@@ -620,18 +619,18 @@ def test_initial_score_details_only_reference_whitelisted_fields():
 
 
 def test_web_final_score_explanations_match_the_initial_scoring_contract():
-    expected = "final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。"
+    expected = "final_score 以基础关联强度 × 数据质量为基线，Residual 与稳定性只提供有限正向奖励"
     old = "final_score 是当前初步分析可用统计证据、滞后质量、数据质量经过风险处理后的综合筛选得分。"
     explanations = [
         line.strip()
         for line in INDEX_HTML.splitlines()
-        if "final_score 是" in line
+        if "final_score 以" in line
     ]
 
     assert explanations
     assert all(expected in explanation for explanation in explanations)
     assert old not in INDEX_HTML
-    for forbidden in ["lag_quality", "滞后质量", "创新得分", "残差证据", "稳定性", "模型结果"]:
+    for forbidden in ["lag_quality", "滞后质量", "创新得分", "模型结果"]:
         assert all(forbidden not in explanation for explanation in explanations)
 
 

@@ -3265,7 +3265,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="overview" class="overview-grid"></div>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>初步分析 Top 10</h2>
-        <div class="help">final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。</div>
+        <div class="help">final_score 以基础关联强度 × 数据质量为基线，Residual 与稳定性只提供有限正向奖励；仅明确的目标领先时间证据会负向约束得分。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <div id="candidatesTab">
           <h2>去负荷(残差)验证候选</h2>
@@ -4568,7 +4568,7 @@ const termsHelpRows = [
   { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
   { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
   { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
-  { category: "风险标签说明", name: "数据质量风险", signal: "数据质量需关注：存在普通质量问题，得分已通过数据质量系数平滑降低，建议核查缺失、单值集中和异常点。数据质量严重不足：存在极端质量问题，除连续降分外，最终得分上限为 0.44，建议清洗数据或剔除该变量后重新分析。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
+  { category: "风险标签说明", name: "数据质量风险", signal: "数据质量问题通过 data_quality_score 连续降低基础分；严重质量问题保留风险标记，但不再额外封顶。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
   { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
   { category: "证据等级与复核建议", name: "强预测证据", signal: "相关、模型提升、预测贡献、稳定性等多类证据同时较好。", reading: "该变量对预测目标有较稳定信息量，但仍不是因果结论。", action: "进入优先复核，结合机理、趋势和现场操作记录确认。" },
   { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、共同负荷或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程复核。" },
@@ -6028,7 +6028,7 @@ function renderScreeningScoreDetails(row) {
     <h4>初步筛选得分</h4>
     <div class="detail-grid">${renderFields(scoreColumns)}</div>
     <div class="detail-field"><strong>近峰滞后范围</strong><span>${escapeHtml(`[${displayCellValue("near_peak_lag_min", row.near_peak_lag_min)}, ${displayCellValue("near_peak_lag_max", row.near_peak_lag_max)}]（${displayCellValue("near_peak_lag_count", row.near_peak_lag_count)} 个点）`)}</span></div>
-    <p>final_score 是基础关联强度经过数据质量、明确风险和时间方向约束后的初步筛选得分。</p>
+    <p>final_score 以基础关联强度 × 数据质量为基线，Residual 与稳定性只提供有限正向奖励；风险标签本身不扣分，只有明确的目标领先时间证据会负向约束得分。</p>
     <h4>相关性证据</h4>
     <div class="detail-grid">${renderFields(CORRELATION_OVERVIEW_COLUMNS, { lag: "最佳滞后点", direction: "滞后方向" })}</div>
     <details class="correlation-evidence-details">

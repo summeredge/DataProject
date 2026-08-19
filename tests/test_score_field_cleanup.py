@@ -95,23 +95,23 @@ def test_real_zero_lag_quality_is_valid():
     assert row["lag_quality_status"] == "ok"
 
 
-def test_v4_score_uses_association_with_complete_core_evidence():
+def test_v5_base_score_uses_association_with_complete_core_evidence():
     row = _result(raw=0.8, innovation=0.8, lag_quality=0.8)
 
-    assert row["score_method"] == "initial_association_temporal_v4"
+    assert row["score_method"] == "initial_association_temporal_v5"
     assert row["evidence_completeness"] == pytest.approx(1.0)
     assert row["evidence_score"] == pytest.approx(0.8)
 
 
-def test_current_runtime_score_method_assignment_is_v4():
+def test_current_runtime_score_method_assignment_is_v5():
     source = Path("chem_ts_corr/screening.py").read_text(encoding="utf-8")
 
-    assert 'final["score_method"] = "initial_association_temporal_v4"' in source
+    assert 'final["score_method"] = V5_SCORE_METHOD' in source
     assert 'final["score_method"] = "industrial_robust_v2"' not in source
     assert source.count('final["score_method"] = ') == 1
 
 
-def test_ranked_features_csv_preserves_initial_schema_and_exports_v4(tmp_path: Path):
+def test_ranked_features_csv_preserves_initial_schema_and_exports_v5(tmp_path: Path):
     ranked = pd.DataFrame([_result()])
     expected_columns = list(ranked.columns)
 
@@ -119,7 +119,7 @@ def test_ranked_features_csv_preserves_initial_schema_and_exports_v4(tmp_path: P
 
     exported = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
     assert list(exported.columns) == expected_columns
-    assert exported["score_method"].tolist() == ["initial_association_temporal_v4"]
+    assert exported["score_method"].tolist() == ["initial_association_temporal_v5"]
     assert "prediction_score" not in exported.columns
 
 

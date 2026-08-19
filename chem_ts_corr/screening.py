@@ -30,23 +30,6 @@ CONTROL_REFERENCE_COLUMNS = (
     "control_reference_source",
 )
 _AUTO_CONTROL_REFERENCE_RE = re.compile(r"[._:\-](SV|SP|MV)$", re.IGNORECASE)
-RISK_RELATIVE_PENALTY_WEIGHTS = {
-    "formula_like": 0.00,
-    "strong_formula_leakage": 0.50,
-    "common_capacity_driver": 0.00,
-    "target_leads_variable": 0.00,
-    "unstable_across_regimes": 0.00,
-    "unstable_over_time": 0.00,
-    "lag_boundary": 0.00,
-    "low_model_lift": 0.00,
-    "poor_data_quality": 0.00,
-    "residual_collinearity": 0.00,
-    "redundant_proxy": 0.00,
-}
-EVIDENCE_SCORE_CAPS = {
-    "strong_formula_leakage": 0.25,
-    "severe_data_quality": 0.44,
-}
 
 
 def detect_auto_control_reference(variable: object) -> tuple[bool, str, str]:
@@ -111,7 +94,12 @@ REGIME_STABILITY_COLUMNS = [
 PRIMARY_RANK_COLUMN = "final_score"
 PRIMARY_SCORE_COLUMN = "final_score"
 
-V5_SHADOW_SCORE_METHOD = "initial_association_temporal_v5"
+V5_SCORE_METHOD = "initial_association_temporal_v5"
+# Backward-compatible name for explicit historical V4/V5 diagnostic callers.
+V5_SHADOW_SCORE_METHOD = V5_SCORE_METHOD
+V5_RESIDUAL_BONUS_COEFFICIENT = 0.10
+V5_STABILITY_BONUS_COEFFICIENT = 0.10
+V5_TOTAL_BONUS_CAP = 0.20
 V5_SHADOW_COMPARISON_FILENAME = "screening_v5_shadow_comparison.csv"
 V5_SHADOW_SUMMARY_FILENAME = "screening_v5_shadow_summary.csv"
 V5_SHADOW_COMPARISON_COLUMNS = [
@@ -155,7 +143,7 @@ V5_SHADOW_SUMMARY_COLUMNS = [
 ]
 
 
-def compute_v5_shadow_components(
+def compute_v5_score_components(
     *,
     association_score: object,
     data_quality_score: object,
@@ -172,10 +160,10 @@ def compute_v5_shadow_components(
     regime_support_status: object = None,
     temporal_direction_status: object = None,
 ) -> dict[str, object]:
-    """Compute the isolated V5 Shadow score decomposition for one variable.
+    """Compute the frozen V5 score decomposition for one variable.
 
-    This function intentionally accepts only the V5 evidence inputs.  It does
-    not read or mutate the formal V4 score, risk flags, or any later-stage
+    This function intentionally accepts only the V5 evidence inputs. It does
+    not read risk flags or any later-stage
     validation result.  Missing support evidence is represented by ``NaN``;
     its bonus is zero so that missing and a measured zero remain distinct.
     """
@@ -190,7 +178,9 @@ def compute_v5_shadow_components(
         else np.nan
     )
     residual_bonus = (
-        0.10 * residual_support if pd.notna(residual_support) else 0.0
+        V5_RESIDUAL_BONUS_COEFFICIENT * residual_support
+        if pd.notna(residual_support)
+        else 0.0
     )
 
     rolling_support, rolling_status = _v5_rolling_support(
@@ -215,23 +205,27 @@ def compute_v5_shadow_components(
     else:
         stability_support = np.nan
     stability_bonus = (
-        0.10 * stability_support if pd.notna(stability_support) else 0.0
+        V5_STABILITY_BONUS_COEFFICIENT * stability_support
+        if pd.notna(stability_support)
+        else 0.0
     )
 
-    support_bonus = float(np.clip(residual_bonus + stability_bonus, 0.0, 0.20))
+    support_bonus = float(
+        np.clip(residual_bonus + stability_bonus, 0.0, V5_TOTAL_BONUS_CAP)
+    )
     evidence = (
         float(min(1.0, base * (1.0 + support_bonus)))
         if pd.notna(base)
         else np.nan
     )
     if _v5_status_is(temporal_direction_status, "target_leads_supported"):
-        shadow_final = (
+        final_score = (
             float(min(evidence * TARGET_LEADS_PENALTY_RATE, TARGET_LEADS_SCORE_CAP))
             if pd.notna(evidence)
             else np.nan
         )
     else:
-        shadow_final = evidence
+        final_score = evidence
 
     return {
         "association_score": association,
@@ -248,8 +242,12 @@ def compute_v5_shadow_components(
         "stability_bonus_rate": float(stability_bonus),
         "support_bonus_rate": support_bonus,
         "evidence_score_v5": evidence,
-        "shadow_final_score_v5": shadow_final,
+        "final_score_v5": final_score,
     }
+
+
+# Compatibility name retained for the explicit historical V4/V5 diagnostic.
+compute_v5_shadow_components = compute_v5_score_components
 
 
 def build_v5_shadow_comparison(
@@ -301,7 +299,7 @@ def build_v5_shadow_comparison(
             regime, row, "regime_evidence_status"
         )
         temporal_status = row.get("temporal_direction_status", pd.NA)
-        components = compute_v5_shadow_components(
+        components = compute_v5_score_components(
             association_score=association,
             data_quality_score=quality,
             residual_corr=residual_corr,
@@ -342,7 +340,12 @@ def build_v5_shadow_comparison(
                 "variable": variable,
                 "final_score_v4": row.get("final_score", np.nan),
                 "rank_v4": row.get("rank_v4", np.nan),
-                **components,
+                **{
+                    key: value
+                    for key, value in components.items()
+                    if key != "final_score_v5"
+                },
+                "shadow_final_score_v5": components["final_score_v5"],
                 "residual_status": residual_status,
                 "rank_v5": np.nan,
                 "rank_delta": np.nan,
@@ -1397,18 +1400,6 @@ def _risk_token_set(value: object) -> set[str]:
     return {token.strip() for token in str(value).split(";") if token.strip()}
 
 
-def _risk_adjustment(value: object) -> tuple[float, float, str]:
-    tokens = _risk_token_set(value)
-    penalty_rate = min(0.80, sum(RISK_RELATIVE_PENALTY_WEIGHTS.get(token, 0.0) for token in tokens))
-    cap = 1.0
-    reason = ""
-    for token, token_cap in EVIDENCE_SCORE_CAPS.items():
-        if token in tokens and token_cap < cap:
-            cap = token_cap
-            reason = token
-    return float(penalty_rate), float(cap), reason
-
-
 def classify_candidate(row: pd.Series) -> str:
     flags = _risk_token_set(row.get("risk_flags", ""))
     for token, candidate_class in [
@@ -1782,11 +1773,13 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     if ranked.empty:
         return pd.DataFrame(columns=cols)
     final = ranked.rename(columns={"score": "raw_corr"}).copy()
-    residual_source = residual[[c for c in ["variable", "residual_corr"] if c in residual.columns]].copy()
+    residual_source = residual[
+        [c for c in ["variable", "residual_corr", "residual_status"] if c in residual.columns]
+    ].copy()
     if "variable" not in residual_source.columns:
         residual_source = pd.DataFrame(columns=["variable"])
     final = final.merge(residual_source, on="variable", how="left")
-    stability_columns = list(REGIME_STABILITY_COLUMNS)
+    stability_columns = [*REGIME_STABILITY_COLUMNS, "regime_support_status"]
     stability_source = stability[[c for c in stability_columns if c in stability.columns]].copy()
     if "variable" not in stability_source.columns:
         stability_source = pd.DataFrame(columns=["variable"])
@@ -1817,7 +1810,20 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     )
     if "temporal_direction_status" not in final.columns:
         final["temporal_direction_status"] = pd.NA
-    final = final.merge(rolling_corr_scores[[c for c in ["variable", "rolling_stability"] if c in rolling_corr_scores.columns]], on="variable", how="left")
+    rolling_columns = [
+        "variable",
+        "rolling_stability",
+        "rolling_sign_consistency",
+        "rolling_corr_iqr",
+        "rolling_support_status",
+    ]
+    final = final.merge(
+        rolling_corr_scores[
+            [c for c in rolling_columns if c in rolling_corr_scores.columns]
+        ],
+        on="variable",
+        how="left",
+    )
     # Some legacy callers pre-merge regime evidence.  Pandas then suffixes the
     # duplicate flag; normalize it before the layer-status contract is built.
     if "regime_sign_reversal_flag" not in final.columns:
@@ -1839,12 +1845,23 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     else:
         lift_raw = pd.Series(np.nan, index=final.index, dtype=float)
     lift_raw = pd.to_numeric(lift_raw, errors="coerce")
-    final["residual_status"] = np.where(residual_raw.notna(), "ok", "not_computed")
+    residual_source_status = final.get(
+        "residual_status", pd.Series("not_computed", index=final.index)
+    )
+    final["residual_status"] = residual_source_status.where(
+        residual_source_status.notna(), "not_computed"
+    )
     regime_evidence_status = final.get("regime_evidence_status", pd.Series(np.nan, index=final.index))
     final["regime_status"] = regime_evidence_status.where(
         regime_evidence_status.notna(), np.where(regime_raw.notna(), "ok", "not_computed")
     )
-    final["rolling_status"] = np.where(rolling_raw.notna(), "ok", "not_computed")
+    rolling_source_status = final.get(
+        "rolling_support_status", pd.Series(np.nan, index=final.index)
+    )
+    final["rolling_status"] = rolling_source_status.where(
+        rolling_source_status.notna(),
+        np.where(rolling_raw.notna(), "ok", "not_computed"),
+    )
     model_source_status = final.get("_model_lift_source_status", pd.Series(np.nan, index=final.index))
     final["model_lift_status"] = model_source_status.where(
         model_source_status.notna(), np.where(lift_raw.notna(), "ok", "not_computed")
@@ -1907,27 +1924,45 @@ def final_ranked_features(ranked: pd.DataFrame, residual: pd.DataFrame, stabilit
     )
 
     final["evidence_strength"] = final["association_score"]
-    final["evidence_score"] = (
-        final["evidence_strength"] * final["evidence_confidence"]
+    v5_components = final.apply(
+        lambda row: compute_v5_score_components(
+            association_score=row.get("association_score"),
+            data_quality_score=row.get("data_quality_score"),
+            residual_corr=row.get("residual_corr"),
+            residual_status=row.get("residual_status"),
+            rolling_sign_consistency=row.get("rolling_sign_consistency"),
+            rolling_corr_iqr=row.get("rolling_corr_iqr"),
+            rolling_support_status=row.get(
+                "rolling_support_status", row.get("rolling_status")
+            ),
+            regime_coverage=row.get("regime_coverage"),
+            regime_strength_consistency=row.get("regime_strength_consistency"),
+            regime_sign_consistency=row.get("regime_sign_consistency"),
+            regime_lag_consistency=row.get("regime_lag_consistency"),
+            regime_evidence_status=row.get("regime_evidence_status"),
+            regime_support_status=row.get(
+                "regime_support_status", row.get("regime_status")
+            ),
+            temporal_direction_status=row.get("temporal_direction_status"),
+        ),
+        axis=1,
+        result_type="expand",
+    )
+    final["evidence_score"] = pd.to_numeric(
+        v5_components["evidence_score_v5"], errors="coerce"
     ).clip(0, 1)
     final["evidence_score_low"] = final["evidence_score"]
     final["evidence_score_high"] = final["evidence_score"]
-    final["score_method"] = "initial_association_temporal_v4"
-    risk_values = final.get("risk_flags", pd.Series("", index=final.index)).map(_risk_adjustment)
-    final[["risk_penalty_rate", "risk_score_cap", "risk_cap_reason"]] = pd.DataFrame(
-        risk_values.tolist(), index=final.index
-    )
-    final["risk_penalty"] = final["evidence_score"] * final["risk_penalty_rate"]
-    risk_adjusted_score = (
-        final["evidence_score"] * (1.0 - final["risk_penalty_rate"])
+    final["score_method"] = V5_SCORE_METHOD
+    # Historical columns remain schema-compatible. Risk flags no longer
+    # numerically penalize or cap the formal V5 score.
+    final["risk_penalty_rate"] = 0.0
+    final["risk_penalty"] = 0.0
+    final["risk_score_cap"] = 1.0
+    final["risk_cap_reason"] = ""
+    final["final_score"] = pd.to_numeric(
+        v5_components["final_score_v5"], errors="coerce"
     ).clip(0, 1)
-    temporal_adjusted_score = (
-        risk_adjusted_score * (1.0 - final["temporal_penalty_rate"])
-    ).clip(0, 1)
-    final["final_score"] = pd.concat(
-        [temporal_adjusted_score, final["risk_score_cap"], final["temporal_score_cap"]],
-        axis=1,
-    ).min(axis=1, skipna=False).clip(0, 1)
     final["association_rank"] = final["evidence_score"].rank(
         method="first", ascending=False
     ).astype("Int64")

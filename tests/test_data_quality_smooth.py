@@ -220,6 +220,7 @@ def _chain_row(
                     "variable": "x",
                     "risk_flags": risks["risk_flags"],
                     "human_reason": risks["human_reason"],
+                    "data_quality_score": risks["data_quality_score"],
                 }
             ]
         ),
@@ -251,7 +252,7 @@ def test_full_chain_mild_quality_keeps_normal_use_without_cap():
     assert row["recommended_use"] == "strong_screening_candidate"
 
 
-def test_full_chain_severe_quality_forces_poor_quality_and_cap():
+def test_full_chain_severe_quality_keeps_continuous_quality_effect_without_cap():
     risks, row = _chain_row(
         {
             "missing_rate": 0.51,
@@ -263,9 +264,9 @@ def test_full_chain_severe_quality_forces_poor_quality_and_cap():
     )
 
     assert risks["risk_flags"].split(";") == ["severe_data_quality"]
-    assert row["risk_score_cap"] == pytest.approx(0.44)
-    assert row["risk_cap_reason"] == "severe_data_quality"
-    assert row["final_score"] <= 0.44
+    assert row["risk_score_cap"] == pytest.approx(1.0)
+    assert row["risk_cap_reason"] == ""
+    assert row["final_score"] == pytest.approx(0.95 * row["data_quality_score"])
     assert row["candidate_class"] == "poor_quality"
     assert row["recommended_use"] == "poor_quality_variable"
     assert row["recommended_action"] == "数据质量严重不足，建议清洗数据或剔除该变量后重新分析"
@@ -281,8 +282,9 @@ def test_full_chain_severe_scores_are_mutually_exclusive_for_each_metric():
         risks, row = _chain_row(diagnostic, temporal_status="variable_leads_supported")
         assert risks["risk_flags"].split(";") == ["severe_data_quality"]
         assert "poor_data_quality" not in risks["risk_flags"].split(";")
-        assert row["risk_cap_reason"] == "severe_data_quality"
-        assert row["final_score"] <= 0.44
+        assert row["risk_score_cap"] == pytest.approx(1.0)
+        assert row["risk_cap_reason"] == ""
+        assert row["final_score"] == pytest.approx(0.95 * row["data_quality_score"])
         assert row["candidate_class"] == "poor_quality"
         assert row["recommended_use"] == "poor_quality_variable"
 

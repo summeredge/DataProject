@@ -30,6 +30,37 @@
 
 final_score 降序。
 
+正式 Stage-1 评分方法固定为：
+
+```text
+score_method = initial_association_temporal_v5
+
+base_score = association_score × data_quality_score
+residual_bonus_rate = 0.10 × residual_support
+stability_bonus_rate = 0.10 × stability_support
+support_bonus_rate = min(0.20, residual_bonus_rate + stability_bonus_rate)
+evidence_score = min(1.0, base_score × (1 + support_bonus_rate))
+```
+
+Residual 仅在 `residual_status == ok` 时提供正向支持；稳定性仅使用 rolling / regime
+的一致性指标。缺失、未执行、不可计算、失败和真实 `0.0` 保持不同语义，但都不得因
+支持证据较弱或缺失而降低 `base_score`。
+
+唯一正式负向评分是：
+
+```text
+temporal_direction_status == target_leads_supported
+```
+
+此时继续使用 `TARGET_LEADS_PENALTY_RATE = 0.50` 与
+`TARGET_LEADS_SCORE_CAP = 0.25`。滞后方向保持 signed semantics，不得使用
+`abs(lag)` / `abs(best_lag)` 判断方向。
+
+`strong_formula_leakage`、`severe_data_quality` 及其他风险字段保留解释和候选分类语义，
+但不再通过额外 penalty/cap 改变 V5 `final_score`。历史兼容列
+`risk_penalty_rate` / `risk_penalty` / `risk_score_cap` / `risk_cap_reason` 继续保留，
+正式 V5 分别固定为 `0.0` / `0.0` / `1.0` / 空字符串。
+
 禁止：
 
 -   后续模型回写
@@ -86,10 +117,9 @@ evidence_score = association_score × data_quality_score
 `final_score` 施加 `0.44` 上限，也不属于强风险，不强制将候选分类为
 `poor_quality` 或建议用途设为 `poor_quality_variable`。
 
-仅 `severe_data_quality` 通过 `EVIDENCE_SCORE_CAPS` 将 `final_score`
-封顶为 `0.44`，在 `risk_cap_reason` 中记录 `severe_data_quality`，并作为
-强风险计数一次；只有它强制候选分类为 `poor_quality` 且建议用途为
-`poor_quality_variable`。
+`severe_data_quality` 仍作为强风险计数一次，并强制候选分类为 `poor_quality`、建议用途为
+`poor_quality_variable`；但它不再额外封顶 `final_score`。质量问题只通过
+`data_quality_score` 连续影响 V5 基础分，避免连续衰减与硬 cap 重复处罚。
 
 `poor_data_quality` 与 `severe_data_quality` 互斥：达到严重阈值只写入
 `severe_data_quality`，未达到严重阈值但达到普通阈值只写入

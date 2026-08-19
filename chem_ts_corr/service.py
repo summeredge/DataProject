@@ -100,7 +100,6 @@ def analyze_initial_screening_branch_frame(
         frame,
         config,
         progress_callback=progress_callback,
-        include_v5_shadow=True,
     )
 
 
@@ -108,8 +107,6 @@ def _analyze_numeric_frame_core(
     frame: pd.DataFrame,
     config: AnalysisConfig,
     progress_callback=None,
-    *,
-    include_v5_shadow: bool = False,
 ) -> AnalysisTables:
     from chem_ts_corr.screening import (
         apply_ignore_roles,
@@ -201,11 +198,40 @@ def _analyze_numeric_frame_core(
             config.max_lag,
             target_mask=analysis_target_mask,
         )
-    # PR-2 output is intentionally isolated from screening scores and risks.
+    # Residual evidence remains isolated from risk generation; formal V5 reads
+    # it only through the bounded positive support bonus.
     residual_for_scoring = pd.DataFrame(columns=["variable"])
     regime_output = pd.DataFrame(columns=["variable"])
     lift = pd.DataFrame(columns=["variable"])
     rolling = pd.DataFrame(columns=["variable"])
+    _progress(progress_callback, "正在计算 V5 支持证据")
+    try:
+        v5_regime_stability, v5_rolling = _v5_shadow_stability_evidence(
+            scaled,
+            config,
+            raw_ranked,
+            analysis_target_mask,
+            regime_level_frame=_v5_shadow_regime_level_frame(
+                cleaned,
+                transformed,
+                scaled,
+                config,
+            ),
+        )
+    except Exception:
+        variables = (
+            raw_ranked["variable"].astype(str).tolist()
+            if "variable" in raw_ranked.columns
+            else []
+        )
+        v5_regime_stability = _v5_shadow_regime_status_frame(
+            variables,
+            "calculation_failed",
+        )
+        v5_rolling = _v5_shadow_rolling_status_frame(
+            variables,
+            "calculation_failed",
+        )
     _progress(progress_callback, "正在生成候选排序")
     risks = risk_flags(
         raw_ranked,
@@ -222,12 +248,12 @@ def _analyze_numeric_frame_core(
     )
     ranked = final_ranked_features(
         raw_ranked,
-        residual_for_scoring,
-        regime_output,
+        residual_output,
+        v5_regime_stability,
         lift,
         risks,
         lag_peak,
-        rolling,
+        v5_rolling,
         force_include_variables=config.force_include_variables,
         control_columns=config.residual_control_columns,
         capacity_columns=config.capacity_columns,
@@ -242,39 +268,6 @@ def _analyze_numeric_frame_core(
         residual_top_k=config.top_k,
     )
     recommended = prioritize_recommended_candidates(recommended, residual_output)
-    shadow_regime_stability = pd.DataFrame()
-    shadow_rolling = pd.DataFrame()
-    if include_v5_shadow:
-        _progress(progress_callback, "正在计算 V5 Shadow 稳定性证据")
-        try:
-            shadow_regime_stability, shadow_rolling = _v5_shadow_stability_evidence(
-                scaled,
-                config,
-                raw_ranked,
-                analysis_target_mask,
-                regime_level_frame=_v5_shadow_regime_level_frame(
-                    cleaned,
-                    transformed,
-                    scaled,
-                    config,
-                ),
-            )
-        except Exception:
-            # This is only an unexpected orchestration fallback.  Rolling and
-            # regime errors inside the Shadow helper are isolated separately.
-            variables = (
-                raw_ranked["variable"].astype(str).tolist()
-                if "variable" in raw_ranked.columns
-                else []
-            )
-            shadow_regime_stability = _v5_shadow_regime_status_frame(
-                variables,
-                "calculation_failed",
-            )
-            shadow_rolling = _v5_shadow_rolling_status_frame(
-                variables,
-                "calculation_failed",
-            )
     importance = pd.DataFrame()
     granger = pd.DataFrame()
     metrics: dict[str, float | str] = {}
@@ -295,8 +288,8 @@ def _analyze_numeric_frame_core(
         lag_peak,
         rolling,
         metrics,
-        shadow_regime_stability=shadow_regime_stability,
-        shadow_rolling_corr_scores=shadow_rolling,
+        shadow_regime_stability=v5_regime_stability,
+        shadow_rolling_corr_scores=v5_rolling,
     )
 
 
@@ -308,11 +301,10 @@ def _v5_shadow_stability_evidence(
     *,
     regime_level_frame: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Compute stability evidence after formal V4 tables are frozen.
+    """Compute the pure consistency evidence used by formal V5 scoring.
 
-    The returned frames are sidecar-only.  They are deliberately not passed
-    to ``risk_flags`` or ``final_ranked_features`` and are not part of the
-    formal ``AnalysisTables`` evidence fields.
+    The returned frames are not passed to ``risk_flags`` and do not alter the
+    existing public stability output tables.
     """
     from chem_ts_corr.screening import (
         prepare_best_lag_evidence,

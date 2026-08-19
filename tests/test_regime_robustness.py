@@ -242,7 +242,13 @@ def test_partial_regime_evidence_enters_total_score():
     assert row["stability_score"] == pytest.approx(
         np.sqrt(float(stability.loc[0, "regime_stability_final"]) * 0.8)
     )
-    assert row["final_score"] == pytest.approx(0.8)
+    expected_support = float(stability.loc[0, "regime_coverage"]) * float(
+        stability.loc[0, "regime_sign_consistency"]
+    ) * (
+        0.60 * float(stability.loc[0, "regime_strength_consistency"])
+        + 0.40 * float(stability.loc[0, "regime_lag_consistency"])
+    )
+    assert row["final_score"] == pytest.approx(0.8 * (1 + 0.10 * expected_support))
 
 
 def test_v1_regime_component_weight_is_absent():
@@ -250,7 +256,7 @@ def test_v1_regime_component_weight_is_absent():
     assert "EVIDENCE_COMPONENT_WEIGHTS" not in source
 
 
-def test_pr3_risk_penalty_and_cap_remain_active():
+def test_risk_compatibility_fields_remain_neutral_in_v5():
     variable_only = pd.DataFrame(columns=["variable"])
     ranked = pd.DataFrame([{"variable": "x", "score": 0.9, "lag": -1, "direction": "变量滞后目标"}])
     risks = pd.DataFrame([{"variable": "x", "risk_flags": "target_leads_variable"}])

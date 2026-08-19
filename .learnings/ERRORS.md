@@ -181,3 +181,29 @@ ERROR: file or directory not found: tests/test_preprocess.py
 - Reproducible: yes
 
 ---
+
+## [ERR-20260818-001] FastCtx 不能作为 functions.exec 的嵌套工具调用
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+尝试在 `functions.exec` 中并行调用 `tools.mcp__fastctx__inspect_local_file` 时，运行时报告该方法不存在。
+
+### 错误信息
+```
+TypeError: tools.mcp__fastctx__inspect_local_file is not a function
+```
+
+### 上下文
+- FastCtx 在当前会话中作为独立 MCP 命名空间提供，而不是 `functions.exec` 的嵌套工具。
+
+### 建议修复
+直接调用 `mcp__fastctx.inspect_local_file` / `grep` / `glob`；仅把工具声明明确列入
+`functions.exec` 的方法放入聚合脚本。
+
+### 元数据
+- Reproducible: yes
+
+---

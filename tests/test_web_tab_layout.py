@@ -75,15 +75,15 @@ def test_result_tab_buttons_have_required_order_and_no_candidate_tab():
     labels = [str(button["text"]).strip() for button in layout.buttons]
     targets = [button["attrs"]["data-tab"] for button in layout.buttons]
 
-    assert labels[:2] == ["趋势图", "初步分析"]
-    assert targets[:2] == ["trendTab", "overviewTab"]
+    assert labels[:2] == ["初步分析", "趋势图"]
+    assert targets[:2] == ["overviewTab", "trendTab"]
     assert labels[2:] == ["二次验证", "三层复核", "四级验证", "AI 综合解读", "下载", "术语与标签说明"]
     assert labels.count("初步分析") == 1
     assert "候选变量" not in labels
     assert "candidatesTab" not in targets
 
 
-def test_trend_tab_and_panel_are_the_only_default_active_items():
+def test_overview_tab_and_panel_are_the_only_default_active_items():
     layout = _layout()
     first_button = layout.buttons[0]["attrs"]
     other_buttons = [button["attrs"] for button in layout.buttons[1:]]
@@ -94,12 +94,12 @@ def test_trend_tab_and_panel_are_the_only_default_active_items():
     assert first_button["tabindex"] == "0"
     assert all("active" not in attrs["class"].split() for attrs in other_buttons)
     assert all(attrs["aria-selected"] == "false" for attrs in other_buttons)
-    assert "active" in panels["trendTab"]["class"].split()
-    assert "hidden" not in panels["trendTab"]
+    assert "active" in panels["overviewTab"]["class"].split()
+    assert "hidden" not in panels["overviewTab"]
     assert all(
         "active" not in attrs["class"].split() and "hidden" in attrs
         for panel_id, attrs in panels.items()
-        if panel_id != "trendTab"
+        if panel_id != "overviewTab"
     )
 
 
@@ -137,7 +137,7 @@ def test_all_tab_targets_are_reachable_without_orphans_or_duplicate_ids():
     assert 'activateTab("candidatesTab")' not in INDEX_HTML
 
 
-def test_default_trend_activation_reuses_render_path_without_loading_data_twice():
+def test_default_overview_activation_keeps_trend_render_path_available():
     initialization = INDEX_HTML.split(
         'for (const button of document.querySelectorAll(".tab-button")) {', 1
     )[1].split('el("drawTrend").addEventListener', 1)[0]
@@ -145,7 +145,7 @@ def test_default_trend_activation_reuses_render_path_without_loading_data_twice(
         "function handleTabKeydown", 1
     )[0]
 
-    assert 'activateTab("trendTab");' in initialization
+    assert 'activateTab("overviewTab");' in initialization
     assert initialization.count('button.addEventListener("click"') == 1
     assert "requestAnimationFrame" in activation
     assert "renderTrendChart(lastTrendSeries, lastTrendAxisMode)" in activation

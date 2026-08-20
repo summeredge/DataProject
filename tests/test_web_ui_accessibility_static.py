@@ -57,3 +57,18 @@ def test_table_and_modal_accessibility_enhancements_are_present():
     ]
     for token in required:
         assert token in INDEX_HTML
+
+
+def test_workbench_hierarchy_defaults_to_basic_parameters_and_result_summary():
+    assert '<details id="advancedParameters" class="advanced-parameters">' in INDEX_HTML
+    assert 'id="timeColumn"' in INDEX_HTML.split('<details id="advancedParameters"', 1)[0]
+    assert 'activateTab("overviewTab");' in INDEX_HTML
+    assert 'class="results-heading"' in INDEX_HTML
+    assert 'class="status-panel"' in INDEX_HTML
+
+
+def test_status_columns_render_text_labels_and_mobile_layout_has_horizontal_tabs():
+    assert 'class="status-label status-label-${tone}"' in INDEX_HTML
+    assert 'const STATUS_COLUMNS = new Set([' in INDEX_HTML
+    assert '.tabs { flex-wrap:nowrap; overflow-x:auto;' in INDEX_HTML
+    assert 'table { min-width:680px; }' in INDEX_HTML

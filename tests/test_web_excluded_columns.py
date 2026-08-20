@@ -45,12 +45,13 @@ def _params(file_id: str, **overrides: str) -> dict[str, list[str]]:
     )
 
 
-def test_excluded_columns_control_is_between_input_and_base_parameters():
+def test_base_parameters_are_before_collapsed_advanced_exclusion_controls():
     input_position = INDEX_HTML.index('<div class="control-group-title">数据输入</div>')
     exclusion_position = INDEX_HTML.index('<div class="control-group-title">数据剔除</div>')
     base_position = INDEX_HTML.index('<div class="control-group-title">基础分析参数</div>')
 
-    assert input_position < exclusion_position < base_position
+    assert input_position < base_position < exclusion_position
+    assert '<details id="advancedParameters" class="advanced-parameters">' in INDEX_HTML
     for token in [
         "excludedColumnsDropdown",
         "excludedColumnsSummary",

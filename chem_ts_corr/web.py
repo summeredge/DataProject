@@ -3135,6 +3135,172 @@ INDEX_HTML = r"""<!doctype html>
       .metric-value { font-size:24px; }
     }
   </style>
+  <style>
+    /* 工作台层级：保持现有组件语义，只收紧视觉层次与交互状态。 */
+    :root {
+      --radius-sm:4px;
+      --radius-md:6px;
+      --radius-panel:8px;
+      --surface-control:#fbfcfd;
+      --surface-log:#f8fafc;
+      --focus-ring:rgba(0,113,227,.28);
+    }
+    [hidden] { display:none !important; }
+    header {
+      padding:28px 32px 24px;
+      text-align:left;
+    }
+    header h1 { font-size:32px; }
+    .subtitle { margin:0; max-width:760px; font-size:15px; }
+    main { gap:20px; padding:18px 24px 44px; }
+    section { border-radius:var(--radius-panel); padding:18px; }
+    .controls { border-top:3px solid var(--accent); }
+    .results { border-top:3px solid var(--accent); }
+    .section-heading, .results-heading {
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:14px;
+    }
+    .section-heading h2, .results-heading h2 { margin:0 0 4px; font-size:20px; }
+    .section-description, .results-description {
+      margin:0;
+      max-width:680px;
+      color:var(--muted);
+      font-size:var(--font-sm);
+      line-height:1.45;
+    }
+    .results-priority {
+      flex:0 0 auto;
+      padding:5px 8px;
+      border:1px solid var(--line);
+      border-radius:var(--radius-sm);
+      color:var(--muted);
+      background:var(--surface-muted);
+      font-size:var(--font-xs);
+      white-space:nowrap;
+    }
+    .control-group { border-radius:var(--radius-md); background:var(--surface-control); }
+    .control-group.primary-group { background:var(--panel); border-color:var(--line); }
+    .advanced-parameters {
+      border:1px solid var(--line);
+      border-radius:var(--radius-md);
+      background:var(--surface-control);
+    }
+    .advanced-parameters > summary {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      cursor:pointer;
+      padding:11px 12px;
+      color:var(--text);
+      font-size:var(--font-base);
+      font-weight:650;
+      list-style:none;
+    }
+    .advanced-parameters > summary::-webkit-details-marker { display:none; }
+    .advanced-parameters > summary::after { content:"+"; color:var(--muted); font-size:16px; }
+    .advanced-parameters[open] > summary::after { content:"−"; }
+    .advanced-summary-note { color:var(--muted); font-size:var(--font-xs); font-weight:400; margin-left:auto; }
+    .advanced-parameters-body { display:grid; gap:10px; padding:0 10px 10px; }
+    .multi-dropdown, .single-dropdown { border-radius:var(--radius-md); }
+    .multi-dropdown > summary, .single-dropdown > summary { border-radius:var(--radius-md); }
+    button { border-radius:var(--radius-md); min-height:40px; }
+    button:focus-visible, a:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible {
+      outline:2px solid var(--focus);
+      outline-offset:2px;
+      box-shadow:0 0 0 3px var(--focus-ring);
+    }
+    button:disabled, input:disabled, select:disabled { cursor:not-allowed; }
+    input:disabled, select:disabled { color:var(--muted); background:#eef1f4; border-color:var(--line-soft); }
+    .status-panel {
+      display:grid;
+      gap:8px;
+      padding:12px;
+      border:1px solid var(--line);
+      border-left:3px solid var(--accent);
+      border-radius:var(--radius-md);
+      background:var(--surface-log);
+    }
+    .status-panel-heading { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+    .status-panel-title { font-size:var(--font-sm); font-weight:700; color:var(--text); }
+    .status-panel-caption { color:var(--muted); font-size:var(--font-xs); }
+    .status { border-radius:var(--radius-sm); }
+    .status.loading { display:flex; align-items:center; gap:8px; }
+    .status.loading::before { content:"处理中"; flex:0 0 auto; padding:2px 5px; border:1px solid var(--line); border-radius:3px; color:var(--text); background:var(--panel); font-size:var(--font-xs); font-weight:700; }
+    .tabs { border-radius:var(--radius-md); }
+    .tab-button { border-radius:var(--radius-sm); }
+    .metric-card { border-radius:var(--radius-md); }
+    .empty {
+      min-height:72px;
+      display:grid;
+      place-items:center;
+      border-radius:var(--radius-md);
+      background:var(--surface-log);
+      line-height:1.45;
+    }
+    .detail-hint {
+      padding:8px 10px;
+      border-left:3px solid var(--accent);
+      color:var(--muted);
+      background:var(--surface-muted);
+      font-size:var(--font-sm);
+    }
+    .table-wrap, .terms-help-table-wrap {
+      width:100%;
+      border-radius:var(--radius-md);
+      box-shadow:none;
+    }
+    table { min-width:720px; }
+    th { font-weight:700; }
+    td.numeric, th.numeric { text-align:right; font-variant-numeric:tabular-nums; }
+    .status-label {
+      display:inline-flex;
+      align-items:center;
+      max-width:100%;
+      padding:3px 6px;
+      border:1px solid var(--line);
+      border-radius:var(--radius-sm);
+      background:var(--surface-muted);
+      color:var(--text);
+      font-size:var(--font-xs);
+      line-height:1.25;
+      white-space:normal;
+    }
+    .status-label-positive { border-color:#a7d7ba; background:#f0faf3; }
+    .status-label-caution { border-color:#e8cf8d; background:#fffaf0; }
+    .status-label-negative { border-color:#e7b5b5; background:#fff5f5; }
+    .status-label-neutral { border-color:var(--line); background:var(--surface-muted); }
+    .modal-card { border-radius:var(--radius-panel); box-shadow:0 10px 28px rgba(15,23,42,.18); }
+    .detail-panel, .review-card, .detail-field, .metric-item, pre, .markdown-report { border-radius:var(--radius-md); }
+    .download-buttons a { border-radius:var(--radius-md); }
+    .results .help { border-radius:var(--radius-md); }
+    @media (max-width:900px) {
+      main { grid-template-columns:1fr; padding:14px; }
+      .section-heading, .results-heading { display:block; }
+      .results-priority { display:inline-block; margin-top:8px; }
+    }
+    @media (max-width:640px) {
+      header { padding:24px 16px 20px; }
+      header h1 { font-size:28px; }
+      main { padding:10px; gap:12px; }
+      section { padding:14px; }
+      .tabs { flex-wrap:nowrap; overflow-x:auto; justify-content:flex-start; scrollbar-width:thin; }
+      .tab-button { flex:0 0 auto; min-width:92px; }
+      .controls .grid, .controls .row, .advanced-parameters-body .grid, .advanced-parameters-body .row { grid-template-columns:1fr; }
+      .actions { display:grid; grid-template-columns:1fr; }
+      .actions button { width:100%; }
+      .overview-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .metric-card { min-width:0; width:auto; }
+      .status-panel-heading { display:block; }
+      .status-panel-caption { display:block; margin-top:2px; }
+      .chart-controls, .trend-options, .scatter-matrix-controls, .llm-config-grid { grid-template-columns:1fr; }
+      .trend-stats { grid-template-columns:1fr; }
+      table { min-width:680px; }
+    }
+  </style>
 </head>
 <body>
   <nav class="global-nav" aria-label="主导航">
@@ -3145,8 +3311,14 @@ INDEX_HTML = r"""<!doctype html>
     <div class="subtitle">浏览器负责上传和展示，Python 后台处理大数据并生成下载结果。</div>
   </header>
   <main>
-    <section class="controls">
-      <div class="control-group">
+    <section class="controls" aria-labelledby="controlsTitle">
+      <div class="section-heading">
+        <div>
+          <h2 id="controlsTitle">分析参数</h2>
+          <p class="section-description">先上传数据并确认基础参数，再运行主筛查。工况、剔除和复核设置收在高级参数中。</p>
+        </div>
+      </div>
+      <div class="control-group primary-group">
         <div class="control-group-title">数据输入</div>
       <label>数据文件（CSV / Excel / TXT）
         <input id="fileInput" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls,.xlsm,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel">
@@ -3156,91 +3328,109 @@ INDEX_HTML = r"""<!doctype html>
         <button id="reset" class="secondary">清空</button>
       </div>
       </div>
-      <div class="control-group">
-        <div class="control-group-title">数据剔除</div>
-        <label>强制剔除列（多选）
-          <details id="excludedColumnsDropdown" class="multi-dropdown">
-            <summary id="excludedColumnsSummary">未选择剔除列</summary>
-            <div id="excludedColumnsOptions" class="multi-options"></div>
-          </details>
-        </label>
-        <div class="help">选中的列将在所有分析、验证和图表处理前删除；原始上传文件不会被修改。</div>
-      </div>
-      <div class="control-group">
+      <div class="control-group primary-group">
         <div class="control-group-title">基础分析参数</div>
-      <div class="row">
-        <label>时间列<select id="timeColumn"></select></label>
-        <label>目标列<select id="targetColumn"></select></label>
+        <div class="row">
+          <label>时间列<select id="timeColumn"></select></label>
+          <label>目标列<select id="targetColumn"></select></label>
+        </div>
+        <div class="row">
+          <label>最大滞后点数<input id="maxLag" type="number" min="0" max="5000" value="12"></label>
+          <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="50"></label>
+        </div>
+        <div class="row">
+          <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
+          <label>重采样间隔（分钟）<input id="resampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="可留空，例如 5"></label>
+        </div>
+        <div class="row">
+          <label>预处理模式
+            <select id="preprocessMode">
+              <option value="raw">原始数据</option>
+              <option value="lowpass">一阶低通平滑</option>
+              <option value="lowpass_detrend">一阶低通 + 去趋势</option>
+              <option value="lowpass_diff">一阶低通 + 差分</option>
+            </select>
+          </label>
+          <label id="lowpassTauLabel" hidden>低通时间常数 τ（分钟）<input id="lowpassTauMinutes" type="number" min="0.1" step="0.1" value="5.0"></label>
+          <label id="diffIntervalLabel" hidden>差分间隔（分钟）<input id="diffIntervalMinutes" type="number" min="1" step="1" placeholder="留空表示一个采样周期"></label>
+          <label id="detrendWindowLabel" hidden>去趋势窗口点数<input id="detrendWindow" type="number" min="3" max="100000" value="24"></label>
+        </div>
+        <div class="help">选择 Raw：只运行 Raw，完成后直接发布正式初筛。选择任一预处理模式（一阶低通 / 一阶低通+去趋势 / 一阶低通+差分）：同时运行 Raw 和该预处理模式两个独立初筛，完成后需要人工确认正式分支。</div>
       </div>
-      <div class="row">
-        <label>最大滞后点数<input id="maxLag" type="number" min="0" max="5000" value="12"></label>
-        <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="50"></label>
+      <details id="advancedParameters" class="advanced-parameters">
+        <summary><span>高级参数</span><span class="advanced-summary-note">剔除列 · 工况与残差 · 复核</span></summary>
+        <div class="advanced-parameters-body">
+          <div class="control-group">
+            <div class="control-group-title">数据剔除</div>
+            <label>强制剔除列（多选）
+              <details id="excludedColumnsDropdown" class="multi-dropdown">
+                <summary id="excludedColumnsSummary">未选择剔除列</summary>
+                <div id="excludedColumnsOptions" class="multi-options"></div>
+              </details>
+            </label>
+            <div class="help">选中的列将在所有分析、验证和图表处理前删除；原始上传文件不会被修改。</div>
+          </div>
+          <div class="control-group">
+            <div class="control-group-title">工况与残差控制</div>
+            <div class="row">
+              <label>负荷代表列<select id="segmentColumn"></select></label>
+              <label>工况分段
+                <select id="segmentMode">
+                  <option value="all">全部</option>
+                  <option value="low">低负荷（下 1/3）</option>
+                  <option value="mid">中负荷（中间 1/3）</option>
+                  <option value="high">高负荷（上 1/3）</option>
+                  <option value="custom">自定义范围</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <label>自定义下限<input id="segmentMin" type="number" placeholder="可留空"></label>
+              <label>自定义上限<input id="segmentMax" type="number" placeholder="可留空"></label>
+            </div>
+            <label>残差控制列（CAPACITY，多选）
+              <details id="capacityDropdown" class="multi-dropdown">
+                <summary id="capacitySummary">请选择残差控制列</summary>
+                <div id="capacityOptions" class="multi-options"></div>
+              </details>
+            </label>
+          </div>
+          <div class="control-group">
+            <div class="control-group-title">复核参数</div>
+            <label>强制复核变量（多选）
+              <details id="forceIncludeDropdown" class="multi-dropdown">
+                <summary id="forceIncludeSummary">请选择强制复核变量</summary>
+                <div id="forceIncludeOptions" class="multi-options"></div>
+              </details>
+            </label>
+            <div class="row">
+              <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
+              <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
+            </div>
+          </div>
+        </div>
+      </details>
+      <div class="status-panel" aria-label="运行日志">
+        <div class="status-panel-heading">
+          <span class="status-panel-title">运行状态与日志</span>
+          <span class="status-panel-caption">后台任务、上传和验证状态会显示在这里</span>
+        </div>
+        <div id="status" class="status info" role="status" aria-live="polite" aria-busy="false"></div>
+        <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
       </div>
-      <div class="row">
-        <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>
-        <label>重采样间隔（分钟）<input id="resampleRule" type="number" min="1" step="1" inputmode="numeric" placeholder="可留空，例如 5"></label>
-      </div>
-      <div class="row">
-        <label>预处理模式
-          <select id="preprocessMode">
-            <option value="raw">原始数据</option>
-            <option value="lowpass">一阶低通平滑</option>
-            <option value="lowpass_detrend">一阶低通 + 去趋势</option>
-            <option value="lowpass_diff">一阶低通 + 差分</option>
-          </select>
-        </label>
-        <label id="lowpassTauLabel" hidden>低通时间常数 τ（分钟）<input id="lowpassTauMinutes" type="number" min="0.1" step="0.1" value="5.0"></label>
-        <label id="diffIntervalLabel" hidden>差分间隔（分钟）<input id="diffIntervalMinutes" type="number" min="1" step="1" placeholder="留空表示一个采样周期"></label>
-        <label id="detrendWindowLabel" hidden>去趋势窗口点数<input id="detrendWindow" type="number" min="3" max="100000" value="24"></label>
-      </div>
-      <div class="help">选择 Raw：只运行 Raw，完成后直接发布正式初筛。选择任一预处理模式（一阶低通 / 一阶低通+去趋势 / 一阶低通+差分）：同时运行 Raw 和该预处理模式两个独立初筛，完成后需要人工确认正式分支。</div>
-      </div>
-      <div class="control-group">
-        <div class="control-group-title">工况与残差控制</div>
-      <div class="row">
-        <label>负荷代表列<select id="segmentColumn"></select></label>
-        <label>工况分段
-          <select id="segmentMode">
-            <option value="all">全部</option>
-            <option value="low">低负荷（下 1/3）</option>
-            <option value="mid">中负荷（中间 1/3）</option>
-            <option value="high">高负荷（上 1/3）</option>
-            <option value="custom">自定义范围</option>
-          </select>
-        </label>
-      </div>
-      <div class="row">
-        <label>自定义下限<input id="segmentMin" type="number" placeholder="可留空"></label>
-        <label>自定义上限<input id="segmentMax" type="number" placeholder="可留空"></label>
-      </div>
-      <label>残差控制列（CAPACITY，多选）
-        <details id="capacityDropdown" class="multi-dropdown">
-          <summary id="capacitySummary">请选择残差控制列</summary>
-          <div id="capacityOptions" class="multi-options"></div>
-        </details>
-      </label>
-      </div>
-      <div class="control-group">
-        <div class="control-group-title">复核参数</div>
-      <label>强制复核变量（多选）
-        <details id="forceIncludeDropdown" class="multi-dropdown">
-          <summary id="forceIncludeSummary">请选择强制复核变量</summary>
-          <div id="forceIncludeOptions" class="multi-options"></div>
-        </details>
-      </label>
-      <div class="row">
-        <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
-        <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
-      </div>
-      </div>
-      <div id="status" class="status info" role="status" aria-live="polite"></div>
-      <div class="note">大文件会由 Python 后台处理。分析期间请不要关闭启动服务的命令窗口。</div>
     </section>
 
-    <section class="results">
+    <section class="results" aria-labelledby="resultsTitle">
+      <div class="results-heading">
+        <div>
+          <h2 id="resultsTitle">分析结果</h2>
+          <p class="results-description">默认先展示主筛查摘要和候选表格；趋势图、后续验证与下载结果按需查看。</p>
+        </div>
+        <span class="results-priority">主任务：筛选可复核候选</span>
+      </div>
       <div class="tabs" role="tablist" aria-label="结果分类">
-        <button class="tab-button active" role="tab" aria-selected="true" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="0">趋势图</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="-1">初步分析</button>
+        <button class="tab-button active" role="tab" aria-selected="true" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="0">初步分析</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">四级验证</button>
@@ -3249,7 +3439,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
       </div>
 
-      <div id="overviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-overviewTab" hidden>
+      <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
         <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="branchSelectionSection" class="control-group" hidden>
@@ -3266,6 +3456,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="analysisTimingBreakdown" class="help" hidden></div>
         <h2>初步分析 Top 10</h2>
         <div class="help">final_score 以基础关联强度 × 数据质量为基线，Residual 与稳定性只提供有限正向奖励；仅明确的目标领先时间证据会负向约束得分。</div>
+        <div class="detail-hint">主表格中的行可点击查看变量详情；详情会在独立窗口中打开，不改变排序或分析结果。</div>
         <div id="overviewTop" class="empty">上传数据并点击“开始分析”后显示结果。</div>
         <div id="candidatesTab">
           <h2>去负荷(残差)验证候选</h2>
@@ -3286,7 +3477,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </div>
 
-      <div id="trendTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-trendTab">
+      <div id="trendTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-trendTab" hidden>
         <h2>趋势图</h2>
         <div id="trendReviewHint" class="help">点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。</div>
         <div class="chart-controls">
@@ -3569,7 +3760,7 @@ for (const button of document.querySelectorAll(".tab-button")) {
   button.addEventListener("click", () => activateTab(button.dataset.tab));
   button.addEventListener("keydown", (event) => handleTabKeydown(event, button));
 }
-activateTab("trendTab");
+activateTab("overviewTab");
 updatePreprocessControls();
 el("drawTrend").addEventListener("click", drawTrend);
 el("trendStart").addEventListener("input", markTrendTimeRangeManual);
@@ -5802,7 +5993,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
       const value = getValue(row, column);
       const td = document.createElement("td");
       td.className = tableCellClass(column, value);
-      td.innerHTML = formatter ? formatter(column, value, row) : escapeHtml(displayCellValue(column, value));
+      td.innerHTML = formatter ? formatter(column, value, row) : renderTableCell(column, value);
       tr.appendChild(td);
     }
     tr.addEventListener("click", (event) => {
@@ -6414,7 +6605,7 @@ function renderAnalysisTimingBreakdown(timings) {
 
 
 const GENERIC_TABLE_CORE_COLUMNS = {
-  overviewTop: ["variable", "variable_role", "final_score", "pearson", "spearman", "method", "correlation_direction", "lag", "direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
+  overviewTop: ["variable", "final_score", "lag", "direction", "variable_role", "pearson", "spearman", "method", "correlation_direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -6563,7 +6754,7 @@ function renderFinalReviewSummaryTable(rows) {
         });
         td.appendChild(button);
       } else {
-        td.textContent = displayCellValue(column, finalSummaryValue(row, column));
+        td.innerHTML = renderTableCell(column, finalSummaryValue(row, column));
       }
       td.className = tableCellClass(column, finalSummaryValue(row, column));
       tr.appendChild(td);
@@ -7176,6 +7367,32 @@ function compareValues(a, b) {
   return String(a ?? "").localeCompare(String(b ?? ""), "zh-CN", { numeric: true });
 }
 
+const STATUS_COLUMNS = new Set([
+  "status", "validation_status", "innovation_status", "conditional_status",
+  "conditional_granger_status", "residual_status", "residual_evidence_status",
+  "load_adjusted_relation_status", "evidence_level", "risk_level", "data_quality_status",
+  "rolling_status", "stability_status", "recommended_use", "final_decision",
+  "final_recommendation", "integrated_review_decision", "candidate_grade", "lag_quality",
+  "lag_quality_status", "risk_constraint_level", "statistical_limit_level",
+]);
+
+function statusTone(column, value) {
+  const text = String(value ?? "").toLowerCase();
+  if (!text) return "neutral";
+  if (["risk_level", "risk_constraint_level", "statistical_limit_level"].includes(column) && /high|strong|risk/.test(text)) return "negative";
+  if (/failed|error|not_recommended|not_supported|poor|conflict|insufficient|target_leads|negative/.test(text)) return "negative";
+  if (/risk|warning|limited|manual|secondary|weak|not_run|not_computed|skipped|unknown/.test(text)) return "caution";
+  if (/success|supported|strong|ok|normal|priority|candidate|positive/.test(text)) return "positive";
+  return "neutral";
+}
+
+function renderTableCell(column, value) {
+  const text = displayCellValue(column, value);
+  if (!STATUS_COLUMNS.has(column)) return escapeHtml(text);
+  const tone = statusTone(column, value);
+  return `<span class="status-label status-label-${tone}">${escapeHtml(text || "-")}</span>`;
+}
+
 function tableCellClass(column, value) {
   const name = String(column || "");
   const number = typeof value === "number" ? value : Number(value);
@@ -7568,7 +7785,10 @@ function escapeHtml(value) {
 
 function setStatus(message, type = "info") {
   const node = el("status");
+  if (!node) return;
   node.className = `status ${type}`;
+  node.dataset.state = type;
+  node.setAttribute("aria-busy", type === "loading" ? "true" : "false");
   node.textContent = message;
 }
 

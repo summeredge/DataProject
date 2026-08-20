@@ -159,8 +159,7 @@ CI 通过不等于 Review 通过。
 
 ## Delegation
 
-当任务需要修改源代码时，必须使用 multi_agent 工具调用 luna_worker,主agent不负责修改代码。
-
+必须使用 multi_agent 工具调用 `luna_worker` 完成代码修改。主 Agent 不直接修改源代码文件。
 ---
 
 ## 模式 1：已有明确任务

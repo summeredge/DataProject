@@ -34,7 +34,7 @@ class AnalysisConfig:
     max_lag: int = 12
     resample_rule: str | None = None
     min_valid_ratio: float = 0.7
-    top_k: int = 30
+    top_k: int = 20
     preprocess_mode: str = "raw"
     lowpass_tau_minutes: float = 5.0
     diff_interval_minutes: float | None = None

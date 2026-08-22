@@ -81,9 +81,25 @@ def test_analyze_rejects_legacy_mode_choices():
 def test_analyze_parser_exposes_tau_and_diff_defaults():
     analyze = _analyze_parser()
 
+    assert analyze.get_default("top_k") == 20
     assert analyze.get_default("lowpass_tau_minutes") == 5.0
     assert analyze.get_default("diff_interval_minutes") is None
     assert analyze.get_default("detrend_window") == 24
+
+
+def test_analyze_parser_preserves_explicit_top_k():
+    args = cli.build_parser().parse_args(
+        [
+            "analyze",
+            "--input", "a.csv",
+            "--time-column", "t",
+            "--target", "y",
+            "--output", "out",
+            "--top-k", "7",
+        ]
+    )
+
+    assert args.top_k == 7
 
 
 def test_analyze_parser_passes_tau_and_diff_values():

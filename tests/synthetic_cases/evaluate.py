@@ -54,7 +54,7 @@ def run_case(case: SyntheticCase, output_dir: Path) -> pd.DataFrame:
         target=case.target,
         output_dir=output_dir,
         max_lag=int(metadata.get("max_lag", 6)),
-        top_k=int(metadata.get("top_k", 50)),
+        top_k=int(metadata.get("top_k", 20)),
         skip_model_lift=bool(metadata.get("skip_model_lift", True)),
         skip_rolling_corr=bool(metadata.get("skip_rolling_corr", False)),
         segment_column=metadata.get("segment_column"),

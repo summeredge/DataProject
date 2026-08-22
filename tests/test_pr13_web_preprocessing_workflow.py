@@ -144,6 +144,7 @@ def test_analyze_response_passes_tau_default_and_diff_none(monkeypatch, tmp_path
     web._analyze_response(object())
 
     config = threads[0].args[1]
+    assert config.top_k == 20
     assert config.preprocess_mode == "lowpass_diff"
     assert config.lowpass_tau_minutes == 5.0
     assert config.diff_interval_minutes is None

@@ -31,6 +31,10 @@ def test_parameter_settings_section_covers_main_controls():
         assert marker in INDEX_HTML
 
 
+def test_top_k_input_defaults_to_20():
+    assert 'id="topK" type="number" min="1" max="2000" value="20"' in INDEX_HTML
+
+
 def test_parameter_settings_explain_result_impact():
     required = [
         "参数说明用于解释页面设置项的含义和对结果的影响",

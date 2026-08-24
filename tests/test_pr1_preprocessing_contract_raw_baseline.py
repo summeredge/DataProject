@@ -174,6 +174,7 @@ def _raw_config(tmp_path: Path, **overrides) -> AnalysisConfig:
 def test_config_exposes_new_preprocessing_fields_with_defaults():
     config = AnalysisConfig(Path("input.csv"), "time", "target", Path("out"))
 
+    assert config.top_k == 20
     assert config.lowpass_tau_minutes == 5.0
     assert config.diff_interval_minutes is None
 

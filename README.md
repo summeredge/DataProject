@@ -214,7 +214,7 @@ python -m chem_ts_corr.cli analyze `
   --target 目标变量 `
   --preprocess-mode lowpass `
   --max-lag 72 `
-  --top-k 30 `
+  --top-k 20 `
   --output reports\demo
 ```
 

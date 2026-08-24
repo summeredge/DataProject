@@ -60,7 +60,7 @@ def write_outputs(
         residual_corr_scores=None,
         lag_peak_quality=lag_peak_quality,
         risk_flags=risk_flags,
-        screening_top_n=_metric_int(metrics, "top_k") or 50,
+        screening_top_n=_metric_int(metrics, "top_k") or 20,
     )
     candidate_pool = (
         recommended_candidates

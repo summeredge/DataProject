@@ -620,7 +620,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         max_lag=_int_field(form, "max_lag", 12),
         resample_rule=resample_rule,
         min_valid_ratio=_float_field(form, "min_valid_ratio", 0.7),
-        top_k=_int_field(form, "top_k", 30),
+        top_k=_int_field(form, "top_k", 20),
         preprocess_mode=_field(form, "preprocess_mode", "raw"),
         lowpass_tau_minutes=_float_field(form, "lowpass_tau_minutes", 5.0),
         diff_interval_minutes=_optional_float_field(form, "diff_interval_minutes"),
@@ -3446,7 +3446,7 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="row">
           <label>最大滞后点数<input id="maxLag" type="number" min="0" max="5000" value="12"></label>
-          <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="50"></label>
+          <label>输出前 K 个<input id="topK" type="number" min="1" max="2000" value="20"></label>
         </div>
         <div class="row">
           <label>最小有效比例<input id="minValidRatio" type="number" min="0.1" max="1" step="0.05" value="0.7"></label>

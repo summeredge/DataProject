@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--max-lag", type=int, default=12, help="max lag points to search")
     analyze.add_argument("--resample-rule", default=None, help="optional pandas resample rule, e.g. 5min")
     analyze.add_argument("--min-valid-ratio", type=float, default=0.7)
-    analyze.add_argument("--top-k", type=int, default=30)
+    analyze.add_argument("--top-k", type=int, default=20)
     analyze.add_argument(
         "--preprocess-mode",
         choices=FORMAL_PREPROCESS_MODES,

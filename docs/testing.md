@@ -66,6 +66,15 @@
 -   `data_quality_score` 连续衰减且四项为零时为 `1.0`；
 -   `ranked_features.csv` 仍按 `final_score` 降序，CSV/API 字段结构不变。
 
+## 第一层初筛输出边界
+
+- 第一层的用户可见候选输出只来自 `ranked_features.csv` 排序及其 Top-K，不生成
+  `near_miss_candidates.csv`，结果 payload、下载列表和页面中也不得暴露
+  `nearMissCandidates` / `nearMissTable`；
+- `final_score`、`ranked_features.csv`、Top-K 和初筛推荐顺序保持原有回归覆盖；
+- 二级验证仍覆盖 `verification_review_pool.csv` 与模型有限遗漏探索（K+1 ~ K+10），
+  不得把其结果回写一级初筛。
+
 历史兼容测试覆盖：`poor_data_quality` 与旧 `poor_quality` 分类、旧推荐用途或旧
 `medium` 风险等级并存时，仍只作为普通质量提示；精确
 `severe_data_quality` 才触发综合复核硬降级和 XGBoost 自动排除。排名基线的质量风险

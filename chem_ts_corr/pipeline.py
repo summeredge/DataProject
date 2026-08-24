@@ -89,7 +89,6 @@ REQUIRED_FORMAL_SCREENING_FILES = [
     "recommended_candidates.csv",
     "causal_review_candidates.csv",
     "lag_scores.csv",
-    "near_miss_candidates.csv",
     "diagnostics.csv",
     "risk_flags.csv",
     "lag_peak_quality.csv",
@@ -99,6 +98,7 @@ OPTIONAL_FORMAL_SCREENING_FILES = ["residual_corr_scores.csv"]
 FORMAL_SCREENING_FILES = (
     REQUIRED_FORMAL_SCREENING_FILES + OPTIONAL_FORMAL_SCREENING_FILES
 )
+RETIRED_SCREENING_OUTPUT_FILES = ["near_miss_candidates.csv"]
 DOWNSTREAM_FORMAL_INPUT_FILES = [
     "ranked_features.csv",
     "recommended_candidates.csv",
@@ -681,7 +681,7 @@ def _reject_locked_run(run_dir: Path) -> None:
 
 def _clear_previous_formal_state(run_dir: Path, *, preprocess_mode: str) -> None:
     run_dir = Path(run_dir)
-    for name in FORMAL_SCREENING_FILES:
+    for name in [*FORMAL_SCREENING_FILES, *RETIRED_SCREENING_OUTPUT_FILES]:
         (run_dir / name).unlink(missing_ok=True)
     _clear_previous_validation_outputs(run_dir)
     (run_dir / VERIFICATION_REVIEW_POOL_FILENAME).unlink(missing_ok=True)
@@ -707,7 +707,7 @@ def _clear_branch_formal_outputs(branch_dir: Path) -> None:
     directory are removed; the branch directory itself, other branches and
     run-root files are never touched.
     """
-    for name in FORMAL_SCREENING_FILES:
+    for name in [*FORMAL_SCREENING_FILES, *RETIRED_SCREENING_OUTPUT_FILES]:
         (branch_dir / name).unlink(missing_ok=True)
 
 

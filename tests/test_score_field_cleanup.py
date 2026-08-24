@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from chem_ts_corr.near_miss import build_near_miss_candidates
 from chem_ts_corr.report import build_markdown_summary, write_outputs
 from chem_ts_corr.screening import final_ranked_features
 
@@ -228,14 +227,6 @@ def test_output_scores_keep_raw_precision_for_csv_export():
     row = _result(raw=0.999768, innovation=np.nan, lag_quality=0.935306)
 
     assert row["final_score"] != round(row["final_score"], 3)
-
-
-def test_near_miss_does_not_fabricate_missing_residual():
-    lag_scores = pd.DataFrame([{"variable": "x", "lag": 1, "score": 0.9}])
-    result = build_near_miss_candidates(lag_scores, pd.DataFrame())
-
-    assert pd.isna(result.loc[0, "independent_signal_score"])
-    assert "residual_signal" not in result.loc[0, "near_miss_reason"]
 
 
 def test_json_serialization_keeps_initial_fields_and_no_followup_scores():

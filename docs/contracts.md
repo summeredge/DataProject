@@ -347,7 +347,7 @@ run_directory/
   自动发布，非 Raw 等待确认；
 - `confirm_initial_screening_branch()` 只读取并验证已有 branch 文件后事务性
   promotion，确认 ≠ 重新运行初筛；
-- promotion 前必须验证 9 个必需正式文件齐全，缺失时报
+- promotion 前必须验证 8 个必需正式文件齐全，缺失时报
   `initial_screening_branch_output_incomplete`；
 - promotion 使用 staging + backup + replace + context 更新的事务流程，任一
   步骤失败恢复原 root 文件与原 context，不会出现一半 Raw + 一半 Processed；
@@ -795,6 +795,10 @@ include_reason
 复核池及所有后续验证都不得修改 `ranked_features.csv`、`recommended_candidates.csv`、
 `causal_review_candidates.csv`、`final_score`、Top-K 或初筛推荐顺序。复核池可下载和在结果
 payload 的 `verificationReviewPool` 返回，但不是跨阶段通用候选字段。
+
+第一层初筛只按 `final_score` 完成排序，并从 `ranked_features.csv` 产生 Top-K
+候选；不再输出或展示独立的遗漏候选 CSV、API 字段或页面入口。有限遗漏发现仅属于
+二级验证的 `model_discovery`，并且仍须由用户明确加入复核池。
 
 `validation_summary.csv` 固定为：
 

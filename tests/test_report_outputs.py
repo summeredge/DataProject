@@ -127,34 +127,6 @@ def test_write_outputs_writes_expected_files(tmp_path: Path):
         assert c in review.columns
 
 
-def test_write_outputs_uses_metrics_top_k_for_near_miss_candidates(tmp_path: Path):
-    ranked = pd.DataFrame(
-        [
-            {"variable": "v1", "final_score": 0.9, "candidate_grade": "A", "recommended_use": "strong_screening_candidate", "recommended_action": "review"},
-            {"variable": "v2", "final_score": 0.8, "candidate_grade": "B", "recommended_use": "prediction_candidate", "recommended_action": "review"},
-        ]
-    )
-    lag_scores = pd.DataFrame(
-        [
-            {"variable": "v1", "lag": 1, "score": 0.9},
-            {"variable": "v2", "lag": 2, "score": 0.8},
-        ]
-    )
-
-    write_outputs(
-        output_dir=tmp_path,
-        target="target",
-        ranked_features=ranked,
-        lag_scores=lag_scores,
-        granger_tests=pd.DataFrame(),
-        importance=pd.DataFrame(),
-        metrics={"top_k": 1},
-    )
-
-    near_miss = pd.read_csv(tmp_path / "near_miss_candidates.csv", encoding="utf-8-sig")
-    assert near_miss["variable"].tolist() == ["v2"]
-
-
 def test_recommended_candidates_uses_candidate_grade_without_engineering_context():
     ranked = pd.DataFrame(
         [

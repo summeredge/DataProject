@@ -18,7 +18,6 @@ def test_render_generic_table_uses_compact_modal_path():
 def test_remaining_major_table_ids_are_covered_by_generic_modal_config():
     required = [
         "overviewTop",
-        "nearMissTable",
         "grangerTable",
         "modelVariableImportanceTable",
         "importanceTable",

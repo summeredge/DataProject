@@ -116,7 +116,6 @@ def test_overview_panel_contains_analysis_then_candidate_content():
         "controlReferenceTable",
         "screeningQualityHints",
         "table",
-        "nearMissTable",
     ]:
         assert element_id in content_ids
     assert content_ids.index("overviewTop") < content_ids.index("candidatesTab")

@@ -95,7 +95,6 @@ DOWNLOAD_FILES = {
     "model_discovered_candidates.csv",
     DISCOVERY_CANDIDATES_FILENAME,
     "model_variable_importance.csv",
-    "near_miss_candidates.csv",
     "recommended_candidates.csv",
     "lag_peak_quality.csv",
     "rolling_corr_scores.csv",
@@ -876,7 +875,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
     discovery_candidates = _safe_read_result_csv(output_dir / DISCOVERY_CANDIDATES_FILENAME)
     verification_review_pool = _verification_review_pool_for_payload(output_dir)
-    near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
     comparison = _safe_read_result_csv(output_dir / "preprocessing_comparison.csv")
@@ -933,7 +931,6 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
         "discoveryCandidates": _records(discovery_candidates.head(200)),
         "verificationReviewPool": _records(verification_review_pool),
-        "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
     }
 
@@ -1755,12 +1752,6 @@ def _secondary_extra_variables_from_form(form: dict[str, Any]) -> list[str]:
     return _list_field(form, "secondary_include_variables")
 
 
-def _near_miss_variables(near_miss: pd.DataFrame, limit: int = 10) -> list[str]:
-    if near_miss.empty or "variable" not in near_miss.columns:
-        return []
-    return near_miss.head(limit)["variable"].dropna().astype(str).tolist()
-
-
 def _best_lags_from_ranked(ranked: pd.DataFrame) -> dict[str, int]:
     if ranked.empty or not {"variable", "lag"}.issubset(ranked.columns):
         return {}
@@ -1814,21 +1805,6 @@ def _secondary_best_lags_for_missing_variables(
         except (TypeError, ValueError):
             continue
 
-    return merged
-
-
-def _merge_near_miss_lags(best_lags: dict[str, int], near_miss: pd.DataFrame) -> dict[str, int]:
-    merged = dict(best_lags)
-    if near_miss.empty or not {"variable", "lag"}.issubset(near_miss.columns):
-        return merged
-    for _, row in near_miss[["variable", "lag"]].dropna().iterrows():
-        variable = str(row["variable"]).strip()
-        if not variable or variable in merged:
-            continue
-        try:
-            merged[variable] = int(row["lag"])
-        except (TypeError, ValueError):
-            continue
     return merged
 
 
@@ -3592,9 +3568,6 @@ INDEX_HTML = r"""<!doctype html>
           <h3>结果质量提示</h3>
           <div id="screeningQualityHints" class="empty">完成主筛查后显示结果质量提示。</div>
           <div id="table" class="empty">上传数据并点击“开始分析”后显示结果。</div>
-          <h2>轻量遗漏候选</h2>
-          <div class="help">该表基于已有滞后相关、残差相关、峰值质量和风险标签生成，用于提示主筛查前 K 个外可能遗漏的候选。结果不代表因果结论。</div>
-          <div id="nearMissTable" class="empty">完成主筛查后显示轻量遗漏候选。</div>
         </div>
       </div>
 
@@ -4335,7 +4308,6 @@ function renderAnalysisResult(data) {
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
   lastModelVariableRows = data.modelVariableImportance || [];
-  lastNearMissRows = data.nearMissCandidates || [];
   lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
   lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
   const hasEnhancedScreening = lastEnhancedSummaryRows.length > 0;
@@ -4367,7 +4339,6 @@ function renderAnalysisResult(data) {
   );
   delete tableSortStates["overviewTop"];
   renderGenericTable("overviewTop", (data.overview && data.overview.top10) || [], coreCandidateColumns());
-  renderGenericTable("nearMissTable", lastNearMissRows, nearMissColumns());
   renderGenericTable("grangerTable", lastGrangerRows);
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
@@ -6801,7 +6772,6 @@ function renderAnalysisTimingBreakdown(timings) {
 
 const GENERIC_TABLE_CORE_COLUMNS = {
   overviewTop: ["variable", "final_score", "lag", "direction", "variable_role", "pearson", "spearman", "method", "correlation_direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
-  nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
   validationSummaryTable: ["variable", "validation_status", "evidence_consistency", "supporting_methods", "limiting_factors"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
@@ -7311,7 +7281,6 @@ function missingText(targetId) {
   if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示遗漏探索线索。";
-  if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
@@ -7319,10 +7288,6 @@ function missingText(targetId) {
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
   return "无可展示结果。";
-}
-
-function nearMissColumns() {
-  return ["variable", "near_miss_score", "lag", "direction", "raw_score", "residual_corr", "lag_quality", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "near_miss_reason", "interpretation"];
 }
 
 function modelVariableImportanceColumns() {
@@ -7864,16 +7829,13 @@ function formatValue(value) {
       clear_lag_peak: "滞后峰值清晰",
       lag_boundary_risk: "滞后边界风险",
       data_or_formula_risk: "数据质量或公式泄漏风险",
-      near_miss_candidate: "遗漏候选线索",
       lag_reaches_boundary: "滞后触及边界",
-      "screening near-miss only": "仅作轻量遗漏筛查",
     };
     if (map[value]) return map[value];
     if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
     if (value.startsWith("predictive validation only; not a causal conclusion")) return "仅作预测验证；不是因果结论；解析式 p/q 值不能完全消除工业时序自相关影响";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "model discovery exploration only; not a validation conclusion or causal conclusion") return "仅作模型遗漏探索；不是验证结论或因果结论";
-    if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
     if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";
     return value
       .split(/[;,，；]/)
@@ -8093,9 +8055,7 @@ function columnLabel(column) {
     in_screening_top_n: "在初筛前N内",
     missing_from_screening_top_n: "未进入主筛查TopN",
     discovery_reason: "模型发现原因",
-    near_miss_score: "遗漏候选得分",
     raw_score: "原始滞后得分",
-    near_miss_reason: "遗漏候选原因",
     lag_quality: "滞后峰值质量",
   };
   return labels[column] || column;
@@ -8234,8 +8194,6 @@ function reset() {
   el("screeningQualityHints").textContent = "完成主筛查后显示结果质量提示。";
   el("table").className = "empty";
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
-  el("nearMissTable").className = "empty";
-  el("nearMissTable").textContent = "完成主筛查后显示轻量遗漏候选。";
   el("trendChart").className = "chart empty";
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
   el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";

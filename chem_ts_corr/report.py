@@ -6,7 +6,6 @@ import pandas as pd
 
 from chem_ts_corr.common import to_int
 from chem_ts_corr.causal_review import build_causal_review_candidates
-from chem_ts_corr.near_miss import build_near_miss_candidates
 from chem_ts_corr.screening import (
     build_recommended_candidates as _build_recommended_candidates,
     prioritize_recommended_candidates,
@@ -53,15 +52,8 @@ def write_outputs(
     recommended_candidates: pd.DataFrame | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "near_miss_candidates.csv").unlink(missing_ok=True)
 
-    near_miss = build_near_miss_candidates(
-        lag_scores,
-        ranked_features,
-        residual_corr_scores=None,
-        lag_peak_quality=lag_peak_quality,
-        risk_flags=risk_flags,
-        screening_top_n=_metric_int(metrics, "top_k") or 20,
-    )
     candidate_pool = (
         recommended_candidates
         if recommended_candidates is not None
@@ -80,7 +72,6 @@ def write_outputs(
         "recommended_candidates.csv": candidate_source,
         "causal_review_candidates.csv": build_causal_review_candidates(candidate_source),
         "lag_scores.csv": lag_scores,
-        "near_miss_candidates.csv": near_miss,
         "diagnostics.csv": diagnostics,
         "risk_flags.csv": risk_flags,
         "lag_peak_quality.csv": lag_peak_quality,

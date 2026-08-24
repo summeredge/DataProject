@@ -8,7 +8,11 @@ import pytest
 
 from chem_ts_corr import service
 from chem_ts_corr.config import NOT_WIRED_ANALYSIS_PREPROCESS_MODES, AnalysisConfig
-from chem_ts_corr.pipeline import run_analysis, run_initial_screening_branch
+from chem_ts_corr.pipeline import (
+    run_analysis,
+    run_initial_screening_branch,
+    run_initial_screening_workflow,
+)
 from chem_ts_corr.preprocess import (
     difference_by_physical_interval,
     lowpass_filter_frame,
@@ -24,7 +28,6 @@ ROOT_LEVEL_SCREENING_FILES = [
     "recommended_candidates.csv",
     "causal_review_candidates.csv",
     "lag_scores.csv",
-    "near_miss_candidates.csv",
     "diagnostics.csv",
     "risk_flags.csv",
     "lag_peak_quality.csv",
@@ -125,6 +128,17 @@ def test_raw_branch_writes_only_to_screening_branches_raw(tmp_path):
     assert (raw_dir / "causal_review_candidates.csv").exists()
     assert not (tmp_path / "screening_branches" / "processed").exists()
     _assert_no_root_publish(tmp_path)
+
+
+def test_raw_workflow_removes_retired_near_miss_output(tmp_path):
+    config = _raw_config(tmp_path)
+    _write_input(config, _raw_frame())
+    (tmp_path / "near_miss_candidates.csv").write_text("variable\nold\n", encoding="utf-8")
+
+    run_initial_screening_workflow(config)
+
+    assert not (tmp_path / "near_miss_candidates.csv").exists()
+    assert not (tmp_path / "screening_branches" / "raw" / "near_miss_candidates.csv").exists()
 
 
 @pytest.mark.parametrize("mode", ["lowpass", "lowpass_detrend", "lowpass_diff"])

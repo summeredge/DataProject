@@ -710,6 +710,7 @@ def test_chart_rejects_invalid_positive_transform_parameters(name, value):
 def test_download_whitelist_contains_comparison_and_context_but_not_branch_files():
     assert "preprocessing_comparison.csv" in web.DOWNLOAD_FILES
     assert "preprocessing_context.json" in web.DOWNLOAD_FILES
+    assert "near_miss_candidates.csv" not in web.DOWNLOAD_FILES
     assert "screening_branches/raw/ranked_features.csv" not in web.DOWNLOAD_FILES
     assert "screening_branches/processed/ranked_features.csv" not in web.DOWNLOAD_FILES
 

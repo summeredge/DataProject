@@ -657,6 +657,21 @@ def test_initial_write_outputs_does_not_create_followup_placeholders(tmp_path: P
     assert payload["importance"] == []
 
 
+def test_initial_write_outputs_does_not_publish_near_miss_candidates(tmp_path: Path):
+    ranked = pd.DataFrame([{"variable": "x", "final_score": 0.8, "candidate_grade": "A", "recommended_use": "prediction_candidate"}])
+    (tmp_path / "near_miss_candidates.csv").write_text("variable\nx\n", encoding="utf-8")
+    write_outputs(
+        tmp_path, "target", ranked, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), {},
+    )
+
+    config = AnalysisConfig(tmp_path / "input.csv", "time", "target", tmp_path)
+    payload = _build_result_payload("run", tmp_path, config)
+    assert not (tmp_path / "near_miss_candidates.csv").exists()
+    assert "nearMissCandidates" not in payload
+    assert "near_miss_candidates.csv" not in {item["name"] for item in payload["downloads"]}
+    assert "nearMiss" not in INDEX_HTML
+
+
 def test_initial_tie_break_order_is_independent_of_input_order(monkeypatch):
     original = screening._finalize_driver_ranking
 

@@ -39,6 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--resample-rule", default=None, help="optional pandas resample rule, e.g. 5min")
     analyze.add_argument("--min-valid-ratio", type=float, default=0.7)
     analyze.add_argument("--top-k", type=int, default=20)
+    analyze.add_argument("--discovery-candidate-window", type=int, default=10)
+    analyze.add_argument("--max-discovery-candidates", type=int, default=5)
     analyze.add_argument(
         "--preprocess-mode",
         choices=FORMAL_PREPROCESS_MODES,
@@ -183,6 +185,8 @@ def main() -> None:
             resample_rule=args.resample_rule,
             min_valid_ratio=args.min_valid_ratio,
             top_k=args.top_k,
+            discovery_candidate_window=args.discovery_candidate_window,
+            max_discovery_candidates=args.max_discovery_candidates,
             preprocess_mode=args.preprocess_mode,
             lowpass_tau_minutes=args.lowpass_tau_minutes,
             diff_interval_minutes=args.diff_interval_minutes,

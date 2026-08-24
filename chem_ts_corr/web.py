@@ -34,6 +34,7 @@ from chem_ts_corr.pipeline import (
     _read_preprocessing_context,
     begin_downstream_stage,
     confirm_initial_screening_branch,
+    DISCOVERY_CANDIDATES_FILENAME,
     run_causal_review_for_active_branch,
     run_enhanced_screening_for_active_branch,
     run_granger_for_active_branch,
@@ -92,6 +93,7 @@ DOWNLOAD_FILES = {
     "risk_flags.csv",
     "model_lift_scores.csv",
     "model_discovered_candidates.csv",
+    DISCOVERY_CANDIDATES_FILENAME,
     "model_variable_importance.csv",
     "near_miss_candidates.csv",
     "recommended_candidates.csv",
@@ -872,6 +874,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
     model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
+    discovery_candidates = _safe_read_result_csv(output_dir / DISCOVERY_CANDIDATES_FILENAME)
     verification_review_pool = _verification_review_pool_for_payload(output_dir)
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
@@ -928,6 +931,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
+        "discoveryCandidates": _records(discovery_candidates.head(200)),
         "verificationReviewPool": _records(verification_review_pool),
         "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
@@ -1251,10 +1255,14 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     model_discovered = _safe_read_result_csv(
         output_dir / "model_discovered_candidates.csv"
     )
+    discovery_candidates = _safe_read_result_csv(
+        output_dir / DISCOVERY_CANDIDATES_FILENAME
+    )
     return {
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
+        "discoveryCandidates": _records(discovery_candidates.head(200)),
         "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "verificationReviewPool": _records(_verification_review_pool_for_payload(output_dir)),
@@ -1285,7 +1293,10 @@ def _add_to_verification_review_pool_response(
             manual_include=config.force_include_variables,
         )
     if candidate_source == "model_discovery":
-        discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
+        discovery_path = output_dir / DISCOVERY_CANDIDATES_FILENAME
+        if not discovery_path.exists():
+            discovery_path = output_dir / "model_discovered_candidates.csv"
+        discovered = _safe_read_result_csv(discovery_path)
         discovered_variables = (
             set(discovered["variable"].dropna().astype(str))
             if "variable" in discovered.columns

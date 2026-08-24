@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+from numbers import Integral
 from pathlib import Path
 
 
@@ -35,6 +36,8 @@ class AnalysisConfig:
     resample_rule: str | None = None
     min_valid_ratio: float = 0.7
     top_k: int = 20
+    discovery_candidate_window: int = 10
+    max_discovery_candidates: int = 5
     preprocess_mode: str = "raw"
     lowpass_tau_minutes: float = 5.0
     diff_interval_minutes: float | None = None
@@ -70,6 +73,18 @@ class AnalysisConfig:
     xgb_whitelist: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.discovery_candidate_window, bool)
+            or not isinstance(self.discovery_candidate_window, Integral)
+            or self.discovery_candidate_window < 0
+        ):
+            raise ValueError("discovery_candidate_window must be a non-negative integer")
+        if (
+            isinstance(self.max_discovery_candidates, bool)
+            or not isinstance(self.max_discovery_candidates, Integral)
+            or self.max_discovery_candidates < 0
+        ):
+            raise ValueError("max_discovery_candidates must be a non-negative integer")
         if not math.isfinite(self.lowpass_tau_minutes) or self.lowpass_tau_minutes <= 0:
             raise ValueError("lowpass_tau_minutes must be a finite value greater than 0")
         if self.diff_interval_minutes is not None and (

@@ -9,6 +9,9 @@ INTERPRETATION = "model explanation only; not a causal conclusion"
 DISCOVERY_INTERPRETATION = (
     "model discovery exploration only; not a validation conclusion or causal conclusion"
 )
+MAX_DISCOVERY_CANDIDATE_WINDOW = 10
+MAX_DISCOVERY_CANDIDATES = 5
+DISCOVERY_CANDIDATE_COLUMNS = ["variable", "source_rank", "discovery_reason"]
 
 OUT_COLS = [
     "variable",
@@ -169,6 +172,102 @@ def build_model_discovered_candidates(
         rows.append(row)
 
     return pd.DataFrame(rows, columns=OUT_COLS)
+
+
+def build_exploration_candidate_pool(
+    ranked_features: pd.DataFrame,
+    *,
+    top_k: int,
+    discovery_candidate_window: int = MAX_DISCOVERY_CANDIDATE_WINDOW,
+) -> pd.DataFrame:
+    """Return the bounded initial-screening omission window.
+
+    The pool is derived only from the existing initial-screening order. It is
+    not a new ranking and never changes ``ranked_features``.
+    """
+    columns = ["variable", "source_rank"]
+    if ranked_features is None or ranked_features.empty or "variable" not in ranked_features.columns:
+        return pd.DataFrame(columns=columns)
+
+    window_size = min(MAX_DISCOVERY_CANDIDATE_WINDOW, max(0, int(discovery_candidate_window)))
+    if window_size == 0:
+        return pd.DataFrame(columns=columns)
+
+    frame = ranked_features[["variable"]].copy(deep=True)
+    fallback_ranks = pd.Series(range(1, len(frame) + 1), index=frame.index, dtype="Int64")
+    if "driver_rank" in ranked_features.columns:
+        source_rank = pd.to_numeric(ranked_features["driver_rank"], errors="coerce")
+        source_rank = source_rank.where(source_rank.notna(), fallback_ranks)
+    else:
+        source_rank = fallback_ranks
+    frame["source_rank"] = source_rank
+    frame["variable"] = frame["variable"].astype("string").str.strip()
+    frame = frame[frame["variable"].notna() & frame["variable"].ne("")]
+    frame = frame[
+        (frame["source_rank"] > max(0, int(top_k)))
+        & (frame["source_rank"] <= max(0, int(top_k)) + window_size)
+    ]
+    frame = frame.sort_values("source_rank", kind="mergesort").drop_duplicates(
+        subset=["variable"], keep="first"
+    )
+    frame["source_rank"] = pd.to_numeric(frame["source_rank"], errors="coerce").astype("Int64")
+    return frame[columns].reset_index(drop=True)
+
+
+def build_discovery_candidates(
+    model_discovered: pd.DataFrame,
+    ranked_features: pd.DataFrame,
+    *,
+    top_k: int,
+    discovery_candidate_window: int = MAX_DISCOVERY_CANDIDATE_WINDOW,
+    max_discovery_candidates: int = MAX_DISCOVERY_CANDIDATES,
+) -> pd.DataFrame:
+    """Build the small manual-review view from model-discovery results.
+
+    Candidates are filtered back to the fixed omission window and emitted in
+    initial-screening order. Model importance is not used to create a second
+    ranking.
+    """
+    columns = DISCOVERY_CANDIDATE_COLUMNS
+    if model_discovered is None or model_discovered.empty or "variable" not in model_discovered.columns:
+        return pd.DataFrame(columns=columns)
+
+    limit = min(MAX_DISCOVERY_CANDIDATES, max(0, int(max_discovery_candidates)))
+    if limit == 0:
+        return pd.DataFrame(columns=columns)
+
+    reasons: dict[str, object] = {}
+    for row in model_discovered.to_dict(orient="records"):
+        variable = row.get("variable")
+        if pd.isna(variable):
+            continue
+        name = str(variable).strip()
+        if not name or name in reasons:
+            continue
+        reason = row.get("discovery_reason", pd.NA)
+        if reason is None or (not isinstance(reason, (list, tuple, set)) and pd.isna(reason)):
+            reason = "模型发现候选"
+        reasons[name] = reason
+
+    pool = build_exploration_candidate_pool(
+        ranked_features,
+        top_k=top_k,
+        discovery_candidate_window=discovery_candidate_window,
+    )
+    rows = [
+        {
+            "variable": row["variable"],
+            "source_rank": row["source_rank"],
+            "discovery_reason": reasons[str(row["variable"])],
+        }
+        for row in pool.to_dict(orient="records")
+        if str(row["variable"]) in reasons
+    ][:limit]
+    result = pd.DataFrame(rows, columns=columns)
+    if result.empty:
+        return pd.DataFrame(columns=columns)
+    result["source_rank"] = pd.to_numeric(result["source_rank"], errors="coerce").astype("Int64")
+    return result
 
 
 def _normalized_importance(importance: pd.DataFrame) -> pd.DataFrame:

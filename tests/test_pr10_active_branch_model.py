@@ -22,6 +22,7 @@ MODEL_OUTPUT_FILES = [
     "shap_or_importance.csv",
     "model_variable_importance.csv",
     "model_discovered_candidates.csv",
+    "discovery_candidates.csv",
     "validation_summary.csv",
 ]
 FORMAL_ROOT_FILES = [
@@ -758,6 +759,18 @@ def test_model_discovery_explores_only_rank_k_plus_one_to_k_plus_ten(tmp_path, m
     ]
     assert discovered["ranked_feature_rank"].tolist() == [6, 7, 8, 9, 10]
     assert len(discovered) == 5
+    discovery_candidates = pd.read_csv(
+        tmp_path / "discovery_candidates.csv", encoding="utf-8-sig"
+    )
+    assert list(discovery_candidates.columns) == [
+        "variable",
+        "source_rank",
+        "discovery_reason",
+    ]
+    assert discovery_candidates["variable"].tolist() == [
+        f"variable_{index}" for index in range(5, 10)
+    ]
+    assert discovery_candidates["source_rank"].tolist() == [6, 7, 8, 9, 10]
     for name, content in screening_before.items():
         assert (tmp_path / name).read_bytes() == content
 

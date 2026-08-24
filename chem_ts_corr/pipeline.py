@@ -35,6 +35,12 @@ from chem_ts_corr.validation_summary import (
     VALIDATION_SUMMARY_FILENAME,
     write_validation_summary,
 )
+from chem_ts_corr.model_discovery import (
+    MAX_DISCOVERY_CANDIDATES,
+    MAX_DISCOVERY_CANDIDATE_WINDOW,
+    build_discovery_candidates,
+    build_exploration_candidate_pool,
+)
 from chem_ts_corr.verification_review_pool import (
     FILENAME as VERIFICATION_REVIEW_POOL_FILENAME,
     pool_variables,
@@ -123,7 +129,9 @@ VALIDATION_SUMMARY_INPUT_FILES = (
 MODEL_EXPLORATION_OUTPUT_FILES = (
     "shap_or_importance.csv",
     "model_discovered_candidates.csv",
+    "discovery_candidates.csv",
 )
+DISCOVERY_CANDIDATES_FILENAME = "discovery_candidates.csv"
 V5_SHADOW_OUTPUT_FILES = (
     V5_SHADOW_COMPARISON_FILENAME,
     V5_SHADOW_SUMMARY_FILENAME,
@@ -1378,7 +1386,11 @@ def run_model_for_active_branch(
         lag_mode="best_only",
         target_mask=target_mask,
     )
-    exploration_variables = _limited_model_exploration_variables(ranked, config.top_k)
+    exploration_variables = _limited_model_exploration_variables(
+        ranked,
+        config.top_k,
+        discovery_candidate_window=config.discovery_candidate_window,
+    )
     exploration_variables = [
         variable
         for variable in exploration_variables
@@ -1419,6 +1431,15 @@ def run_model_for_active_branch(
         model_discovered,
         ranked,
         top_k=config.top_k,
+        discovery_candidate_window=config.discovery_candidate_window,
+        max_discovery_candidates=config.max_discovery_candidates,
+    )
+    discovery_candidates = build_discovery_candidates(
+        model_discovered,
+        ranked,
+        top_k=config.top_k,
+        discovery_candidate_window=config.discovery_candidate_window,
+        max_discovery_candidates=config.max_discovery_candidates,
     )
     importance.to_csv(
         run_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig"
@@ -1428,6 +1449,11 @@ def run_model_for_active_branch(
     )
     model_discovered.to_csv(
         run_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig"
+    )
+    discovery_candidates.to_csv(
+        run_dir / DISCOVERY_CANDIDATES_FILENAME,
+        index=False,
+        encoding="utf-8-sig",
     )
     validation_summary = write_validation_summary(run_dir)
     _progress(progress_callback, "模型解释完成")
@@ -1439,6 +1465,7 @@ def run_model_for_active_branch(
         "shap_or_importance_path": run_dir / "shap_or_importance.csv",
         "model_variable_importance_path": run_dir / "model_variable_importance.csv",
         "model_discovered_candidates_path": run_dir / "model_discovered_candidates.csv",
+        "discovery_candidates_path": run_dir / DISCOVERY_CANDIDATES_FILENAME,
         "model_metrics": metrics,
         "validation_summary_path": run_dir / "validation_summary.csv",
         "validation_summary": validation_summary,
@@ -1448,20 +1475,16 @@ def run_model_for_active_branch(
 def _limited_model_exploration_variables(
     ranked_features: pd.DataFrame,
     top_k: int,
+    *,
+    discovery_candidate_window: int = MAX_DISCOVERY_CANDIDATE_WINDOW,
 ) -> list[str]:
-    """Return only the fixed Rank K+1 through K+10 omission window."""
-    if ranked_features.empty or "variable" not in ranked_features.columns:
-        return []
-    if "driver_rank" in ranked_features.columns:
-        ranks = pd.to_numeric(ranked_features["driver_rank"], errors="coerce")
-        window = ranked_features.loc[(ranks > top_k) & (ranks <= top_k + 10)]
-    else:
-        window = ranked_features.iloc[top_k : top_k + 10]
-    return [
-        str(variable)
-        for variable in window["variable"].tolist()
-        if pd.notna(variable) and str(variable).strip()
-    ]
+    """Return only the bounded Rank K+1 through K+window omission pool."""
+    pool = build_exploration_candidate_pool(
+        ranked_features,
+        top_k=top_k,
+        discovery_candidate_window=discovery_candidate_window,
+    )
+    return pool["variable"].astype(str).tolist()
 
 
 def _verification_review_variables(
@@ -1482,17 +1505,26 @@ def _limit_model_exploration_candidates(
     ranked_features: pd.DataFrame,
     *,
     top_k: int,
+    discovery_candidate_window: int = MAX_DISCOVERY_CANDIDATE_WINDOW,
+    max_discovery_candidates: int = MAX_DISCOVERY_CANDIDATES,
 ) -> pd.DataFrame:
-    """Keep at most five model signals, preserving the initial-screening order."""
+    """Keep only bounded model signals in initial-screening order."""
     if discovered.empty or "variable" not in discovered.columns:
         return discovered.copy(deep=True)
-    exploration_variables = _limited_model_exploration_variables(ranked_features, top_k)
+    limit = min(MAX_DISCOVERY_CANDIDATES, max(0, int(max_discovery_candidates)))
+    if limit == 0:
+        return discovered.iloc[0:0].copy().reset_index(drop=True)
+    exploration_variables = _limited_model_exploration_variables(
+        ranked_features,
+        top_k,
+        discovery_candidate_window=discovery_candidate_window,
+    )
     order = {variable: index for index, variable in enumerate(exploration_variables)}
     limited = discovered[discovered["variable"].astype(str).isin(order)].copy()
     if limited.empty:
         return limited
     limited["_initial_screening_order"] = limited["variable"].astype(str).map(order)
-    limited = limited.sort_values("_initial_screening_order", kind="mergesort").head(5)
+    limited = limited.sort_values("_initial_screening_order", kind="mergesort").head(limit)
     return limited.drop(columns="_initial_screening_order").reset_index(drop=True)
 
 

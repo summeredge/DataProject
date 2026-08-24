@@ -80,7 +80,9 @@ def test_v8_review_pool_is_independent_and_preserves_ranked_top_k(tmp_path: Path
 
 
 def test_v8_model_exploration_is_limited_to_rank_k_plus_one_through_k_plus_ten():
-    ranked = _ranked_features(count=60)
+    ranked = _ranked_features(count=100)
+    ranked_before = ranked.copy(deep=True)
+    final_scores_before = ranked["final_score"].tolist()
 
     exploration_candidates = _limited_model_exploration_variables(ranked, top_k=20)
     exploration_ranks = ranked.set_index("variable").loc[
@@ -92,11 +94,19 @@ def test_v8_model_exploration_is_limited_to_rank_k_plus_one_through_k_plus_ten()
     assert all(21 <= rank <= 30 for rank in exploration_ranks)
     assert set(exploration_candidates).isdisjoint(set(ranked.head(20)["variable"]))
     assert not any(rank > 30 for rank in exploration_ranks)
+    pd.testing.assert_frame_equal(ranked, ranked_before)
+    assert ranked["driver_rank"].tolist() == list(range(1, 101))
+    assert ranked["final_score"].tolist() == final_scores_before
 
 
-def test_v8_model_discovery_output_is_capped_and_cannot_create_a_second_ranking():
+def test_v8_model_discovery_output_is_capped_and_cannot_create_a_second_ranking(
+    tmp_path: Path,
+):
     ranked = _ranked_features(count=60)
     ranked_before = ranked.copy(deep=True)
+    review_pool_before = write_initial_verification_review_pool(
+        tmp_path, ranked, top_k=20
+    ).copy(deep=True)
     importance = pd.DataFrame(
         [
             {
@@ -108,6 +118,7 @@ def test_v8_model_discovery_output_is_capped_and_cannot_create_a_second_ranking(
             for rank in range(21, 36)
         ]
     )
+    assert len(importance["variable"].unique()) > 5
 
     discovered = build_model_discovered_candidates(
         importance,
@@ -125,6 +136,10 @@ def test_v8_model_discovery_output_is_capped_and_cannot_create_a_second_ranking(
         limited.columns
     )
     pd.testing.assert_frame_equal(ranked, ranked_before)
+    pd.testing.assert_frame_equal(read_verification_review_pool(tmp_path), review_pool_before)
+    assert set(read_verification_review_pool(tmp_path)["variable"]) == set(
+        ranked.head(20)["variable"]
+    )
 
 
 def test_v8_model_discovery_requires_manual_confirmation_before_pool_entry(

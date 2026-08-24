@@ -433,6 +433,22 @@
   `preprocessing_comparison.csv` / `model_discovered_candidates` /
   `final_score >= 0.30` / `abs(lag` / `abs(best_lag`。
 
+## 二级验证优化回归边界（Task-V1 ~ V7）
+
+- `verification_review_pool.csv` 必须固定四列，并且只承载二级验证来源：
+  `initial_screening`、`manual_include`、`model_discovery`；不得改造一级初筛候选池的
+  `candidate_source` 语义。
+- 初始复核池自动包含按 `final_score` 排序的 Top-K；配置中的 `force_include` 也只能作为显式
+  人工加入记录为 `manual_include`。模型发现必须同时存在于
+  `model_discovered_candidates.csv` 并经人工确认，绝不自动进入复核池、推荐或初筛。
+- Enhanced、普通 Granger、模型解释、统一验证摘要及复核池写入后，
+  `ranked_features.csv`、`recommended_candidates.csv`、`causal_review_candidates.csv`、
+  `final_score`、Top-K 和初筛推荐顺序必须保持不变。
+- 验证字段必须分别保存初筛、二级验证和条件验证的 signed lag；负 lag、零 lag 与缺失不得
+  通过绝对值或默认值合并。
+- 验证摘要必须区分 `not_run`、`not_computed`、缺失证据与真实 `0.0`，并且没有执行的
+  Enhanced、Granger 或模型解释不得被显示为支持结论。
+
 ## PR-12 XGBoost 正式 branch/context 与 fold preprocessing isolation 测试边界
 
 `tests/test_pr12_active_branch_xgb.py` 覆盖正式 XGB backend 入口

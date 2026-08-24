@@ -46,6 +46,19 @@ from chem_ts_corr.screening import CONTROL_REFERENCE_COLUMNS, order_initial_cand
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
+from chem_ts_corr.validation_summary import (
+    VALIDATION_SUMMARY_COLUMNS,
+    VALIDATION_SUMMARY_FILENAME,
+    VALIDATION_FIELDS_COLUMNS,
+    build_validation_fields_from_output_dir,
+    build_validation_summary_from_output_dir,
+)
+from chem_ts_corr.verification_review_pool import (
+    FILENAME as VERIFICATION_REVIEW_POOL_FILENAME,
+    add_to_verification_review_pool,
+    read_verification_review_pool,
+    write_initial_verification_review_pool,
+)
 
 
 def AnalysisConfig(
@@ -90,6 +103,8 @@ DOWNLOAD_FILES = {
     "final_review_summary.csv",
     "causal_review_evidence.csv",
     "enhanced_validation_summary.csv",
+    VERIFICATION_REVIEW_POOL_FILENAME,
+    VALIDATION_SUMMARY_FILENAME,
     "preprocessing_comparison.csv",
     "preprocessing_context.json",
     "llm_prompt.md",
@@ -250,6 +265,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/run_model":
                 self._send_json(_run_model_response(self))
+                return
+            if self.path == "/api/add_to_verification_review_pool":
+                self._send_json(_add_to_verification_review_pool_response(self))
                 return
             if self.path == "/api/run_enhanced_screening":
                 self._send_json(_run_enhanced_screening_response(self))
@@ -849,10 +867,12 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
+    validation = _validation_summary_for_payload(output_dir)
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
     model_discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
+    verification_review_pool = _verification_review_pool_for_payload(output_dir)
     near_miss = _safe_read_result_csv(output_dir / "near_miss_candidates.csv")
     summary = (output_dir / "summary.md").read_text(encoding="utf-8")
     risky = risk[risk.get("risk_count", 0) > 0] if not risk.empty else risk
@@ -902,10 +922,13 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "modelLiftScores": _records(lift.head(50)),
         "rollingCorrScores": _records(rolling.head(50)),
         "enhancedValidationSummary": _records(enhanced.head(200)),
+        "validationSummary": _records(validation.head(500)),
+        "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
+        "verificationReviewPool": _records(verification_review_pool),
         "nearMissCandidates": _records(near_miss.head(200)),
         "downloads": _download_links(run_id, output_dir),
     }
@@ -922,6 +945,39 @@ def _read_context_for_payload(output_dir: Path) -> dict[str, Any] | None:
     if not context_path.exists():
         return None
     return _read_preprocessing_context(output_dir)
+
+
+def _verification_review_pool_for_payload(output_dir: Path) -> pd.DataFrame:
+    pool = read_verification_review_pool(output_dir)
+    return pool if pool is not None else pd.DataFrame()
+
+
+def _validation_summary_for_payload(output_dir: Path) -> pd.DataFrame:
+    """Read the frozen summary or derive it from already-produced evidence.
+
+    Payload construction is read-only.  A missing summary is derived in
+    memory, while an existing malformed summary is ignored rather than
+    exposing fields outside the five-column contract.
+    """
+    path = output_dir / VALIDATION_SUMMARY_FILENAME
+    if path.exists():
+        stored = _safe_read_result_csv(path)
+        if set(VALIDATION_SUMMARY_COLUMNS).issubset(stored.columns):
+            return stored[VALIDATION_SUMMARY_COLUMNS]
+    return build_validation_summary_from_output_dir(output_dir)
+
+
+def _validation_fields_for_payload(output_dir: Path) -> pd.DataFrame:
+    """Build stage-specific lag/lift metadata for API consumers.
+
+    The V1 five-column ``validationSummary`` remains unchanged.  V3 fields are
+    exposed separately so they cannot be mistaken for a unified conclusion or
+    feed the initial-screening ranking.
+    """
+    fields = build_validation_fields_from_output_dir(output_dir)
+    if not set(VALIDATION_FIELDS_COLUMNS).issubset(fields.columns):
+        return pd.DataFrame(columns=VALIDATION_FIELDS_COLUMNS)
+    return fields[VALIDATION_FIELDS_COLUMNS]
 
 
 def _build_pending_payload(
@@ -1080,11 +1136,15 @@ def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[st
     lift = _safe_read_result_csv(output_dir / "model_lift_scores.csv")
     rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
+    validation = _validation_summary_for_payload(output_dir)
 
     result = {
         "modelLiftScores": _records(lift.head(200)),
         "rollingCorrScores": _records(rolling.head(200)),
         "enhancedValidationSummary": _records(enhanced.head(200)),
+        "validationSummary": _records(validation.head(500)),
+        "validationFields": _records(_validation_fields_for_payload(output_dir)),
+        "verificationReviewPool": _records(_verification_review_pool_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
         "message": "增强筛选完成：结果用于补充验证预测增益和时间稳定性，不代表因果结论。",
         **_branch_context_payload(output_dir),
@@ -1167,6 +1227,9 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     return {
         "grangerTests": _records(granger.head(200)),
+        "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
+        "validationFields": _records(_validation_fields_for_payload(output_dir)),
+        "verificationReviewPool": _records(_verification_review_pool_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
         "message": "Granger 二级验证完成。",
         **_branch_context_payload(output_dir),
@@ -1192,9 +1255,54 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
         "modelDiscoveredCandidates": _records(model_discovered.head(200)),
+        "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
+        "validationFields": _records(_validation_fields_for_payload(output_dir)),
+        "verificationReviewPool": _records(_verification_review_pool_for_payload(output_dir)),
         "modelMetrics": result.get("model_metrics") or {},
         "downloads": _download_links(run_id, output_dir),
         "message": "随机森林模型解释完成。",
+        **_branch_context_payload(output_dir),
+    }
+
+
+def _add_to_verification_review_pool_response(
+    handler: BaseHTTPRequestHandler,
+) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    run_id = _field(form, "run_id")
+    variable = _field(form, "variable")
+    candidate_source = _field(form, "candidate_source")
+    output_dir = _resolve_run_dir(run_id)
+    config = _read_run_config(output_dir)
+    ranked = _safe_read_result_csv(output_dir / "ranked_features.csv")
+    if ranked.empty:
+        raise ValueError("verification_review_pool_initial_screening_missing")
+    if read_verification_review_pool(output_dir) is None:
+        write_initial_verification_review_pool(
+            output_dir,
+            ranked,
+            top_k=config.top_k,
+            manual_include=config.force_include_variables,
+        )
+    if candidate_source == "model_discovery":
+        discovered = _safe_read_result_csv(output_dir / "model_discovered_candidates.csv")
+        discovered_variables = (
+            set(discovered["variable"].dropna().astype(str))
+            if "variable" in discovered.columns
+            else set()
+        )
+        if variable not in discovered_variables:
+            raise ValueError("verification_candidate_not_confirmed_model_discovery")
+    pool = add_to_verification_review_pool(
+        output_dir,
+        ranked,
+        variable=variable,
+        candidate_source=candidate_source,
+    )
+    return {
+        "verificationReviewPool": _records(pool),
+        "downloads": _download_links(run_id, output_dir),
+        "message": "已加入二级验证复核池。",
         **_branch_context_payload(output_dir),
     }
 
@@ -1299,6 +1407,8 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewReport": _records(report.head(500)),
         "finalReviewSummary": _records(final_summary.head(500)),
         "causalReviewEvidence": _records(evidence.head(500)),
+        "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
+        "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
         "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
         **_branch_context_payload(output_dir),
@@ -3553,27 +3663,58 @@ INDEX_HTML = r"""<!doctype html>
           <button id="runGranger" disabled>运行 Granger 验证</button>
           <button id="runModel" disabled>运行随机森林模型解释</button>
         </div>
-        <h2>增强筛选结果</h2>
-        <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
-        <h3>增强筛选摘要</h3>
-        <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
-        <div class="help">术语说明：模型提升表示加入该候选变量后，相对仅使用目标变量历史的自回归基准，时间外预测 RMSE 的改善；大于 0 表示误差下降。滚动稳定性表示固定最佳滞后后，在多个时间窗口中相关关系的稳定程度，综合相关强度、符号一致性和波动离散度，范围为 0 至 1；越高越稳定。</div>
-        <h3>模型提升评分</h3>
-        <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
-        <div class="help">术语说明：模型提升得分为分段提升中位数（以 5% 改善为满分并截断至 0 至 1）与正提升分段比例的乘积；越高表示提升越稳定。自回归基准 RMSE 是只使用目标变量自身历史值时，各时间外测试分段的平均预测误差。候选变量模型 RMSE 是在同一基准上加入该候选变量滞后值后的平均预测误差；在相同验证条件下，数值越低越好。</div>
-        <h3>滚动稳定性评分</h3>
-        <div id="enhancedRollingTable" class="empty">点击“运行增强筛选”后显示滚动稳定性评分。</div>
-        <div class="help">术语说明：滚动稳定性为固定最佳滞后后，按时间窗口计算相关性并综合相关强度、符号一致性和相关波动得到的 0 至 1 分数；越高表示该相关关系在不同时间段中越稳定，不代表因果结论。</div>
-        <h2>Granger 验证</h2>
-        <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
-        <h2>随机森林模型解释变量排序</h2>
-        <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
-        <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示变量排序。</div>
-        <h2>随机森林模型解释特征明细</h2>
-        <div id="importanceTable" class="empty">未启用随机森林模型解释。</div>
-        <h2>随机森林模型解释补充候选</h2>
-        <div class="help">该表用于发现随机森林模型解释中靠前、但主筛查前 N 个未优先覆盖的补充候选。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
-        <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示补充候选。</div>
+        <section id="validationSummarySection" aria-labelledby="validationSummaryTitle">
+          <h3 id="validationSummaryTitle">统一验证结论</h3>
+          <div class="help">默认展示每个变量的验证状态、证据一致性、主要支持证据和限制因素。这里仅汇总已执行的二级验证；未执行、未计算或失败的分析会明确标记，不会被当作支持证据。</div>
+          <div id="validationSummaryTable" class="empty">完成主筛查后显示统一验证结论。</div>
+          <h3>阶段字段</h3>
+          <div class="help">阶段字段仅用于区分初筛、普通验证和条件验证的 signed lag 与模型提升；缺失值保持缺失，不参与评分或排序。</div>
+          <div id="validationFieldsTable" class="empty">完成主筛查后显示阶段字段。</div>
+        </section>
+
+        <details id="enhancedValidationDetails" class="validation-detail-section">
+          <summary>Enhanced Validation 详细结果</summary>
+          <div class="help">增强筛选用于补充验证主筛查候选的预测增益和时间稳定性，不代表因果结论。</div>
+          <h3>增强筛选摘要</h3>
+          <div id="enhancedSummaryTable" class="empty">点击“运行增强筛选”后显示增强筛选摘要。</div>
+          <div class="help">术语说明：模型提升表示加入该候选变量后，相对仅使用目标变量历史的自回归基准，时间外预测 RMSE 的改善；大于 0 表示误差下降。滚动稳定性表示固定最佳滞后后，在多个时间窗口中相关关系的稳定程度，综合相关强度、符号一致性和波动离散度，范围为 0 至 1；越高越稳定。</div>
+          <h3>模型提升评分</h3>
+          <div id="enhancedLiftTable" class="empty">点击“运行增强筛选”后显示模型提升评分。</div>
+          <div class="help">术语说明：模型提升得分为分段提升中位数（以 5% 改善为满分并截断至 0 至 1）与正提升分段比例的乘积；越高表示提升越稳定。自回归基准 RMSE 是只使用目标变量自身历史值时，各时间外测试分段的平均预测误差。候选变量模型 RMSE 是在同一基准上加入该候选变量滞后值后的平均预测误差；在相同验证条件下，数值越低越好。</div>
+          <h3>滚动稳定性评分</h3>
+          <div id="enhancedRollingTable" class="empty">点击“运行增强筛选”后显示滚动稳定性评分。</div>
+          <div class="help">术语说明：滚动稳定性为固定最佳滞后后，按时间窗口计算相关性并综合相关强度、符号一致性和相关波动得到的 0 至 1 分数；越高表示该相关关系在不同时间段中越稳定，不代表因果结论。</div>
+        </details>
+
+        <details id="grangerValidationDetails" class="validation-detail-section">
+          <summary>Granger 详细结果</summary>
+          <div class="help">Granger 显著表示历史预测信息，不等于因果成立。</div>
+          <div id="grangerTable" class="empty">未启用 Granger 检验。</div>
+        </details>
+
+        <details id="modelExplanationDetails" class="validation-detail-section">
+          <summary>Model Explanation 详细结果</summary>
+          <div class="help">随机森林重要性表示模型依赖，不等于可操作性或因果结论。</div>
+          <h3>随机森林模型解释变量排序</h3>
+          <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
+          <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示变量排序。</div>
+          <h3>随机森林模型解释特征明细</h3>
+          <div id="importanceTable" class="empty">未启用随机森林模型解释。</div>
+          <h3>随机森林模型遗漏探索</h3>
+          <div class="help">该表仅检查初筛 Rank K+1~K+10 中的遗漏线索，最多显示 5 个并保持初筛顺序；不属于二级验证结论，不会自动加入推荐、候选池或任何排序。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
+          <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示遗漏探索线索。</div>
+        </details>
+        <section id="verificationReviewPoolSection" aria-labelledby="verificationReviewPoolTitle">
+          <h3 id="verificationReviewPoolTitle">二级验证复核池</h3>
+          <div class="help">复核池独立于一级初筛候选池。初筛 Top-K 自动进入；人工加入和模型遗漏探索变量只有点击“加入复核池”后，才会进入后续 Enhanced、Granger 和 Model Explanation。</div>
+          <div class="actions">
+            <label>人工加入变量<input id="manualReviewPoolVariable" placeholder="输入初筛变量名"></label>
+            <button id="addManualReviewPool" disabled>加入复核池</button>
+            <label>确认模型遗漏探索变量<select id="modelDiscoveryReviewPoolVariable"><option value="">请选择模型探索变量</option></select></label>
+            <button id="addModelDiscoveryReviewPool" disabled>加入复核池</button>
+          </div>
+          <div id="verificationReviewPoolTable" class="empty">完成主筛查后显示二级验证复核池。</div>
+        </section>
       </div>
 
       <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
@@ -3724,6 +3865,9 @@ let lastModelDiscoveredRows = [];
 let lastEnhancedSummaryRows = [];
 let lastEnhancedLiftRows = [];
 let lastEnhancedRollingRows = [];
+let lastValidationSummaryRows = [];
+let lastValidationFieldsRows = [];
+let lastVerificationReviewPoolRows = [];
 let lastConditionalRows = [];
 let lastCausalEvidenceRows = [];
 let lastFinalReviewSummaryRows = [];
@@ -3776,6 +3920,8 @@ el("confirmProcessedBranch").addEventListener("click", () => confirmInitialScree
 el("runEnhancedScreening").addEventListener("click", runEnhancedScreening);
 el("runGranger").addEventListener("click", runGranger);
 el("runModel").addEventListener("click", runModel);
+el("addManualReviewPool").addEventListener("click", () => addToVerificationReviewPool("manual_include"));
+el("addModelDiscoveryReviewPool").addEventListener("click", () => addToVerificationReviewPool("model_discovery"));
 el("runCausalReview").addEventListener("click", runCausalReview);
 el("runXgbValidation").addEventListener("click", runXgbValidation);
 el("enableXgbValidation").addEventListener("change", updateXgbRunAvailability);
@@ -4177,13 +4323,16 @@ function renderAnalysisResult(data) {
   lastRecommendedRows = data.recommendedCandidates || [];
   lastGrangerRows = data.grangerTests || [];
   lastImportanceRows = data.importance || [];
-  lastModelVariableRows = [];
+  lastModelVariableRows = data.modelVariableImportance || [];
   lastNearMissRows = data.nearMissCandidates || [];
-  lastModelDiscoveredRows = [];
+  lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
   lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
   const hasEnhancedScreening = lastEnhancedSummaryRows.length > 0;
   lastEnhancedLiftRows = hasEnhancedScreening ? (data.modelLiftScores || []) : [];
   lastEnhancedRollingRows = hasEnhancedScreening ? (data.rollingCorrScores || []) : [];
+  lastValidationSummaryRows = data.validationSummary || [];
+  lastValidationFieldsRows = data.validationFields || [];
+  lastVerificationReviewPoolRows = data.verificationReviewPool || [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
@@ -4193,6 +4342,9 @@ function renderAnalysisResult(data) {
   closeDetailModal();
   renderOverview(data.overview || {});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
+  renderValidationSummaryTable(lastValidationSummaryRows);
+  renderValidationFieldsTable(lastValidationFieldsRows);
+  renderVerificationReviewPool(lastVerificationReviewPoolRows);
   renderScreeningQualityHints(lastRows);
   delete tableSortStates["table"];
   renderTable(lastRows);
@@ -4209,6 +4361,7 @@ function renderAnalysisResult(data) {
   renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
   renderGenericTable("importanceTable", lastImportanceRows);
   renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
+  syncModelDiscoveryReviewPoolOptions(lastModelDiscoveredRows);
   renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
   renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
   renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
@@ -4224,6 +4377,8 @@ function renderAnalysisResult(data) {
   el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
+  el("addManualReviewPool").disabled = !currentRunId;
+  el("addModelDiscoveryReviewPool").disabled = !currentRunId;
   el("runCausalReview").disabled = !currentRunId;
   updateBranchSelectionUi(data);
   setDownstreamGate(false);
@@ -4242,6 +4397,9 @@ function renderPendingBranchResult(data) {
   lastEnhancedSummaryRows = [];
   lastEnhancedLiftRows = [];
   lastEnhancedRollingRows = [];
+  lastValidationSummaryRows = [];
+  lastValidationFieldsRows = [];
+  lastVerificationReviewPoolRows = [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
@@ -4251,10 +4409,15 @@ function renderPendingBranchResult(data) {
   closeDetailModal();
   renderOverview({});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
+  renderValidationSummaryTable(lastValidationSummaryRows);
+  renderValidationFieldsTable(lastValidationFieldsRows);
+  renderVerificationReviewPool(lastVerificationReviewPoolRows);
   renderGenericTable("preprocessingComparisonTable", data.preprocessingComparison || [], preprocessingComparisonColumns());
   renderDownloads(data.downloads || []);
   updateBranchSelectionUi(data);
   setDownstreamGate(true);
+  el("addManualReviewPool").disabled = true;
+  el("addModelDiscoveryReviewPool").disabled = true;
   el("generateLlmReport").disabled = true;
   updateXgbRunAvailability();
 }
@@ -4384,6 +4547,11 @@ async function runEnhancedScreening() {
     lastEnhancedSummaryRows = data.enhancedValidationSummary || [];
     lastEnhancedLiftRows = data.modelLiftScores || [];
     lastEnhancedRollingRows = data.rollingCorrScores || [];
+    lastValidationSummaryRows = data.validationSummary || lastValidationSummaryRows;
+    lastValidationFieldsRows = data.validationFields || lastValidationFieldsRows;
+  lastVerificationReviewPoolRows = data.verificationReviewPool || lastVerificationReviewPoolRows;
+    renderValidationSummaryTable(lastValidationSummaryRows);
+    renderValidationFieldsTable(lastValidationFieldsRows);
     renderGenericTable("enhancedSummaryTable", lastEnhancedSummaryRows, enhancedSummaryColumns());
     renderGenericTable("enhancedLiftTable", lastEnhancedLiftRows, modelLiftColumns());
     renderGenericTable("enhancedRollingTable", lastEnhancedRollingRows, rollingCorrColumns());
@@ -4408,6 +4576,11 @@ async function runGranger() {
     form.append("run_id", currentRunId);
     const data = await postForm("/api/run_granger", form);
     lastGrangerRows = data.grangerTests || [];
+    lastValidationSummaryRows = data.validationSummary || lastValidationSummaryRows;
+    lastValidationFieldsRows = data.validationFields || lastValidationFieldsRows;
+  lastVerificationReviewPoolRows = data.verificationReviewPool || lastVerificationReviewPoolRows;
+    renderValidationSummaryTable(lastValidationSummaryRows);
+    renderValidationFieldsTable(lastValidationFieldsRows);
     renderGenericTable("grangerTable", lastGrangerRows);
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
@@ -4433,9 +4606,15 @@ async function runModel() {
     lastImportanceRows = data.importance || [];
     lastModelVariableRows = data.modelVariableImportance || [];
     lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];
+    lastValidationSummaryRows = data.validationSummary || lastValidationSummaryRows;
+    lastValidationFieldsRows = data.validationFields || lastValidationFieldsRows;
+  lastVerificationReviewPoolRows = data.verificationReviewPool || lastVerificationReviewPoolRows;
+    renderValidationSummaryTable(lastValidationSummaryRows);
+    renderValidationFieldsTable(lastValidationFieldsRows);
     renderGenericTable("modelVariableImportanceTable", lastModelVariableRows, modelVariableImportanceColumns());
     renderGenericTable("importanceTable", lastImportanceRows);
     renderGenericTable("modelDiscoveredTable", lastModelDiscoveredRows, modelDiscoveredColumns());
+    syncModelDiscoveryReviewPoolOptions(lastModelDiscoveredRows);
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
     const metrics = data.modelMetrics ? Object.entries(data.modelMetrics).map(([k, v]) => `${k}: ${v}`).join("    ") : "";
@@ -4471,8 +4650,13 @@ async function runCausalReview() {
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalEvidenceRows = data.causalReviewEvidence || [];
     lastFinalReviewSummaryRows = data.finalReviewSummary || [];
+    lastValidationSummaryRows = data.validationSummary || lastValidationSummaryRows;
+    lastValidationFieldsRows = data.validationFields || lastValidationFieldsRows;
+  lastVerificationReviewPoolRows = data.verificationReviewPool || lastVerificationReviewPoolRows;
     tableSortStates["finalReviewSummaryTable"] = { column: "final_rank", direction: "asc" };
     renderGenericTable("conditionalGrangerTable", lastConditionalRows, conditionalGrangerColumns());
+    renderValidationSummaryTable(lastValidationSummaryRows);
+    renderValidationFieldsTable(lastValidationFieldsRows);
     renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
     renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
@@ -5977,7 +6161,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop";
+  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
@@ -6607,11 +6791,14 @@ function renderAnalysisTimingBreakdown(timings) {
 const GENERIC_TABLE_CORE_COLUMNS = {
   overviewTop: ["variable", "final_score", "lag", "direction", "variable_role", "pearson", "spearman", "method", "correlation_direction", "lag_quality", "data_quality_score", "risk_flags", "risk_level", "recommended_use"],
   nearMissTable: ["variable", "near_miss_score", "lag", "direction", "risk_flags", "recommended_use"],
+  validationSummaryTable: ["variable", "validation_status", "evidence_consistency", "supporting_methods", "limiting_factors"],
   grangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "interpretation"],
   modelVariableImportanceTable: ["variable", "max_importance", "importance_rank", "best_model_feature", "best_model_lag", "recommended_use"],
   importanceTable: ["variable", "importance", "importance_rank", "feature", "lag", "method"],
-  modelDiscoveredTable: ["variable", "max_importance", "importance_rank", "best_model_lag", "recommended_use", "discovery_reason"],
+  modelDiscoveredTable: ["variable", "max_importance", "importance_rank", "best_model_lag", "missing_from_screening_top_n", "discovery_reason"],
   enhancedSummaryTable: ["variable", "final_score", "lag", "direction", "status", "model_lift", "rolling_stability"],
+  validationFieldsTable: ["variable", "initial_screening_lag", "validation_lag", "conditional_validation_lag", "screening_model_lift", "validation_model_lift"],
+  verificationReviewPoolTable: ["variable", "candidate_source", "source_rank", "include_reason"],
   enhancedLiftTable: ["variable", "status", "model_lift_score", "median_fold_lift", "positive_fold_ratio", "model_lift", "ar_baseline_rmse", "candidate_rmse"],
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
   conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
@@ -6641,6 +6828,67 @@ function renderGenericTable(targetId, rows, preferredColumns = null) {
     emptyText: missingText(targetId),
     modalTitle: (row) => `变量详情：${displayCellValue("variable", row.variable)}`,
   });
+}
+
+function validationSummaryColumns() {
+  return ["variable", "validation_status", "evidence_consistency", "supporting_methods", "limiting_factors"];
+}
+
+function renderValidationSummaryTable(rows) {
+  renderGenericTable("validationSummaryTable", rows || [], validationSummaryColumns());
+}
+
+function validationFieldsColumns() {
+  return ["variable", "initial_screening_lag", "validation_lag", "conditional_validation_lag", "screening_model_lift", "validation_model_lift"];
+}
+
+function renderValidationFieldsTable(rows) {
+  renderGenericTable("validationFieldsTable", rows || [], validationFieldsColumns());
+}
+
+function renderVerificationReviewPool(rows) {
+  renderGenericTable("verificationReviewPoolTable", rows || []);
+}
+
+function syncModelDiscoveryReviewPoolOptions(rows) {
+  const select = el("modelDiscoveryReviewPoolVariable");
+  if (!select) return;
+  const current = select.value;
+  const poolVariables = new Set((lastVerificationReviewPoolRows || []).map((row) => String(row.variable || "")));
+  const options = (rows || [])
+    .map((row) => String(row.variable || ""))
+    .filter((variable) => variable && !poolVariables.has(variable));
+  select.innerHTML = '<option value="">请选择模型探索变量</option>' + options
+    .map((variable) => `<option value="${escapeHtml(variable)}">${escapeHtml(variable)}</option>`)
+    .join("");
+  if (options.includes(current)) select.value = current;
+}
+
+async function addToVerificationReviewPool(candidateSource) {
+  if (!currentRunId) return setStatus("请先完成主筛查。");
+  const isModelDiscovery = candidateSource === "model_discovery";
+  const variable = (isModelDiscovery
+    ? el("modelDiscoveryReviewPoolVariable").value
+    : el("manualReviewPoolVariable").value.trim());
+  if (!variable) {
+    return setStatus(isModelDiscovery ? "请选择模型遗漏探索变量。" : "请输入要人工加入的初筛变量。", "error");
+  }
+  const startedAt = performance.now();
+  try {
+    const form = new FormData();
+    form.append("run_id", currentRunId);
+    form.append("variable", variable);
+    form.append("candidate_source", candidateSource);
+    const data = await postForm("/api/add_to_verification_review_pool", form);
+    lastVerificationReviewPoolRows = data.verificationReviewPool || [];
+    renderVerificationReviewPool(lastVerificationReviewPoolRows);
+    syncModelDiscoveryReviewPoolOptions(lastModelDiscoveredRows);
+    if (!isModelDiscovery) el("manualReviewPoolVariable").value = "";
+    renderDownloads(data.downloads || []);
+    setStatus(appendElapsed(data.message || "已加入二级验证复核池。", startedAt), "success");
+  } catch (error) {
+    setStatus(appendElapsed(error.message || String(error), startedAt), "error");
+  }
 }
 
 function includesFlag(row, flag) {
@@ -6933,7 +7181,54 @@ function evidenceText(items, emptyText = "-") {
   return parts.length ? parts.join("；") : emptyText;
 }
 
+function validationSummaryStateLabel(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  const labels = {
+    not_run: "未执行",
+    variable_missing: "变量缺失",
+    zero_evidence: "零支持证据",
+    computed_no_support: "已计算但未形成支持",
+    missing: "证据缺失",
+    not_computed: "不可计算",
+    skipped: "已跳过",
+    failed: "执行失败",
+    support: "支持",
+  };
+  if (labels[text]) return labels[text];
+  if (text.startsWith("failed")) return "执行失败";
+  if (text.startsWith("skipped")) return "已跳过";
+  if (text.startsWith("not_computed") || text.startsWith("unavailable")) return "不可计算";
+  return text ? "状态未知" : "";
+}
+
+function validationSummarySupportingMethods(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "无支持证据";
+  const labels = {enhanced_screening: "增强筛选", granger: "Granger", model_explanation: "模型解释"};
+  const methods = raw
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => labels[item] || "其他验证");
+  return methods.length ? methods.join("、") : "无支持证据";
+}
+
 function displayCellValue(column, value) {
+  if (column === "supporting_methods") {
+    return validationSummarySupportingMethods(value);
+  }
+  if (column === "limiting_factors") {
+    const methodLabels = {enhanced_screening: "增强筛选", granger: "Granger", model_explanation: "模型解释"};
+    return String(value ?? "")
+      .split(/[;,]/)
+      .map((item) => {
+        const [method, state] = item.trim().split(":", 2);
+        if (!state) return item.trim() ? "状态未知" : "";
+        return `${methodLabels[method] || "验证方法"}：${validationSummaryStateLabel(state)}`;
+      })
+      .filter(Boolean)
+      .join("；");
+  }
   if (column === "control_reference_type") {
     const labels = {residual_control: "去负荷控制参考", capacity_reference: "负荷参考", segment_reference: "工况分段参考", pid_setpoint: "PID设定值参考", pid_output: "PID输出参考"};
     return labels[value] || value;
@@ -6943,7 +7238,7 @@ function displayCellValue(column, value) {
     return labels[value] || value;
   }
   if (column === "candidate_source") {
-    const labels = {raw_only: "全量数据", residual_only: "去负荷数据", raw_and_residual: "全量数据和去负荷数据", force_included: "人工强制包含", control_reference: "控制/负荷参考"};
+    const labels = {raw_only: "全量数据", residual_only: "去负荷数据", raw_and_residual: "全量数据和去负荷数据", force_included: "人工强制包含", control_reference: "控制/负荷参考", initial_screening: "初筛 Top-K", manual_include: "人工加入", model_discovery: "模型发现确认"};
     return labels[value] || value;
   }
   if (column === "residual_evidence_status") {
@@ -6996,13 +7291,15 @@ function setSelectValueIfExists(selectId, value) {
 }
 
 function missingText(targetId) {
+  if (targetId === "validationSummaryTable") return "完成主筛查后显示统一验证结论。";
+  if (targetId === "validationFieldsTable") return "完成主筛查后显示阶段字段。";
   if (targetId === "grangerTable") return "未启用 Granger 检验，或没有可展示结果。";
   if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
   if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
   if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
   if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
-  if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示补充候选。";
+  if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示遗漏探索线索。";
   if (targetId === "nearMissTable") return "暂无轻量遗漏候选。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
@@ -7022,7 +7319,7 @@ function modelVariableImportanceColumns() {
 }
 
 function modelDiscoveredColumns() {
-  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "recommended_use", "recommended_action", "discovery_reason", "interpretation"];
+  return ["variable", "best_model_feature", "best_model_lag", "max_importance", "importance_rank", "model_feature_count", "nearby_lag_count", "ranked_feature_rank", "ranked_final_score", "missing_from_screening_top_n", "risk_flags", "discovery_reason", "interpretation"];
 }
 
 function enhancedSummaryColumns() {
@@ -7368,7 +7665,7 @@ function compareValues(a, b) {
 }
 
 const STATUS_COLUMNS = new Set([
-  "status", "validation_status", "innovation_status", "conditional_status",
+  "status", "validation_status", "evidence_consistency", "innovation_status", "conditional_status",
   "conditional_granger_status", "residual_status", "residual_evidence_status",
   "load_adjusted_relation_status", "evidence_level", "risk_level", "data_quality_status",
   "rolling_status", "stability_status", "recommended_use", "final_decision",
@@ -7381,8 +7678,8 @@ function statusTone(column, value) {
   if (!text) return "neutral";
   if (["risk_level", "risk_constraint_level", "statistical_limit_level"].includes(column) && /high|strong|risk/.test(text)) return "negative";
   if (/failed|error|not_recommended|not_supported|poor|conflict|insufficient|target_leads|negative/.test(text)) return "negative";
-  if (/risk|warning|limited|manual|secondary|weak|not_run|not_computed|skipped|unknown/.test(text)) return "caution";
-  if (/success|supported|strong|ok|normal|priority|candidate|positive/.test(text)) return "positive";
+  if (/risk|warning|limited|manual|secondary|weak|partial|not_run|not_computed|skipped|unknown/.test(text)) return "caution";
+  if (/success|supported|strong|consistent|ok|normal|priority|candidate|positive/.test(text)) return "positive";
   return "neutral";
 }
 
@@ -7398,7 +7695,7 @@ function tableCellClass(column, value) {
   const number = typeof value === "number" ? value : Number(value);
   const numericColumn = /(?:^|_)(score|lag|rmse|p_value|q_value|rank|count|n_rows|condition_number|importance|contribution)(?:$|_)/i.test(name);
   if (Number.isFinite(number) || numericColumn) return "numeric";
-  const wrapColumn = /interpretation|reason|action|risk_flags|control_columns|evidence_reason|statistical_limit_reason|key_reason|suggested_next_action|lag_boundary_hint/i.test(name);
+  const wrapColumn = /interpretation|reason|action|risk_flags|control_columns|evidence_reason|statistical_limit_reason|key_reason|suggested_next_action|lag_boundary_hint|supporting_methods|limiting_factors/i.test(name);
   return wrapColumn ? "wrap-cell" : "";
 }
 
@@ -7443,6 +7740,11 @@ function formatValue(value) {
       not_supported: "不支持",
       conflicting: "存在冲突",
       not_run: "未运行",
+      partial: "部分一致",
+      consistent: "一致",
+      limited: "有限支持",
+      enhanced_screening: "增强筛选",
+      model_explanation: "模型解释",
       high_collinearity_risk: "高共线性风险",
       formula_leakage_risk: "公式泄漏风险",
       no_positive_lag: "无正向滞后",
@@ -7559,6 +7861,7 @@ function formatValue(value) {
     if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
     if (value.startsWith("predictive validation only; not a causal conclusion")) return "仅作预测验证；不是因果结论；解析式 p/q 值不能完全消除工业时序自相关影响";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
+    if (value === "model discovery exploration only; not a validation conclusion or causal conclusion") return "仅作模型遗漏探索；不是验证结论或因果结论";
     if (value === "screening near-miss only; not a causal conclusion") return "仅作轻量遗漏筛查；不是因果结论";
     if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";
     return value
@@ -7588,6 +7891,8 @@ function columnLabel(column) {
     variable: "变量",
     driver_rank: "初筛排名",
     candidate_source: "候选来源",
+    source_rank: "初筛排名",
+    include_reason: "加入原因",
     candidate_priority_rank: "候选优先级",
     candidate_priority_score: "候选综合优先分",
     residual_signal_score: "去负荷后独立关联强度",
@@ -7719,6 +8024,14 @@ function columnLabel(column) {
     median_mae_improvement_pct: "MAE改善中位数(%)",
     positive_rmse_fold_ratio: "RMSE改善折占比",
     validation_status: "验证状态",
+    evidence_consistency: "证据一致性",
+    supporting_methods: "主要支持证据",
+    limiting_factors: "限制因素",
+    initial_screening_lag: "初筛滞后（signed）",
+    validation_lag: "验证滞后（signed）",
+    conditional_validation_lag: "条件验证滞后（signed）",
+    screening_model_lift: "初筛模型提升",
+    validation_model_lift: "验证模型提升",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
     review_priority: "复核优先级",
@@ -7823,6 +8136,7 @@ function reset() {
   lastEnhancedSummaryRows = [];
   lastEnhancedLiftRows = [];
   lastEnhancedRollingRows = [];
+  lastVerificationReviewPoolRows = [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
   lastFinalReviewSummaryRows = [];
@@ -7924,7 +8238,13 @@ function reset() {
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";
-  el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示补充候选。";
+  el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示遗漏探索线索。";
+  el("verificationReviewPoolTable").className = "empty";
+  el("verificationReviewPoolTable").textContent = "完成主筛查后显示二级验证复核池。";
+  el("manualReviewPoolVariable").value = "";
+  el("modelDiscoveryReviewPoolVariable").innerHTML = '<option value="">请选择模型探索变量</option>';
+  el("addManualReviewPool").disabled = true;
+  el("addModelDiscoveryReviewPool").disabled = true;
   el("enhancedSummaryTable").className = "empty";
   el("enhancedSummaryTable").textContent = "点击“运行增强筛选”后显示增强筛选摘要。";
   el("enhancedLiftTable").className = "empty";

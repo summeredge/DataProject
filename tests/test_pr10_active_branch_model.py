@@ -22,6 +22,7 @@ MODEL_OUTPUT_FILES = [
     "shap_or_importance.csv",
     "model_variable_importance.csv",
     "model_discovered_candidates.csv",
+    "validation_summary.csv",
 ]
 FORMAL_ROOT_FILES = [
     "ranked_features.csv",
@@ -248,18 +249,19 @@ def _patch_model_core(monkeypatch, importance: pd.DataFrame | None = None):
         lag_mode,
         target_mask,
     ):
-        captured.update(
-            {
-                "target": target,
-                "max_lag": max_lag,
-                "candidate_variables": list(candidate_variables),
-                "max_features": max_features,
-                "random_state": random_state,
-                "best_lags": dict(best_lags or {}),
-                "lag_mode": lag_mode,
-                "target_mask": target_mask,
-            }
-        )
+        call = {
+            "target": target,
+            "max_lag": max_lag,
+            "candidate_variables": list(candidate_variables),
+            "max_features": max_features,
+            "random_state": random_state,
+            "best_lags": dict(best_lags or {}),
+            "lag_mode": lag_mode,
+            "target_mask": target_mask,
+        }
+        captured.setdefault("calls", []).append(call)
+        if len(captured["calls"]) == 1:
+            captured.update(call)
         return (
             importance.copy(deep=True),
             {"model_status": "ok", "r2_holdout": 0.5},
@@ -562,10 +564,10 @@ def test_model_recomputes_all_causal_lags_without_ranked_lag_helper(
     assert set(captured["best_lags"].values()) == {-config.max_lag}
 
 
-# --- Test 10: exactly the three model outputs are generated ---------------
+# --- Test 10: model outputs and the unified validation summary are generated -
 
 
-def test_model_generates_three_outputs_only(tmp_path, monkeypatch):
+def test_model_generates_model_outputs_and_validation_summary(tmp_path, monkeypatch):
     config = _make_raw_run(tmp_path)
     before = {path.name for path in tmp_path.glob("*.csv")}
 
@@ -703,6 +705,63 @@ def test_model_discovery_does_not_enter_screening(tmp_path, monkeypatch):
         assert sentinel not in frame["variable"].astype(str).tolist(), name
 
 
+def test_model_discovery_explores_only_rank_k_plus_one_to_k_plus_ten(tmp_path, monkeypatch):
+    from chem_ts_corr import modeling
+
+    config = _config(tmp_path, top_k=5)
+    _write_formal_root(tmp_path, _ranked_frame())
+    _write_context(tmp_path)
+    _spy_scaled_config(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_fit(
+        frame,
+        target,
+        max_lag,
+        candidate_variables,
+        max_features,
+        random_state,
+        best_lags,
+        lag_mode,
+        target_mask,
+    ):
+        candidates = list(candidate_variables)
+        calls.append(candidates)
+        rows = [
+            {
+                "feature": f"{variable}__lag_1",
+                "importance": float(len(candidates) - index),
+                "method": "random_forest_feature_importance",
+                "variable": variable,
+                "lag": 1.0,
+            }
+            for index, variable in enumerate(candidates)
+        ]
+        return pd.DataFrame(rows), {"model_status": "ok"}
+
+    monkeypatch.setattr(modeling, "fit_explainable_model", fake_fit)
+    screening_before = {
+        name: (tmp_path / name).read_bytes() for name in FORMAL_ROOT_FILES
+    }
+
+    run_model_for_active_branch(tmp_path, base_config=config)
+
+    assert calls == [
+        [f"variable_{index}" for index in range(5)],
+        [f"variable_{index}" for index in range(5, 15)],
+    ]
+    discovered = pd.read_csv(
+        tmp_path / "model_discovered_candidates.csv", encoding="utf-8-sig"
+    )
+    assert discovered["variable"].tolist() == [
+        f"variable_{index}" for index in range(5, 10)
+    ]
+    assert discovered["ranked_feature_rank"].tolist() == [6, 7, 8, 9, 10]
+    assert len(discovered) == 5
+    for name, content in screening_before.items():
+        assert (tmp_path / name).read_bytes() == content
+
+
 # --- Test 13: risk information comes from the formal root -----------------
 
 
@@ -723,7 +782,20 @@ def test_model_risk_comes_from_formal_root(tmp_path, monkeypatch):
     )
 
     _spy_scaled_config(monkeypatch, tmp_path)
-    _patch_model_core(monkeypatch, importance=_sample_importance(tmp_path, limit=1))
+    _patch_model_core(
+        monkeypatch,
+        importance=pd.DataFrame(
+            [
+                {
+                    "feature": "variable_15__lag_1",
+                    "importance": 0.1,
+                    "method": "random_forest_feature_importance",
+                    "variable": "variable_15",
+                    "lag": 1.0,
+                }
+            ]
+        ),
+    )
     run_model_for_active_branch(tmp_path, base_config=config)
 
     var_importance = pd.read_csv(

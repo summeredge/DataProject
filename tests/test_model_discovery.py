@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.model_discovery import (
+    DISCOVERY_INTERPRETATION,
     OUT_COLS,
     VARIABLE_IMPORTANCE_COLS,
     build_model_discovered_candidates,
@@ -36,6 +37,7 @@ def test_model_discovery_flags_model_only_signal_outside_screening_top_n():
 
     assert bool(row["missing_from_screening_top_n"])
     assert "model_only_signal" in row["discovery_reason"]
+    assert row["interpretation"] == DISCOVERY_INTERPRETATION
 
 
 def test_model_discovery_counts_multiple_lag_features():

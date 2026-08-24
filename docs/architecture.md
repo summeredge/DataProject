@@ -2,7 +2,8 @@
 
 ## 分析流程
 
-数据输入 → 数据预处理 → 第一阶段：主筛查 → 候选池 → 第二阶段：增强验证 →
+数据输入 → 数据预处理 → 第一阶段：主筛查 → 一级初筛候选池 →
+二级验证复核池 → Enhanced / Granger / Model Explanation →
 第三阶段：综合复核 → 第四阶段：时间外预测验证
 
 ## 阶段边界
@@ -26,6 +27,21 @@
 -   模型结果 → 初筛评分
 -   综合复核 → 覆盖初筛结果
 -   未执行分析 → 展示分析结论
+
+## 二级验证复核池
+
+一级初筛候选池仍由 `final_score` 排序和 Top-K 决定。它的 CSV、字段语义、
+候选来源与推荐顺序不因后续分析改变。
+
+`verification_review_pool.csv` 是独立的二级验证输入层。初筛 Top-K 以
+`initial_screening` 进入；已有初筛变量可经人工以 `manual_include` 加入；模型发现
+变量只能在用户点击“加入复核池”后以 `model_discovery` 加入。模型发现本身只是有限遗漏
+探索（Rank K+1 ~ K+10，最多展示 5 项），不会自动提权。
+
+Enhanced、普通 Granger 和 Model Explanation 从复核池读取变量，并且仍只读取正式 root
+的初筛输入和冻结的 preprocessing context。复核池不回写 `ranked_features.csv`、
+`recommended_candidates.csv`、`final_score`、Top-K 或一级候选池；三级复核的既有候选
+契约保持不变。
 
 ## 排除窗口（PR-TR1 / PR-TR2 / PR-TR3）
 

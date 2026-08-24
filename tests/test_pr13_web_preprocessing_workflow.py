@@ -13,6 +13,7 @@ from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.pipeline import (
     begin_downstream_stage,
     confirm_initial_screening_branch,
+    run_analysis,
     run_initial_screening_workflow,
 )
 
@@ -94,6 +95,53 @@ def _read_context(run_dir: Path) -> dict[str, object]:
     return json.loads(
         (Path(run_dir) / "preprocessing_context.json").read_text(encoding="utf-8")
     )
+
+
+def _write_stale_validation_evidence(output_dir: Path) -> None:
+    pd.DataFrame(
+        [{
+            "variable": "candidate_0",
+            "status": "ok",
+            "predictive_contribution": 0.9,
+        }]
+    ).to_csv(output_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame(
+        [{
+            "variable": "stale_conditional",
+            "status": "ok",
+            "best_lag": 7,
+        }]
+    ).to_csv(
+        output_dir / "conditional_granger_scores.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    for name in [
+        "enhanced_validation_summary.csv",
+        "model_lift_scores.csv",
+        "rolling_corr_scores.csv",
+        "model_variable_importance.csv",
+        "shap_or_importance.csv",
+        "model_discovered_candidates.csv",
+    ]:
+        pd.DataFrame(
+            [{
+                "variable": "candidate_0",
+                "status": "ok",
+                "model_lift": 0.2,
+                "rolling_stability": 0.8,
+                "max_importance": 0.7,
+            }]
+        ).to_csv(output_dir / name, index=False, encoding="utf-8-sig")
+    pd.DataFrame(
+        [{
+            "variable": "candidate_0",
+            "validation_status": "supported",
+            "evidence_consistency": "consistent",
+            "supporting_methods": "granger",
+            "limiting_factors": "",
+        }]
+    ).to_csv(output_dir / "validation_summary.csv", index=False, encoding="utf-8-sig")
 
 
 # --- Test 1: Web only offers the four formal preprocess modes --------------
@@ -239,6 +287,87 @@ def test_raw_workflow_payload_is_formal_and_auto_promoted(tmp_path):
     assert payload["analysisContext"]["preprocess_mode"] == "raw"
     assert payload["rankedFeatures"]
     assert payload["recommendedCandidates"]
+
+
+def test_raw_workflow_publishes_a_separate_verification_review_pool(tmp_path):
+    config, _ = _write_run(tmp_path, mode="raw")
+    ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+
+    pool = pd.read_csv(tmp_path / "verification_review_pool.csv", encoding="utf-8-sig")
+
+    assert list(pool.columns) == [
+        "variable",
+        "candidate_source",
+        "source_rank",
+        "include_reason",
+    ]
+    assert len(pool) == min(config.top_k, len(ranked))
+    assert set(pool["candidate_source"]) == {"initial_screening"}
+    assert pool["variable"].tolist() == ranked.head(config.top_k)["variable"].tolist()
+    assert pool["source_rank"].tolist() == ranked.head(config.top_k)["driver_rank"].tolist()
+
+
+def test_reused_output_dir_clears_stale_validation_summary(tmp_path):
+    config, _ = _write_run(tmp_path, mode="raw")
+    _write_stale_validation_evidence(tmp_path)
+
+    run_initial_screening_workflow(config)
+
+    stale_files = [
+        "validation_summary.csv",
+        "granger_tests.csv",
+        "conditional_granger_scores.csv",
+        "enhanced_validation_summary.csv",
+        "model_lift_scores.csv",
+        "rolling_corr_scores.csv",
+        "model_variable_importance.csv",
+        "shap_or_importance.csv",
+        "model_discovered_candidates.csv",
+    ]
+    assert all(not (tmp_path / name).exists() for name in stale_files)
+    payload = web._build_result_payload(config.output_dir.name, config.output_dir, config)
+    assert payload["validationSummary"]
+    assert all(
+        row["validation_status"] == "not_run"
+        for row in payload["validationSummary"]
+    )
+    validation_fields = payload["validationFields"]
+    assert "stale_conditional" not in {
+        row["variable"] for row in validation_fields
+    }
+    current = next(row for row in validation_fields if row["variable"] == "candidate_0")
+    assert current["conditional_validation_lag"] is None
+    assert payload["importance"] == []
+    assert payload["modelDiscoveredCandidates"] == []
+
+
+def test_legacy_run_analysis_clears_stale_validation_evidence(tmp_path):
+    config = _raw_config(tmp_path, preprocess_mode="raw")
+    _write_input(config, _raw_frame())
+    _write_stale_validation_evidence(tmp_path)
+
+    run_analysis(config)
+
+    stale_files = [
+        "validation_summary.csv",
+        "granger_tests.csv",
+        "conditional_granger_scores.csv",
+        "enhanced_validation_summary.csv",
+        "model_lift_scores.csv",
+        "rolling_corr_scores.csv",
+        "model_variable_importance.csv",
+        "shap_or_importance.csv",
+        "model_discovered_candidates.csv",
+    ]
+    assert all(not (tmp_path / name).exists() for name in stale_files)
+    payload = web._build_result_payload(config.output_dir.name, config.output_dir, config)
+    assert payload["validationSummary"]
+    assert all(
+        row["validation_status"] == "not_run"
+        for row in payload["validationSummary"]
+    )
+    assert payload["importance"] == []
+    assert payload["modelDiscoveredCandidates"] == []
 
 
 # --- Test 5: processed workflow returns pending payload --------------------

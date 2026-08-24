@@ -767,3 +767,47 @@ comparison/context 文件）以及必要任务时间信息；不得把
 - 旧 CLI `--enable-granger` / `--enable-model`：Raw 模式可在正式初筛
   promotion 完成后调用对应正式 runner；非 Raw 模式明确提示先
   `confirm-branch`，不得自动选择 Raw 或 Processed。
+
+## 二级验证复核池与统一验证结果契约
+
+`verification_review_pool.csv` 是二级验证的独立输入文件，固定为 UTF-8-SIG CSV，且字段顺序
+必须为：
+
+```text
+variable
+candidate_source
+source_rank
+include_reason
+```
+
+其中 `candidate_source` 只描述该变量进入二级验证复核池的来源，不得改变或扩展
+`recommended_candidates.csv` 既有 `candidate_source` 的一级初筛语义。允许值固定为：
+
+- `initial_screening`：按 `final_score` 顺序的初筛 Top-K；
+- `manual_include`：用户明确加入的已有初筛变量；
+- `model_discovery`：已出现在 `model_discovered_candidates.csv` 且经用户明确确认的变量。
+
+初筛 workflow 发布正式结果时创建初始复核池。`POST /api/add_to_verification_review_pool`
+只允许新增 `manual_include` 或已确认的 `model_discovery`；模型发现文件的存在不自动将变量
+加入复核池。Enhanced、普通 Granger 和 Model Explanation 使用该池作为其额外二级验证输入，
+但不得因此扫描全量变量或创建第二套排序。
+
+复核池及所有后续验证都不得修改 `ranked_features.csv`、`recommended_candidates.csv`、
+`causal_review_candidates.csv`、`final_score`、Top-K 或初筛推荐顺序。复核池可下载和在结果
+payload 的 `verificationReviewPool` 返回，但不是跨阶段通用候选字段。
+
+`validation_summary.csv` 固定为：
+
+```text
+variable
+validation_status
+evidence_consistency
+supporting_methods
+limiting_factors
+```
+
+它只汇总实际执行的二级证据，禁止增加 `validation_score` 或 `validation_rank`。未执行、变量
+缺失、不可计算和真实 `0.0` 必须保持不同语义，不得把未执行的阶段显示成已得出的结论。
+API `validationFields` 另行保留五个阶段字段：`initial_screening_lag`、`validation_lag`、
+`conditional_validation_lag`、`screening_model_lift`、`validation_model_lift`；所有 lag 保持
+带符号方向，禁止使用 `abs(lag)` 或 `abs(best_lag)` 改写方向。

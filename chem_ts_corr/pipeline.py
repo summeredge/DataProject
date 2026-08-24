@@ -31,6 +31,16 @@ from chem_ts_corr.screening import (
 )
 from chem_ts_corr.service import analyze_initial_screening_branch_frame, analyze_numeric_frame
 from chem_ts_corr.time_axis import PHYSICAL_GAP_STARTS_ATTR, physical_gap_starts
+from chem_ts_corr.validation_summary import (
+    VALIDATION_SUMMARY_FILENAME,
+    write_validation_summary,
+)
+from chem_ts_corr.verification_review_pool import (
+    FILENAME as VERIFICATION_REVIEW_POOL_FILENAME,
+    pool_variables,
+    read_verification_review_pool,
+    write_initial_verification_review_pool,
+)
 
 
 SCREENING_BRANCH_NAMES = frozenset({"raw", "processed"})
@@ -102,6 +112,18 @@ XGB_FORMAL_INPUT_FILES = [
     "ranked_features.csv",
     "final_review_summary.csv",
 ]
+VALIDATION_SUMMARY_INPUT_FILES = (
+    "granger_tests.csv",
+    "enhanced_validation_summary.csv",
+    "model_lift_scores.csv",
+    "rolling_corr_scores.csv",
+    "model_variable_importance.csv",
+    "conditional_granger_scores.csv",
+)
+MODEL_EXPLORATION_OUTPUT_FILES = (
+    "shap_or_importance.csv",
+    "model_discovered_candidates.csv",
+)
 V5_SHADOW_OUTPUT_FILES = (
     V5_SHADOW_COMPARISON_FILENAME,
     V5_SHADOW_SUMMARY_FILENAME,
@@ -109,6 +131,7 @@ V5_SHADOW_OUTPUT_FILES = (
 
 
 def run_analysis(config: AnalysisConfig, progress_callback=None) -> dict[str, float]:
+    _clear_previous_validation_outputs(config.output_dir)
     pipeline_started = time.perf_counter()
     _progress(progress_callback, "读取数据中")
     read_started = time.perf_counter()
@@ -196,6 +219,12 @@ def run_initial_screening_branch(
         model_lift_scores=tables.model_lift_scores,
         lag_peak_quality=tables.lag_peak_quality,
         rolling_corr_scores=tables.rolling_corr_scores,
+    )
+    write_initial_verification_review_pool(
+        config.output_dir,
+        tables.ranked_features,
+        top_k=config.top_k,
+        manual_include=config.force_include_variables,
     )
     write_outputs_seconds = time.perf_counter() - write_started
     _progress(progress_callback, "分析完成")
@@ -501,7 +530,11 @@ def run_initial_screening_workflow(
             branch_selection_status="not_required",
         )
         _promote_screening_branch(
-            config.output_dir, branch="raw", new_context=context
+            config.output_dir,
+            branch="raw",
+            new_context=context,
+            verification_review_top_k=config.top_k,
+            verification_review_manual_include=config.force_include_variables,
         )
         return {
             "branch": "raw",
@@ -525,6 +558,8 @@ def confirm_initial_screening_branch(
     run_dir: Path,
     *,
     branch: str,
+    verification_review_top_k: int | None = None,
+    verification_review_manual_include: list[str] | None = None,
 ) -> None:
     """Publish an existing branch as the formal screening result.
 
@@ -541,6 +576,14 @@ def confirm_initial_screening_branch(
             f"{sorted(SCREENING_BRANCH_NAMES)}"
         )
     context = _read_preprocessing_context(run_dir)
+    if verification_review_top_k is None:
+        try:
+            stored_config = _load_run_config(run_dir)
+        except ValueError:
+            stored_config = None
+        if stored_config is not None:
+            verification_review_top_k = stored_config.top_k
+            verification_review_manual_include = stored_config.force_include_variables
     if (run_dir / DOWNSTREAM_LOCK_FILENAME).exists():
         if context["active_screening_branch"] == branch:
             return
@@ -558,6 +601,8 @@ def confirm_initial_screening_branch(
             run_dir,
             branch=branch,
             new_context=_confirmed_context(context, branch, active_mode),
+            verification_review_top_k=verification_review_top_k,
+            verification_review_manual_include=verification_review_manual_include,
         )
         return
     if status == "not_required":
@@ -573,6 +618,8 @@ def confirm_initial_screening_branch(
             run_dir,
             branch=branch,
             new_context=_confirmed_context(context, branch, active_mode),
+            verification_review_top_k=verification_review_top_k,
+            verification_review_manual_include=verification_review_manual_include,
         )
         return
     raise ValueError(
@@ -628,9 +675,21 @@ def _clear_previous_formal_state(run_dir: Path, *, preprocess_mode: str) -> None
     run_dir = Path(run_dir)
     for name in FORMAL_SCREENING_FILES:
         (run_dir / name).unlink(missing_ok=True)
+    _clear_previous_validation_outputs(run_dir)
+    (run_dir / VERIFICATION_REVIEW_POOL_FILENAME).unlink(missing_ok=True)
     (run_dir / CONTEXT_FILENAME).unlink(missing_ok=True)
     if preprocess_mode == "raw":
         (run_dir / "preprocessing_comparison.csv").unlink(missing_ok=True)
+
+
+def _clear_previous_validation_outputs(run_dir: Path) -> None:
+    run_dir = Path(run_dir)
+    for name in (
+        *VALIDATION_SUMMARY_INPUT_FILES,
+        *MODEL_EXPLORATION_OUTPUT_FILES,
+        VALIDATION_SUMMARY_FILENAME,
+    ):
+        (run_dir / name).unlink(missing_ok=True)
 
 
 def _clear_branch_formal_outputs(branch_dir: Path) -> None:
@@ -949,6 +1008,8 @@ def _promote_screening_branch(
     *,
     branch: str,
     new_context: dict[str, object],
+    verification_review_top_k: int | None = None,
+    verification_review_manual_include: list[str] | None = None,
 ) -> None:
     """Transactionally publish one branch as the formal screening result.
 
@@ -989,6 +1050,14 @@ def _promote_screening_branch(
             if name not in staged_names:
                 (run_dir / name).unlink(missing_ok=True)
         _write_context(run_dir, new_context)
+        if verification_review_top_k is not None:
+            ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
+            write_initial_verification_review_pool(
+                run_dir,
+                ranked,
+                top_k=int(verification_review_top_k),
+                manual_include=verification_review_manual_include,
+            )
     except Exception:
         _restore_promotion(
             run_dir,
@@ -1111,7 +1180,7 @@ def run_enhanced_screening_for_active_branch(
     )
 
     ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
-    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    variables = _verification_review_variables(run_dir, ranked, config, web_module)
     web_module._save_secondary_candidate_context(run_dir, variables)
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行增强筛选的候选变量")
@@ -1167,6 +1236,7 @@ def run_enhanced_screening_for_active_branch(
     enhanced.to_csv(
         run_dir / "enhanced_validation_summary.csv", index=False, encoding="utf-8-sig"
     )
+    validation_summary = write_validation_summary(run_dir)
     _progress(progress_callback, "增强筛选完成")
     return {
         "run_dir": run_dir,
@@ -1176,6 +1246,8 @@ def run_enhanced_screening_for_active_branch(
         "model_lift_scores_path": run_dir / "model_lift_scores.csv",
         "rolling_corr_scores_path": run_dir / "rolling_corr_scores.csv",
         "enhanced_validation_summary_path": run_dir / "enhanced_validation_summary.csv",
+        "validation_summary_path": run_dir / "validation_summary.csv",
+        "validation_summary": validation_summary,
     }
 
 
@@ -1203,7 +1275,7 @@ def run_granger_for_active_branch(
     from chem_ts_corr import web as web_module
 
     ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
-    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    variables = _verification_review_variables(run_dir, ranked, config, web_module)
     web_module._save_secondary_candidate_context(run_dir, variables)
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行 Granger 的候选变量")
@@ -1228,6 +1300,7 @@ def run_granger_for_active_branch(
         target_mask=target_mask,
     )
     granger.to_csv(run_dir / "granger_tests.csv", index=False, encoding="utf-8-sig")
+    validation_summary = write_validation_summary(run_dir)
     _progress(progress_callback, "普通 Granger 完成")
     return {
         "run_dir": run_dir,
@@ -1235,6 +1308,8 @@ def run_granger_for_active_branch(
         "active_preprocessing_mode": context["active_preprocessing_mode"],
         "config": config,
         "granger_tests_path": run_dir / "granger_tests.csv",
+        "validation_summary_path": run_dir / "validation_summary.csv",
+        "validation_summary": validation_summary,
     }
 
 
@@ -1268,7 +1343,7 @@ def run_model_for_active_branch(
     from chem_ts_corr.modeling import fit_explainable_model
 
     ranked = pd.read_csv(run_dir / "ranked_features.csv", encoding="utf-8-sig")
-    variables = web_module._secondary_variables_from_ranked(ranked, config)
+    variables = _verification_review_variables(run_dir, ranked, config, web_module)
     if not variables:
         raise ValueError("ranked_features.csv 中没有可运行模型解释的候选变量")
 
@@ -1303,16 +1378,47 @@ def run_model_for_active_branch(
         lag_mode="best_only",
         target_mask=target_mask,
     )
+    exploration_variables = _limited_model_exploration_variables(ranked, config.top_k)
+    exploration_variables = [
+        variable
+        for variable in exploration_variables
+        if variable in scaled.columns and variable != config.target
+    ]
+    exploration_importance = pd.DataFrame()
+    if exploration_variables:
+        exploration_best_lags = _causal_best_lags(
+            scaled,
+            config.target,
+            exploration_variables,
+            config.max_lag,
+            target_mask=target_mask,
+        )
+        exploration_importance, _ = fit_explainable_model(
+            scaled,
+            target=config.target,
+            max_lag=config.max_lag,
+            candidate_variables=exploration_variables,
+            max_features=config.max_model_features,
+            random_state=config.random_state,
+            best_lags=exploration_best_lags,
+            lag_mode="best_only",
+            target_mask=target_mask,
+        )
     risk = pd.read_csv(run_dir / "risk_flags.csv", encoding="utf-8-sig")
     model_variable_importance = build_model_variable_importance(
         importance, ranked, risk_flags=risk
     )
     model_discovered = build_model_discovered_candidates(
-        importance,
+        exploration_importance,
         ranked,
         risk_flags=risk,
         screening_top_n=config.top_k,
         max_lag=config.max_lag,
+    )
+    model_discovered = _limit_model_exploration_candidates(
+        model_discovered,
+        ranked,
+        top_k=config.top_k,
     )
     importance.to_csv(
         run_dir / "shap_or_importance.csv", index=False, encoding="utf-8-sig"
@@ -1323,6 +1429,7 @@ def run_model_for_active_branch(
     model_discovered.to_csv(
         run_dir / "model_discovered_candidates.csv", index=False, encoding="utf-8-sig"
     )
+    validation_summary = write_validation_summary(run_dir)
     _progress(progress_callback, "模型解释完成")
     return {
         "run_dir": run_dir,
@@ -1333,7 +1440,60 @@ def run_model_for_active_branch(
         "model_variable_importance_path": run_dir / "model_variable_importance.csv",
         "model_discovered_candidates_path": run_dir / "model_discovered_candidates.csv",
         "model_metrics": metrics,
+        "validation_summary_path": run_dir / "validation_summary.csv",
+        "validation_summary": validation_summary,
     }
+
+
+def _limited_model_exploration_variables(
+    ranked_features: pd.DataFrame,
+    top_k: int,
+) -> list[str]:
+    """Return only the fixed Rank K+1 through K+10 omission window."""
+    if ranked_features.empty or "variable" not in ranked_features.columns:
+        return []
+    if "driver_rank" in ranked_features.columns:
+        ranks = pd.to_numeric(ranked_features["driver_rank"], errors="coerce")
+        window = ranked_features.loc[(ranks > top_k) & (ranks <= top_k + 10)]
+    else:
+        window = ranked_features.iloc[top_k : top_k + 10]
+    return [
+        str(variable)
+        for variable in window["variable"].tolist()
+        if pd.notna(variable) and str(variable).strip()
+    ]
+
+
+def _verification_review_variables(
+    run_dir: Path,
+    ranked: pd.DataFrame,
+    config: AnalysisConfig,
+    web_module,
+) -> list[str]:
+    legacy_variables = web_module._secondary_variables_from_ranked(ranked, config)
+    variables = pool_variables(read_verification_review_pool(run_dir))
+    if variables is None:
+        return legacy_variables
+    return list(dict.fromkeys([*variables, *legacy_variables]))
+
+
+def _limit_model_exploration_candidates(
+    discovered: pd.DataFrame,
+    ranked_features: pd.DataFrame,
+    *,
+    top_k: int,
+) -> pd.DataFrame:
+    """Keep at most five model signals, preserving the initial-screening order."""
+    if discovered.empty or "variable" not in discovered.columns:
+        return discovered.copy(deep=True)
+    exploration_variables = _limited_model_exploration_variables(ranked_features, top_k)
+    order = {variable: index for index, variable in enumerate(exploration_variables)}
+    limited = discovered[discovered["variable"].astype(str).isin(order)].copy()
+    if limited.empty:
+        return limited
+    limited["_initial_screening_order"] = limited["variable"].astype(str).map(order)
+    limited = limited.sort_values("_initial_screening_order", kind="mergesort").head(5)
+    return limited.drop(columns="_initial_screening_order").reset_index(drop=True)
 
 
 def run_causal_review_for_active_branch(

@@ -6,6 +6,9 @@ import pandas as pd
 
 
 INTERPRETATION = "model explanation only; not a causal conclusion"
+DISCOVERY_INTERPRETATION = (
+    "model discovery exploration only; not a validation conclusion or causal conclusion"
+)
 
 OUT_COLS = [
     "variable",
@@ -116,10 +119,10 @@ def build_model_discovered_candidates(
     model_top_n: int = 50,
     max_lag: int | None = None,
 ) -> pd.DataFrame:
-    """Summarize model-importance-only supplemental candidates.
+    """Summarize model-importance-only omission exploration signals.
 
-    This output is a conservative review aid. It does not alter screening scores
-    and does not claim causality.
+    This output is a conservative exploration aid, not a validation conclusion.
+    It does not alter screening scores, rankings, recommendations, or causality.
     """
     if importance.empty:
         return pd.DataFrame(columns=OUT_COLS)
@@ -160,7 +163,7 @@ def build_model_discovered_candidates(
             "risk_flags": risk_text,
             "recommended_use": _first_non_empty(ranked_meta.get("recommended_use"), risk_meta.get("recommended_use")),
             "recommended_action": _first_non_empty(ranked_meta.get("recommended_action"), risk_meta.get("recommended_action")),
-            "interpretation": INTERPRETATION,
+            "interpretation": DISCOVERY_INTERPRETATION,
         }
         row["discovery_reason"] = _discovery_reason(row, max_lag=max_lag)
         rows.append(row)

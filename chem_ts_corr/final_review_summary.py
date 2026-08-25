@@ -219,10 +219,10 @@ def _conflicts(row: pd.Series) -> tuple[str, str]:
         reasons.append("主筛查或模型证据较强，但统计检验受共线性或共同负荷限制。")
     if grade in {"A", "B"} and not (cond.startswith("ok") and q is not None and q <= 0.05):
         types.append("strong_screening_but_conditional_weak")
-        reasons.append("主筛查较强，但条件 Granger 独立预测支持不足。")
+        reasons.append("主筛查较强，但尚未形成明确的独立预测贡献证据。")
     if cond.startswith("ok") and q is not None and q <= 0.05 and grade in {"D", "E"}:
         types.append("conditional_supported_but_screening_weak")
-        reasons.append("条件 Granger 支持，但主筛查等级较低，需检查是否为局部、非线性或边界信号。")
+        reasons.append("条件 Granger 显示存在独立预测贡献证据，但主筛查等级较低，需检查是否为局部、非线性或边界信号。")
     rank = _number(row.get("model_importance_rank"))
     if rank is not None and rank <= 5 and (not (cond.startswith("ok") and q is not None and q <= 0.05) or "high_collinearity_risk" in flags):
         types.append("model_supported_but_granger_weak")

@@ -101,7 +101,7 @@ def _decide_review(row: pd.Series) -> tuple[str, str]:
     if not status.startswith("ok"):
         return (
             "insufficient_evidence",
-            "条件 Granger 独立预测贡献审查未得到可用结果，仅建议人工复核时作为缺失证据处理，不是因果结论。",
+            "条件 Granger 未提供可用的独立预测贡献证据，仅建议人工复核时作为缺失证据处理，不是因果结论。",
         )
     if risk_level in {"high", "strong"}:
         return (
@@ -116,12 +116,12 @@ def _decide_review(row: pd.Series) -> tuple[str, str]:
     if q_value is not None and contribution is not None and q_value <= 0.05 and contribution >= 0.05:
         return (
             "priority_review",
-            "条件 Granger 独立预测贡献支持较强，建议优先人工可信度审查，但不是因果结论。",
+            "条件 Granger 显示存在独立预测贡献证据，建议优先人工可信度审查，但不是因果结论。",
         )
     if q_value is not None and contribution is not None and q_value <= 0.1 and contribution >= 0.02:
         return (
             "secondary_review",
-            "条件 Granger 独立预测贡献支持中等，可作为二级人工可信度审查线索，不是因果结论。",
+            "条件 Granger 显示存在有限的独立预测贡献证据，可作为二级人工可信度审查线索，不是因果结论。",
         )
     return (
         "not_recommended",

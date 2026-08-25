@@ -45,6 +45,8 @@ def test_causal_review_report_priority_review():
     assert row["conditional_granger_status"] == "ok"
     assert row["conditional_best_lag"] == 2
     assert row["candidate_grade"] == "A"
+    assert "条件 Granger 显示存在独立预测贡献证据" in row["final_review_reason"]
+    assert "条件 Granger 支持" not in row["final_review_reason"]
 
 
 def test_causal_review_report_insufficient_evidence():

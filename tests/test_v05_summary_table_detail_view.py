@@ -31,7 +31,7 @@ def test_display_label_translates_common_evidence_markers():
     required = [
         "translateDisplayValue",
         "候选等级D",
-        "条件格兰杰支持",
+        "条件 Granger 显示存在独立预测贡献证据",
         "预测贡献为正",
         "格兰杰辅助支持",
         "模型提升弱支持",

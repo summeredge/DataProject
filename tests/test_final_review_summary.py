@@ -135,3 +135,23 @@ def test_ranked_lag_outside_maxlag_status_generates_hint():
     assert out.loc[0, "lag_boundary_hint"]
     assert "扩大 maxlag" in out.loc[0, "lag_boundary_hint"]
     assert "工艺停留时间" in out.loc[0, "lag_boundary_hint"]
+
+
+def test_conditional_granger_conflict_uses_independent_predictive_evidence_language():
+    out = build_final_review_summary(
+        _evidence(
+            [
+                {
+                    "variable": "x1",
+                    "candidate_grade": "D",
+                    "integrated_review_decision": "secondary_review",
+                    "conditional_granger_status": "ok",
+                    "conditional_fdr_q_value": 0.01,
+                }
+            ]
+        )
+    )
+
+    reason = out.loc[0, "evidence_conflict_reason"]
+    assert "条件 Granger 显示存在独立预测贡献证据" in reason
+    assert "条件 Granger 支持" not in reason

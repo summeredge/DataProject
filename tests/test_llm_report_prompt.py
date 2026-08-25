@@ -42,7 +42,7 @@ def test_build_llm_analysis_package_compacts_and_classifies_results(tmp_path: Pa
     _write_csv(
         run_dir / "causal_review_evidence.csv",
         [
-            {"variable": "FIC001.SV", "evidence_score": 4.2, "evidence_level": "strong_predictive_evidence", "data_priority": "high", "risk_constraint_level": "none", "statistical_limit_level": "none", "integrated_review_decision": "priority_review", "evidence_reason": "candidate_grade_A;conditional_granger_supported", "statistical_limit_reason": "", "integrated_review_reason": "strong_data_evidence"},
+            {"variable": "FIC001.SV", "evidence_score": 4.2, "evidence_level": "strong_predictive_evidence", "data_priority": "high", "risk_constraint_level": "none", "statistical_limit_level": "none", "integrated_review_decision": "priority_review", "evidence_reason": "candidate_grade_A;independent_predictive_evidence", "statistical_limit_reason": "", "integrated_review_reason": "strong_data_evidence"},
             {"variable": "PI002.PV", "evidence_score": 1.1, "evidence_level": "weak_or_incomplete_evidence", "data_priority": "medium", "risk_constraint_level": "medium", "statistical_limit_level": "medium", "integrated_review_decision": "manual_review_only", "evidence_reason": "target_lead_risk", "statistical_limit_reason": "high_collinearity_limited_signal", "integrated_review_reason": "manual_review_only"},
         ],
     )

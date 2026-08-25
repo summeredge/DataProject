@@ -664,6 +664,20 @@ run_causal_review_for_active_branch(
 方向；这些解释字段不参与任何评分或排序计算，尤其不得参与 `final_score`、`driver_rank`、
 Top-K 或第一层排序。
 
+`independent_predictive_support` 只使用 `supported`、`supported_with_limitations`、
+`not_supported`、`not_computed` 说明条件 Granger 的独立预测贡献证据；原始
+`conditional_min_p_value`、`conditional_fdr_q_value` 与 `predictive_contribution`
+继续保留供分析，不构成因果结论。
+`confounder_assessment` 至少区分 `not_assessed`、`no_flagged_confounder`、
+`common_driver_risk`、`shared_signal_risk`、`formula_relation_risk`；
+`control_relation_assessment` 至少区分 `not_assessed`、`no_control_relation_flagged`、
+`control_reference`、`possible_control_response`、`shared_capacity_or_control_context`。
+`statistical_limitation` 至少区分 `not_computed`、`no_flagged_statistical_limitation`、
+`high_collinearity_limitation`、`insufficient_sample_limitation`，并以
+`failed_statistical_limitation` 表示已执行但失败。`direction_assessment` 只按带符号 lag
+区分 `variable_leads_target`、`target_leads_variable`、`zero_lag`、`not_computed`，不得
+使用绝对值。未计算、失败、不显著、缺失和真实 `0.0` 不得被同一解释状态伪造或混淆。
+
 历史兼容字段 `evidence_score`、`final_rank`、`final_recommendation` 继续保留其 CSV/API
 字段名和既有第三层展示/下游兼容行为，但绝不是第一层评分或排序依据；不得新增
 `third_score`、`review_score`、`causal_score` 或其他综合评分字段。缺失、未执行、不可计算

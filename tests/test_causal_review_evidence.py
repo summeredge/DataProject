@@ -68,10 +68,10 @@ def test_confidence_review_fields_are_explanatory_only_and_preserve_screening_va
     assert supported["control_relation_assessment"] == "no_control_relation_flagged"
     assert supported["statistical_limitation"] == "no_flagged_statistical_limitation"
     assert supported["direction_assessment"] == "variable_leads_target"
-    assert limited["independent_predictive_support"] == "limited_by_collinearity"
+    assert limited["independent_predictive_support"] == "supported_with_limitations"
     assert limited["confounder_assessment"] == "common_driver_risk"
     assert limited["control_relation_assessment"] == "shared_capacity_or_control_context"
-    assert limited["statistical_limitation"] == "medium_statistical_limitation"
+    assert limited["statistical_limitation"] == "high_collinearity_limitation"
     pd.testing.assert_frame_equal(ranked, before)
     assert ranked.loc[0, ["final_score", "driver_rank"]].tolist() == [0.9, 7]
 
@@ -102,7 +102,8 @@ def test_significant_conditional_granger_low_risk_gets_priority_review():
 
     assert row["evidence_level"] == "strong_predictive_evidence"
     assert row["integrated_review_decision"] == "priority_review"
-    assert "conditional_granger_supported" in row["evidence_reason"]
+    assert "independent_predictive_evidence" in row["evidence_reason"]
+    assert "conditional_granger_supported" not in row["evidence_reason"]
 
 
 def test_engineering_context_does_not_change_review_priority_or_decision():
@@ -142,7 +143,7 @@ def test_high_collinearity_adds_limited_signal_without_p_value_support():
     assert row["risk_constraint_level"] == "medium"
     assert row["evidence_score"] == 0.8
     assert "high_collinearity_limited_signal" in row["evidence_reason"]
-    assert "conditional_granger_supported" not in row["evidence_reason"]
+    assert "independent_predictive_evidence" not in row["evidence_reason"]
 
 
 def test_strong_formula_and_severe_data_quality_limit_to_manual_review_only():
@@ -414,6 +415,104 @@ def test_fallback_missing_ranked_lag_is_limited_not_supported():
     assert "fallback_predictive_signal" in row["evidence_reason"]
     assert row["data_priority"] != "high"
     assert row["integrated_review_decision"] != "priority_review"
+
+
+@pytest.mark.parametrize(
+    ("status", "q_value", "contribution", "expected_support", "expected_limit"),
+    [
+        ("ok", 0.01, 0.08, "supported", "no_flagged_statistical_limitation"),
+        ("ok", 0.2, 0.0, "not_supported", "no_flagged_statistical_limitation"),
+        ("ok", pd.NA, pd.NA, "not_supported", "no_flagged_statistical_limitation"),
+        ("ok: fallback_missing_ranked_lag", 0.01, 0.08, "supported_with_limitations", "no_flagged_statistical_limitation"),
+        ("high_collinearity_risk", pd.NA, 0.04, "supported_with_limitations", "high_collinearity_limitation"),
+        ("skipped: insufficient rows", pd.NA, 0.0, "not_computed", "insufficient_sample_limitation"),
+        ("failed: solver error", pd.NA, 0.0, "not_computed", "failed_statistical_limitation"),
+    ],
+)
+def test_confidence_review_statuses_preserve_computed_and_limited_semantics(
+    status, q_value, contribution, expected_support, expected_limit
+):
+    conditional = pd.DataFrame(
+        [
+            {
+                "variable": "x1",
+                "status": status,
+                "fdr_q_value": q_value,
+                "predictive_contribution": contribution,
+            }
+        ]
+    )
+
+    row = build_causal_review_evidence(_ranked(), conditional).iloc[0]
+
+    assert row["independent_predictive_support"] == expected_support
+    assert row["statistical_limitation"] == expected_limit
+
+
+def test_confidence_review_risk_and_direction_enums_use_existing_fields_only():
+    variants = [
+        (_ranked(risk_flags="formula_like", recommended_use="formula_coupled_reference"), "formula_relation_risk", "no_control_relation_flagged"),
+        (_ranked(risk_flags="common_capacity_driver", recommended_use="capacity_driven"), "common_driver_risk", "shared_capacity_or_control_context"),
+        (_ranked(risk_flags="residual_collinearity"), "shared_signal_risk", "no_control_relation_flagged"),
+        (_ranked(recommended_use="control_variable_reference"), "no_flagged_confounder", "control_reference"),
+        (_ranked(lag=-2), "no_flagged_confounder", "possible_control_response"),
+        (_ranked(lag=0), "no_flagged_confounder", "no_control_relation_flagged"),
+    ]
+
+    for ranked, expected_confounder, expected_control in variants:
+        row = build_causal_review_evidence(ranked, pd.DataFrame()).iloc[0]
+        assert row["confounder_assessment"] == expected_confounder
+        assert row["control_relation_assessment"] == expected_control
+
+
+def test_confidence_review_keeps_missing_distinct_from_real_zero_and_signed_direction():
+    missing = build_causal_review_evidence(
+        _ranked(lag=pd.NA),
+        pd.DataFrame([{"variable": "x1", "status": "ok", "fdr_q_value": pd.NA, "predictive_contribution": pd.NA}]),
+    ).iloc[0]
+    zero = build_causal_review_evidence(
+        _ranked(lag=0),
+        pd.DataFrame([{"variable": "x1", "status": "ok", "fdr_q_value": 0.0, "predictive_contribution": 0.0}]),
+    ).iloc[0]
+
+    assert pd.isna(missing["conditional_fdr_q_value"])
+    assert pd.isna(missing["predictive_contribution"])
+    assert missing["independent_predictive_support"] == "not_supported"
+    assert missing["direction_assessment"] == "not_computed"
+    assert zero["conditional_fdr_q_value"] == 0.0
+    assert zero["predictive_contribution"] == 0.0
+    assert zero["direction_assessment"] == "zero_lag"
+
+
+def test_confidence_review_interpretations_do_not_change_first_layer_values():
+    ranked = pd.DataFrame(
+        [
+            {"variable": "x1", "final_score": 0.9, "driver_rank": 1, "lag": 1},
+            {"variable": "x2", "final_score": 0.8, "driver_rank": 2, "lag": 2},
+        ]
+    )
+    before = ranked.copy(deep=True)
+    baseline = build_causal_review_evidence(ranked, pd.DataFrame())
+    varied = build_causal_review_evidence(
+        ranked,
+        pd.DataFrame(
+            [
+                {"variable": "x1", "status": "high_collinearity_risk", "predictive_contribution": 0.04},
+                {"variable": "x2", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.08},
+            ]
+        ),
+        risk_flags=pd.DataFrame(
+            [
+                {"variable": "x1", "risk_flags": "common_capacity_driver", "risk_level": "medium"},
+                {"variable": "x2", "risk_flags": "", "risk_level": "none"},
+            ]
+        ),
+    )
+
+    assert baseline["variable"].tolist() == varied["variable"].tolist()
+    pd.testing.assert_series_equal(baseline["final_score"], varied["final_score"], check_names=False)
+    pd.testing.assert_series_equal(baseline["variable"], varied["variable"], check_names=False)
+    pd.testing.assert_frame_equal(ranked, before)
 
 
 def test_high_collinearity_without_q_does_not_priority_from_grade_only():

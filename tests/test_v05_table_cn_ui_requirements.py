@@ -29,7 +29,7 @@ def test_common_evidence_and_risk_labels_are_chinese_ready():
     required = [
         "多证据支持",
         "建议优先复核",
-        "条件格兰杰支持",
+        "条件 Granger 显示存在独立预测贡献证据",
         "预测贡献为正",
         "格兰杰辅助支持",
         "模型提升弱支持",

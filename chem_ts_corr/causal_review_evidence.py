@@ -113,6 +113,19 @@ def build_causal_review_evidence(
         "risk_count",
         "recommended_use",
         "recommended_action",
+        # These existing screening fields are retained in the working frame so
+        # the third-layer explanations can describe residual/control context.
+        # They are not emitted as new score or ranking inputs.
+        "residual_corr",
+        "residual_status",
+        "residual_evidence_status",
+        "load_adjusted_relation_status",
+        "common_capacity_candidate_flag",
+        "control_reference_type",
+        "control_reference_source",
+        "is_control_reference",
+        "is_auto_control_reference",
+        "temporal_direction_status",
     ]
     evidence = ranked_features.copy(deep=True)
     evidence = evidence[[c for c in base_cols if c in evidence.columns]].copy(deep=True)
@@ -219,14 +232,21 @@ def _independent_predictive_support(row: pd.Series) -> str:
     status = _text(row.get("conditional_granger_status")).lower()
     q_value = _number(row.get("conditional_fdr_q_value"))
     contribution = _number(row.get("predictive_contribution"))
-    if not status or _is_insufficient_status(status):
+    has_positive_contribution = contribution is not None and contribution > 0
+    if not status or status in {"not_computed", "not_run", "not_available"}:
         return "not_computed"
     if status == "high_collinearity_risk":
-        return "limited_by_collinearity"
+        return "supported_with_limitations" if has_positive_contribution else "not_supported"
     if "fallback_missing_ranked_lag" in status:
-        return "limited_by_lag_fallback" if q_value is not None and q_value <= 0.10 else "not_supported"
+        return (
+            "supported_with_limitations"
+            if has_positive_contribution and (q_value is None or q_value <= 0.10)
+            else "not_supported"
+        )
+    if _is_insufficient_status(status):
+        return "not_computed"
     if status.startswith("ok") and q_value is not None and q_value <= 0.10:
-        return "supported" if contribution is not None and contribution > 0 else "supported_without_positive_contribution"
+        return "supported" if has_positive_contribution else "not_supported"
     if status.startswith("ok"):
         return "not_supported"
     return "not_computed"
@@ -234,13 +254,37 @@ def _independent_predictive_support(row: pd.Series) -> str:
 
 def _confounder_assessment(row: pd.Series) -> str:
     tokens = _risk_flag_tokens(row)
-    if "strong_formula_leakage" in tokens:
+    recommended_use = _text(row.get("recommended_use")).lower()
+    relation_status = _text(row.get("load_adjusted_relation_status")).lower()
+    residual_evidence_status = _text(row.get("residual_evidence_status")).lower()
+    if {
+        "formula_like",
+        "strong_formula_leakage",
+    } & tokens or recommended_use == "formula_coupled_reference":
         return "formula_relation_risk"
-    if "common_capacity_driver" in tokens:
+    if (
+        "common_capacity_driver" in tokens
+        or recommended_use == "capacity_driven"
+        or relation_status == "raw_only_common_load_risk"
+        or _is_true(row.get("common_capacity_candidate_flag"))
+    ):
         return "common_driver_risk"
-    if "residual_collinearity" in tokens:
+    if (
+        "residual_collinearity" in tokens
+        or "redundant_proxy" in tokens
+        or relation_status == "raw_only_residual_weak"
+        or residual_evidence_status == "weak"
+    ):
         return "shared_signal_risk"
-    if not _has_assessment_input(row, "risk_flags", "risk_level", "recommended_use"):
+    if not _has_assessment_input(
+        row,
+        "risk_flags",
+        "risk_level",
+        "recommended_use",
+        "residual_status",
+        "residual_evidence_status",
+        "load_adjusted_relation_status",
+    ):
         return "not_assessed"
     return "no_flagged_confounder"
 
@@ -248,26 +292,70 @@ def _confounder_assessment(row: pd.Series) -> str:
 def _control_relation_assessment(row: pd.Series) -> str:
     tokens = _risk_flag_tokens(row)
     recommended_use = _text(row.get("recommended_use")).lower()
-    if recommended_use == "control_variable_reference":
+    control_reference = (
+        recommended_use == "control_variable_reference"
+        or _is_true(row.get("is_control_reference"))
+        or _is_true(row.get("is_auto_control_reference"))
+        or _has_text(row.get("control_reference_type"))
+        or _has_text(row.get("control_reference_source"))
+    )
+    if control_reference:
         return "control_reference"
-    if recommended_use == "formula_coupled_reference":
-        return "formula_coupled_reference"
-    if "target_leads_variable" in tokens:
+    lag = _number(row.get("lag"))
+    temporal_status = _text(row.get("temporal_direction_status")).lower()
+    if (
+        "target_leads_variable" in tokens
+        or temporal_status == "target_leads_supported"
+        or (lag is not None and lag < 0)
+        or recommended_use == "state_indicator"
+    ):
         return "possible_control_response"
-    if "common_capacity_driver" in tokens:
+    if "common_capacity_driver" in tokens or recommended_use == "capacity_driven":
         return "shared_capacity_or_control_context"
-    if not _has_assessment_input(row, "risk_flags", "recommended_use"):
+    if not _has_assessment_input(
+        row,
+        "risk_flags",
+        "recommended_use",
+        "control_reference_type",
+        "control_reference_source",
+        "is_control_reference",
+        "is_auto_control_reference",
+        "temporal_direction_status",
+    ):
         return "not_assessed"
     return "no_control_relation_flagged"
 
 
 def _statistical_limitation(row: pd.Series) -> str:
-    level = _text(row.get("statistical_limit_level")).lower()
-    if not level:
+    status = _text(row.get("conditional_granger_status")).lower()
+    tokens = _risk_flag_tokens(row)
+    condition_number = _number(row.get("condition_number"))
+
+    if (
+        "high_collinearity_risk" in status
+        or "high_collinearity_risk" in tokens
+        or "residual_collinearity" in tokens
+        or (condition_number is not None and condition_number > 1e8)
+    ):
+        return "high_collinearity_limitation"
+    if "insufficient" in status or "not enough" in status:
+        return "insufficient_sample_limitation"
+    if not status or status in {"not_computed", "not_run", "not_available"}:
         return "not_computed"
-    if level == "none":
+    if "failed" in status or "error" in status:
+        return "failed_statistical_limitation"
+    if "fallback_missing_ranked_lag" in status:
         return "no_flagged_statistical_limitation"
-    return f"{level}_statistical_limitation"
+    if _is_insufficient_status(status):
+        return "not_computed"
+    if status.startswith("ok"):
+        return "no_flagged_statistical_limitation"
+    # A non-significant result is still a computed result. Preserve its raw
+    # q/p values and status, while keeping the explanation separate from
+    # sample/collinearity limitations.
+    if status.startswith("skipped"):
+        return "not_computed"
+    return "no_flagged_statistical_limitation"
 
 
 def _direction_assessment(row: pd.Series) -> str:
@@ -285,8 +373,22 @@ def _has_assessment_input(row: pd.Series, *columns: str) -> bool:
     return any(not _is_missing(row.get(column)) for column in columns)
 
 
+def _is_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    return _text(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def _has_text(value: object) -> bool:
+    return _text(value).strip().lower() not in {"", "nan", "none", "missing", "not_computed"}
+
+
 def _is_missing(value: object) -> bool:
     if value is None:
+        return True
+    if isinstance(value, str) and not value.strip():
+        return True
+    if isinstance(value, (list, tuple, set)) and not value:
         return True
     try:
         missing = pd.isna(value)
@@ -324,10 +426,10 @@ def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, st
             reasons.append("fallback_predictive_signal")
         elif conditional_q <= 0.05:
             score += 2.0
-            reasons.append("conditional_granger_supported")
+            reasons.append("independent_predictive_evidence")
         elif conditional_q <= 0.10:
             score += 1.0
-            reasons.append("conditional_granger_weak_support")
+            reasons.append("independent_predictive_evidence_limited")
     if contribution is not None and contribution > 0:
         if conditional_status == "high_collinearity_risk":
             score += 0.3

@@ -24,7 +24,7 @@ def test_parameter_settings_section_covers_main_controls():
         "自定义上限",
         "残差控制列",
         "强制复核变量",
-        "三层复核候选数量",
+        "可信度审查候选数量",
         "风险标签包含过滤",
     ]
     for marker in required:

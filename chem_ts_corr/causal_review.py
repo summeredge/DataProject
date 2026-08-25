@@ -4,6 +4,12 @@ import pandas as pd
 
 
 def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFrame:
+    """Build the fixed third-layer candidate table for confounder review.
+
+    The priority labels only describe the order in which the existing
+    first-layer candidates should be reviewed.  They never feed back into
+    first-layer scores, ranks, or Top-K membership.
+    """
     cols = [
         "variable", "final_score", "candidate_grade", "lag", "direction", "raw_corr", "residual_corr",
         "rolling_stability", "regime_stability_final", "lag_boundary_flag", "model_lift_score",
@@ -35,12 +41,12 @@ def build_causal_review_candidates(ranked_features: pd.DataFrame) -> pd.DataFram
         if use in {"capacity_driven", "formula_coupled_reference", "unstable_candidate", "control_variable_reference"}:
             return 4, "低优先级：更偏参考/风险提示变量", "tier_4"
         if grade == "A" and use in {"strong_screening_candidate", "prediction_candidate"} and risk in {"none", "weak", ""}:
-            return 1, "优先三层复核：高分且低风险", "tier_1"
+            return 1, "优先可信度审查：高分且低风险", "tier_1"
         if grade in {"A", "B"} and risk in {"none", "weak", "medium", ""}:
-            return 2, "建议三层复核：较高分候选", "tier_2"
+            return 2, "建议可信度审查：较高分候选", "tier_2"
         if score >= 0.45:
-            return 3, "可排队复核：中等相关线索", "tier_3"
-        return 5, "暂不建议三层复核", "tier_5"
+            return 3, "可排队可信度审查：中等相关线索", "tier_3"
+        return 5, "暂不建议可信度审查", "tier_5"
 
     priorities = frame.apply(priority, axis=1, result_type="expand")
     priorities.columns = ["review_priority", "review_reason", "review_tier"]

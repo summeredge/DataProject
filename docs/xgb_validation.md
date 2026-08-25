@@ -6,7 +6,7 @@ XGB 四级验证用于检查候选变量能否在严格时间外测试中，为�
 
 ## 2. 前置条件
 
-必须先完成三层复核并生成 `final_review_summary.csv`。Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入 `xgb_validation/`。
+必须先完成第三层可信度审查并生成 `final_review_summary.csv`。Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入 `xgb_validation/`。
 
 运行环境需要可选依赖：
 
@@ -91,7 +91,7 @@ python scripts/benchmark_xgb_validation.py --rows 50000 --variables 50 --candida
 - 样本不足：减少滞后、调整重采样或扩大时间范围；不要使用随机切分规避。
 - 滞后过大：将 `max_lag` 调回与工艺停留时间和采样间隔一致的范围。
 - 没有有效候选：检查正滞后、候选列是否存在，以及白名单变量是否有可用特征。
-- `final_review_summary` 缺失：先运行三层复核并确认 `final_review_summary.csv` 已生成。
+- `final_review_summary` 缺失：先运行第三层可信度审查并确认 `final_review_summary.csv` 已生成。
 
 ## 10. 解释边界
 
@@ -106,7 +106,7 @@ python scripts/benchmark_xgb_validation.py --rows 50000 --variables 50 --candida
 - `preprocessing_context.json` 中的 active branch 与 active preprocessing 参数；
 - 原始输入数据。
 
-缺失 `final_review_summary.csv` 会在模型训练前明确拒绝，不自动运行三级复核；
+缺失 `final_review_summary.csv` 会在模型训练前明确拒绝，不自动运行可信度审查；
 `awaiting_confirmation` 拒绝 `initial_screening_branch_not_confirmed`。
 
 正式 XGB 使用 fold-safe backend：先建立单一 split base 时间轴（统一 resample、

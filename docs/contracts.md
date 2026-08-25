@@ -467,8 +467,8 @@ branch_selection_status
 
 ## 后续阶段正式 branch/context 契约（PR-9 / PR-10 / PR-11）
 
-增强筛选、普通 Granger、RF/SHAP 模型与三级复核（conditional Granger /
-causal review / final review）的正式 backend 入口（`pipeline.py`）：
+增强筛选、普通 Granger、RF/SHAP 模型与可信度审查（conditional Granger 及其
+可信度审查输出）的正式 backend 入口（`pipeline.py`）：
 
 ```python
 prepare_downstream_analysis_context(run_dir, ...)
@@ -508,7 +508,7 @@ run_causal_review_for_active_branch(run_dir, ...)
   数据时仍通过唯一的 `apply_exclude_windows()` 入口过滤，统计字段只作运行元数据；
 - 构造正式 downstream config 必须通过 `dataclasses.replace`，不得原地修改
   调用方 config；
-- 增强筛选、普通 Granger、RF/SHAP 与 conditional Granger/三级复核必须
+- 增强筛选、普通 Granger、RF/SHAP 与 conditional Granger/可信度审查必须
   使用 causal preprocessing；完整时间轴先变换，工况只作为 target mask，
   standardization 仍以 target mask 拟合。初筛的历史筛查可继续使用回顾性
   transform，XGBoost 继续使用独立的 fold-safe causal preprocessing；
@@ -544,7 +544,7 @@ run_causal_review_for_active_branch(run_dir, ...)
 - 普通 Granger 保留 signed lag，不得使用 `abs(lag)` / `abs(best_lag)` /
   `abs(granger_lag)` 决定时间方向；输出不得表述为确定性因果；
 - PR-9 接入 ordinary/bivariate Granger，PR-10 接入 RF/SHAP/model
-  discovery，PR-11 接入 conditional Granger / causal review / final review；
+  discovery，PR-11 接入 conditional Granger / 可信度审查；
   XGBoost（PR-12）接入 fold-safe 正式 runner；Web/API/CLI 正式总接入
   （PR-13）只改变入口 orchestration，不改变上述后端契约。
 
@@ -554,9 +554,9 @@ run_causal_review_for_active_branch(run_dir, ...)
 修改表单但未重新分析时不得覆盖 active context。`awaiting_confirmation` 或
 尚未分析时只允许按当前表单作为预览，不得据此确认 branch。
 
-## 三级复核正式 branch/context 契约（PR-11）
+## 第三层可信度审查正式 branch/context 契约（PR-11）
 
-三级复核正式 backend 入口：
+可信度审查正式 backend 入口：
 
 ```python
 run_causal_review_for_active_branch(
@@ -582,10 +582,10 @@ run_causal_review_for_active_branch(
 → 验证正式 root 初筛输入
 → 根据 active preprocessing 构造 downstream config
 → begin_downstream_stage(run_dir)（首次通过创建 screening_downstream.lock）
-→ 读取正式三级复核候选
+→ 读取正式第三层审查候选
 → 准备 active preprocessing 数据
 → 调用 run_causal_review_stage()
-→ 写三级复核结果
+→ 写可信度审查结果
 ```
 
 约束：
@@ -595,7 +595,7 @@ run_causal_review_for_active_branch(
   `risk_flags.csv`；任一缺失报
   `initial_screening_formal_output_missing`，不得回退读取
   `screening_branches/` 补救；
-- 正式三级候选唯一来自 root `causal_review_candidates.csv`，不得重新调用
+- 正式第三层候选唯一来自 root `causal_review_candidates.csv`，不得重新调用
   `build_causal_review_candidates()`，不得通过 `ranked_features.csv`、
   `secondary_candidate_context.csv`、`model_discovered_candidates.csv` 或
   `preprocessing_comparison.csv` 重新生成 / 扩大候选池；非 active branch
@@ -604,7 +604,7 @@ run_causal_review_for_active_branch(
   不得写入该文件；
 - `causal_review_candidates.csv::lag` 与 `ranked_features.csv::lag` 继续表示
   历史初筛证据。正式 active-branch runner 以 `prefer_ranked_lag=True` 将内存
-  causal ranked lag view 传入三级复核；conditional `ranked_window` 必须直接
+  causal ranked lag view 传入可信度审查；conditional `ranked_window` 必须直接
   使用该 view 的 lag（包括缺失），不得回退候选表中的历史 lag。standalone
   `run_causal_review_stage()` 默认保持候选表 lag 优先；
 - `top_n=None`（默认）时把正式候选全量传入现有 `run_causal_review_stage()`，
@@ -620,7 +620,7 @@ run_causal_review_for_active_branch(
   显式 `control_columns` 时以
   causal helper 的 `protected_columns=resolved_control_columns`
   保护控制列，不修改其算法；
-- control columns 解析保持现有三级复核行为：显式 `control_columns` → 否则
+- control columns 解析保持现有可信度审查行为：显式 `control_columns` → 否则
   `config.residual_control_columns` → 否则 `config.capacity_columns` → 否则
   `[]`；显式空列表保持“无控制列”语义，不得回退 config；必要时复用现有
   excluded-column 校验 helper，不得自动识别新的控制变量；
@@ -630,9 +630,10 @@ run_causal_review_for_active_branch(
 - signed lag 保持方向：正式 runner 使用 `ranked_features.csv` 的真实
   signed lag，不得使用 `abs(lag)` / `abs(best_lag)` / `abs(granger_lag)`
   把负 lag 转正；
-- 成功执行仅写现有四个三级输出：`conditional_granger_scores.csv`、
+- 成功执行仅写现有四个可信度审查输出：`conditional_granger_scores.csv`、
   `causal_review_report.csv`、`causal_review_evidence.csv`、
-  `final_review_summary.csv`，字段与 schema 保持现有实现，不得新增
+  `final_review_summary.csv`；既有核心字段名和语义保持兼容，新增的解释字段遵循本节
+  下方契约，不得新增
   `causal_score.csv` / `combined_score.csv` / `final_rank.csv` 等综合评分
   文件；
 - optional evidence（`enhanced_validation_summary.csv`、
@@ -640,21 +641,33 @@ run_causal_review_for_active_branch(
   从 `output_dir` 可选读取：存在 → 作为已执行辅助证据；缺失 → 保持
   缺失/未执行语义，不得自动运行对应阶段，不得用 `0.0` /
   `unsupported` / negative evidence 冒充“未执行”；
-- 三级复核不得改写任何正式初筛文件：执行前后 `ranked_features.csv` /
+- 可信度审查不得改写任何正式初筛文件：执行前后 `ranked_features.csv` /
   `recommended_candidates.csv` / `causal_review_candidates.csv` /
   `risk_flags.csv` byte-identical，`final_score` / `driver_rank` / Top-K /
-  初筛推荐顺序不变；final review 只是后续复核结果，不成为新的“初筛排名”；
-- 三级复核作为第一个 downstream stage 时创建 `screening_downstream.lock`；
+  初筛推荐顺序不变；可信度审查只是后续解释结果，不成为新的“初筛排名”；
+- 第三层可信度审查作为第一个 downstream stage 时创建 `screening_downstream.lock`；
   已有 lock（Enhanced / Granger / Model 先运行）后仍可执行，不得报
-  `initial_screening_run_locked`；三级复核运行后 branch 不可切换
+  `initial_screening_run_locked`；可信度审查运行后 branch 不可切换
   （`initial_screening_branch_locked`）；
 - `awaiting_confirmation` 明确拒绝 `initial_screening_branch_not_confirmed`，
   context 缺失 / 非法保持
   `initial_screening_context_missing` / `initial_screening_context_invalid`，
   均不得 fallback；
-- 三级复核不自动调用增强筛选、普通 Granger、模型或 XGBoost 阶段，阶段保持
+- 可信度审查不自动调用增强筛选、普通 Granger、模型或 XGBoost 阶段，阶段保持
   独立；XGBoost 正式 branch/context 与 fold preprocessing isolation
   （PR-12）已实现，Web/API/CLI 双分支工作流总接入（PR-13）已完成。
+
+第三层字段只承载解释性证据。`causal_review_evidence.csv` 与
+`final_review_summary.csv` 中的 `independent_predictive_support`、
+`confounder_assessment`、`control_relation_assessment`、`statistical_limitation`、
+`direction_assessment` 分别说明独立预测支持、混杂风险、控制关系、统计限制和带符号滞后
+方向；这些解释字段不参与任何评分或排序计算，尤其不得参与 `final_score`、`driver_rank`、
+Top-K 或第一层排序。
+
+历史兼容字段 `evidence_score`、`final_rank`、`final_recommendation` 继续保留其 CSV/API
+字段名和既有第三层展示/下游兼容行为，但绝不是第一层评分或排序依据；不得新增
+`third_score`、`review_score`、`causal_score` 或其他综合评分字段。缺失、未执行、不可计算
+和真实 `0.0` 继续以原有字段和状态区分，不得由第三层解释字段伪造结论。
 
 ## XGBoost 正式 fold-safe 有效样本与审计字段契约（PR-12）
 

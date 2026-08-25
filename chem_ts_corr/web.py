@@ -1418,7 +1418,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
-        "message": "三层复核完成：结果仅为预测验证/人工复核建议，不是因果结论。",
+        "message": "第三层可信度审查完成：结果用于解释独立预测贡献及其限制，不是因果结论，也不改变初筛结果。",
         **_branch_context_payload(output_dir),
     }
 
@@ -3501,7 +3501,7 @@ INDEX_HTML = r"""<!doctype html>
               </details>
             </label>
             <div class="row">
-              <label>三层复核候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
+              <label>可信度审查候选数量<input id="causalTopN" type="number" min="1" max="1000" placeholder="可留空"></label>
               <label>风险标签包含过滤<input id="riskFlagFilter" placeholder="如 共同负荷驱动，留空表示不过滤"></label>
             </div>
           </div>
@@ -3529,7 +3529,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button active" role="tab" aria-selected="true" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="0">初步分析</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">三层复核</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">可信度审查</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">四级验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
@@ -3573,7 +3573,7 @@ INDEX_HTML = r"""<!doctype html>
 
       <div id="trendTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-trendTab" hidden>
         <h2>趋势图</h2>
-        <div id="trendReviewHint" class="help">点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。</div>
+        <div id="trendReviewHint" class="help">点击可信度审查摘要中的“查看趋势”后显示候选变量审查提示。</div>
         <div class="chart-controls">
           <label>数据 1<select id="trendVar1"></select></label>
           <label>数据 2<select id="trendVar2"></select></label>
@@ -3702,11 +3702,11 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
-        <h2>三层复核</h2>
+        <h2>第三层可信度审查</h2>
         <div class="help">
-          <span>所有结果仅作为“预测验证/人工复核建议”，不是因果结论。正式三级候选来自已发布初筛的 causal_review_candidates.csv；风险标签包含过滤仅用于结果展示，不改变正式三级候选。</span>
-          <span>三层复核支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
-          <span>高共线性和共同负荷风险不等于变量无效。对于统计证据支持较强的候选，平台会保留工程复核建议，同时标记统计检验受限。</span>
+          <span>本层是可信度审查：解释第二层预测价值是否可能受共同驱动、控制响应或统计限制影响；不是因果结论，也不改变初筛评分或排序。正式第三层候选来自已发布初筛的 causal_review_candidates.csv；风险标签包含过滤仅用于结果展示，不改变正式候选。</span>
+          <span>可信度审查支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
+          <span>高共线性和共同负荷风险不等于变量无效。对于统计证据支持较强的候选，平台会保留工程审查建议，同时标记统计检验受限。</span>
         </div>
         <div class="causal-review-params">
           <label>条件Granger滞后模式
@@ -3721,21 +3721,21 @@ INDEX_HTML = r"""<!doctype html>
           <label>条件Granger baseline 最大滞后<input id="conditionalBaselineMaxlag" type="number" min="1" value="24"></label>
         </div>
         <div class="actions">
-          <button id="runCausalReview" disabled>运行三层复核</button>
+        <button id="runCausalReview" disabled>运行可信度审查</button>
         </div>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>最终推荐摘要</h2>
-        <div class="help">该表基于逐变量综合证据复核表生成，用于给出人工复核优先级清单。结果仍是预测验证和复核建议，不是因果结论。请优先按“最终排序”查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
+        <h2>可信度审查摘要</h2>
+        <div class="help">该表基于逐变量可信度审查证据生成，用于解释独立预测贡献、混杂风险、控制关系和统计限制。结果不是因果结论，也不改变初筛评分、排序或 Top-K。复核展示序号仅便于查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
         <div class="download-buttons" id="finalReviewSummaryDownload"></div>
-        <h3>最终推荐结果质检总览</h3>
+        <h3>可信度审查概览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
-        <div id="finalReviewSummaryTable" class="empty">未运行 最终推荐摘要。</div>
-        <h2>逐变量综合证据复核表</h2>
-        <div class="help">逐变量综合证据复核表会整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签。对于高共线性、共同负荷等统计限制，若统计证据支持较强，平台会保留工程复核建议并标记统计受限。该表仍不是因果结论。</div>
+        <div id="finalReviewSummaryTable" class="empty">未运行 可信度审查摘要。</div>
+        <h2>逐变量可信度审查证据表</h2>
+        <div class="help">该表整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签，用于判断预测价值的独立性及其混杂、控制关系和统计限制。对于高共线性、共同负荷等限制，平台会保留工程审查建议并标记限制。该表不是因果结论，也不改变初筛结果。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
-        <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量综合证据复核表。</div>
+        <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量可信度审查证据表。</div>
       </div>
 
 
@@ -4613,7 +4613,7 @@ async function runModel() {
 async function runCausalReview() {
   if (!currentRunId) return setStatus("请先完成主筛查。");
   const startedAt = performance.now();
-  const timerId = startStatusTimer("正在运行三层复核：结果仅为预测验证/人工复核建议，不是因果结论...", startedAt);
+  const timerId = startStatusTimer("正在运行可信度审查：解释预测价值的独立性及其限制，不是因果结论...", startedAt);
   el("runCausalReview").disabled = true;
   closeDetailModal();
   try {
@@ -4646,7 +4646,7 @@ async function runCausalReview() {
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
     updateXgbRunAvailability();
-    setStatus(appendElapsed(data.message || "三层复核完成。结果不是因果结论。", startedAt), "success");
+    setStatus(appendElapsed(data.message || "可信度审查完成。结果不是因果结论，也不改变初筛结果。", startedAt), "success");
   } catch (error) {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
@@ -4668,7 +4668,7 @@ async function runXgbValidation() {
     return;
   }
   if (!currentRunId || !lastFinalReviewSummaryRows.length) {
-    el("xgbStatus").textContent = "请先完成三层复核。";
+    el("xgbStatus").textContent = "请先完成可信度审查。";
     return;
   }
   const startedAt = performance.now();
@@ -4920,7 +4920,7 @@ const termsHelpRows = [
   { category: "参数设置说明", name: "自定义下限 / 自定义上限", signal: "工况分段或过滤时使用的自定义上下限。", reading: "会限定参与对比的运行区间，影响稳定性和风险标签判断。", action: "用装置负荷区间、牌号或操作窗口确定上下限。" },
   { category: "参数设置说明", name: "残差控制列", signal: "在残差相关或条件验证中需要控制的变量。", reading: "用于减弱共同负荷、已知干扰或强共线变量的影响。", action: "填入负荷、设定值、关键上游扰动等已知控制因素。" },
   { category: "参数设置说明", name: "强制复核变量", signal: "即使未进入主排序前列也要纳入复核的变量。", reading: "扩展复核范围，适合业务重点变量或专家指定变量。", action: "只加入有明确工艺理由的点位，避免复核清单过长。" },
-  { category: "参数设置说明", name: "三层复核候选数量", signal: "进入最终三层复核的候选变量数量。", reading: "数量越大覆盖越广但计算和人工解释成本越高。", action: "先用默认数量快速定位，再按需要扩大范围。" },
+  { category: "参数设置说明", name: "可信度审查候选数量", signal: "进入第三层可信度审查的候选变量数量。", reading: "数量越大覆盖越广但计算和人工解释成本越高。", action: "先用默认数量快速定位，再按需要扩大范围。" },
   { category: "参数设置说明", name: "风险标签包含过滤", signal: "按风险标签文本筛选复核或推荐结果。", reading: "只改变页面查看和复核聚焦范围，不表示未显示变量没有风险。", action: "用于定位共同负荷、数据质量等特定问题，留空表示不过滤。" },
   { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
   { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
@@ -4929,7 +4929,7 @@ const termsHelpRows = [
   { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
   { category: "证据等级与复核建议", name: "强预测证据", signal: "相关、模型提升、预测贡献、稳定性等多类证据同时较好。", reading: "该变量对预测目标有较稳定信息量，但仍不是因果结论。", action: "进入优先复核，结合机理、趋势和现场操作记录确认。" },
   { category: "证据等级与复核建议", name: "风险受限证据", signal: "统计证据较强，但伴随共线性、共同负荷或数据质量等限制。", reading: "变量可能重要，但证据解释需要更谨慎。", action: "保留观察，先排除风险来源，再决定是否用于工程复核。" },
-  { category: "证据等级与复核建议", name: "优先复核", signal: "综合排序或最终推荐摘要中优先级较高。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
+  { category: "证据等级与复核建议", name: "优先复核", signal: "可信度审查中独立预测支持较强且限制较少。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
   { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
   { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
   { category: "滞后与方向解释", name: "变量滞后目标", signal: "最佳 lag 为负，变量变化晚于目标。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
@@ -7032,6 +7032,11 @@ function renderSingleVariableReview(row) {
     "data_priority",
     "evidence_level",
     "evidence_score",
+    "independent_predictive_support",
+    "confounder_assessment",
+    "control_relation_assessment",
+    "statistical_limitation",
+    "direction_assessment",
     "statistical_limit_level",
     "risk_constraint_level",
     "screening_grade",
@@ -7093,7 +7098,7 @@ function renderSingleVariableReview(row) {
   return `
     <div class="review-card">
       <h3>变量：${escapeHtml(displayCellValue("variable", row.variable))}</h3>
-      <p>该卡片汇总该变量在主筛查、验证和综合复核中的证据，仅用于人工复核。</p>
+      <p>该卡片汇总该变量在主筛查、验证和可信度审查中的证据，用于解释独立预测贡献及其混杂、控制和统计限制；不改变初筛结果。</p>
       <div class="metric-grid">${metrics}</div>
       <h4>证据来源清单</h4>
       <div class="metric-grid">${evidenceHtml}</div>
@@ -7282,8 +7287,8 @@ function missingText(targetId) {
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示遗漏探索线索。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
-  if (targetId === "finalReviewSummaryTable") return "未运行 最终推荐摘要。";
-  if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量综合证据复核表。";
+  if (targetId === "finalReviewSummaryTable") return "未运行 可信度审查摘要。";
+  if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量可信度审查证据表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
@@ -7378,6 +7383,11 @@ const FINAL_SUMMARY_CORE_COLUMNS = [
   "data_priority",
   "evidence_level",
   "evidence_score",
+  "independent_predictive_support",
+  "confounder_assessment",
+  "control_relation_assessment",
+  "statistical_limitation",
+  "direction_assessment",
   "statistical_limit_level",
   "risk_constraint_level",
 ];
@@ -7403,6 +7413,7 @@ function finalReviewSummaryColumns() {
 function finalReviewSummaryDetailColumns(row) {
   const preferred = [
     "final_rank", "variable", "final_decision", "data_priority", "evidence_level", "evidence_score",
+    "independent_predictive_support", "confounder_assessment", "control_relation_assessment", "statistical_limitation", "direction_assessment",
     "statistical_limit_level", "risk_constraint_level", "main_reason", "suggested_next_action",
     "evidence_conflict_explanation", "interpretation_boundary", "screening_grade", "screening_score",
     "screening_lag", "conditional_status", "conditional_best_lag", "tested_lags", "lag_boundary_hint",
@@ -7430,11 +7441,11 @@ function finalSummaryValue(row, column) {
 }
 
 function causalReviewEvidenceColumns() {
-  return ["variable", "candidate_grade", "final_score", "data_priority", "evidence_score", "evidence_level", "statistical_limit_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "statistical_limit_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
+  return ["variable", "candidate_grade", "final_score", "data_priority", "evidence_score", "evidence_level", "independent_predictive_support", "confounder_assessment", "control_relation_assessment", "statistical_limitation", "direction_assessment", "statistical_limit_level", "risk_constraint_level", "integrated_review_decision", "integrated_review_reason", "statistical_limit_reason", "evidence_reason", "conditional_granger_status", "conditional_fdr_q_value", "predictive_contribution", "model_lift", "rolling_stability", "model_importance_rank", "risk_flags", "interpretation"];
 }
 
 
-const causalEvidenceCoreColumns = () => ["variable", "candidate_grade", "final_score", "data_priority", "evidence_level", "evidence_score", "integrated_review_decision"];
+const causalEvidenceCoreColumns = () => ["variable", "candidate_grade", "final_score", "data_priority", "evidence_level", "independent_predictive_support", "confounder_assessment", "statistical_limitation", "integrated_review_decision"];
 
 function causalEvidenceDetailColumns(row) {
   const core = new Set(causalEvidenceCoreColumns());
@@ -7447,7 +7458,7 @@ function renderCausalReviewEvidenceTable(rows) {
     rows,
     coreColumns: causalEvidenceCoreColumns(),
     detailColumns: causalEvidenceDetailColumns,
-    modalTitle: (row) => `逐变量综合证据复核表：${displayCellValue("variable", row.variable)}`,
+    modalTitle: (row) => `逐变量可信度审查证据表：${displayCellValue("variable", row.variable)}`,
   });
 }
 
@@ -7797,7 +7808,28 @@ function formatValue(value) {
       not_recommended: "暂不推荐",
       insufficient_evidence: "证据不足",
       manual_review_only: "仅人工复核",
-      "final review summary only": "仅作最终复核摘要",
+      "confounder review summary only": "仅作可信度审查摘要",
+      supported: "独立预测支持",
+      supported_without_positive_contribution: "独立预测支持但增量不为正",
+      limited_by_collinearity: "独立预测受共线性限制",
+      limited_by_lag_fallback: "独立预测受滞后回退限制",
+      not_computed: "未计算",
+      not_assessed: "未审查",
+      formula_relation_risk: "公式关系风险",
+      common_driver_risk: "共同驱动风险",
+      shared_signal_risk: "共享信号风险",
+      no_flagged_confounder: "未标记混杂风险",
+      control_reference: "控制变量参考",
+      formula_coupled_reference: "公式耦合参考",
+      possible_control_response: "可能控制响应",
+      shared_capacity_or_control_context: "共同负荷或控制背景",
+      no_control_relation_flagged: "未标记控制关系",
+      no_flagged_statistical_limitation: "未标记统计限制",
+      weak_statistical_limitation: "弱统计限制",
+      medium_statistical_limitation: "中等统计限制",
+      strong_statistical_limitation: "强统计限制",
+      variable_leads_target: "变量领先目标",
+      zero_lag: "零滞后",
       strong_screening_but_statistical_limited: "强筛查信号但统计受限",
       strong_screening_but_conditional_weak: "强筛查信号但条件验证弱",
       conditional_supported_but_screening_weak: "条件验证支持但主筛查较弱",
@@ -7833,10 +7865,11 @@ function formatValue(value) {
     };
     if (map[value]) return map[value];
     if (value === "enhanced screening only; not a causal conclusion") return "仅作增强筛查；不是因果结论";
-    if (value.startsWith("predictive validation only; not a causal conclusion")) return "仅作预测验证；不是因果结论；解析式 p/q 值不能完全消除工业时序自相关影响";
+    if (value.startsWith("confounder review of predictive evidence only; not a causal conclusion")) return "仅作可信度审查；不是因果结论；解析式 p/q 值不能完全消除工业时序自相关影响";
     if (value === "model explanation only; not a causal conclusion") return "仅作模型解释；不是因果结论";
     if (value === "model discovery exploration only; not a validation conclusion or causal conclusion") return "仅作模型遗漏探索；不是验证结论或因果结论";
-    if (value === "final review summary only; not a causal conclusion") return "仅作最终复核摘要；不是因果结论";
+    if (value === "confounder review evidence only; not a causal conclusion") return "仅作可信度审查证据；不是因果结论";
+    if (value === "confounder review summary only; not a causal conclusion") return "仅作可信度审查摘要；不是因果结论";
     return value
       .split(/[;,，；]/)
       .map((item) => {
@@ -8009,12 +8042,12 @@ function columnLabel(column) {
     review_tier: "复核层级",
     review_priority: "复核优先级",
     review_reason: "复核原因",
-    final_review_decision: "最终复核建议",
-    final_review_reason: "最终复核原因",
+    final_review_decision: "可信度审查建议",
+    final_review_reason: "可信度审查原因",
     conditional_granger_status: "条件Granger状态",
-    final_rank: "最终排序",
-    final_recommendation: "最终建议",
-    final_decision: "最终建议",
+    final_rank: "复核展示序号（不影响初筛）",
+    final_recommendation: "可信度审查建议",
+    final_decision: "可信度审查建议",
     key_reason: "主要原因",
     main_reason: "主要原因",
     suggested_next_action: "建议下一步",
@@ -8037,11 +8070,16 @@ function columnLabel(column) {
     statistical_limit_level: "统计限制等级",
     statistical_limit_reason: "统计限制原因",
     risk_constraint_level: "风险约束等级",
-    integrated_review_decision: "综合复核建议",
-    integrated_review_reason: "综合复核原因",
+    integrated_review_decision: "可信度审查建议",
+    integrated_review_reason: "可信度审查原因",
+    independent_predictive_support: "独立预测贡献审查",
+    confounder_assessment: "混杂风险审查",
+    control_relation_assessment: "控制关系审查",
+    statistical_limitation: "统计限制审查",
+    direction_assessment: "方向审查（带符号滞后）",
     model_importance_rank: "模型重要性排名",
     model_explanation_support: "模型解释支持",
-    causalReviewEvidence: "逐变量综合证据复核表",
+    causalReviewEvidence: "逐变量可信度审查证据表",
     best_model_feature: "最强模型特征",
     best_model_lag: "最强模型滞后",
     max_importance: "最大重要性",
@@ -8196,7 +8234,7 @@ function reset() {
   el("table").textContent = "上传数据并点击“开始分析”后显示结果。";
   el("trendChart").className = "chart empty";
   el("trendChart").textContent = "选择 1 到 4 个数据后点击“显示趋势”。";
-  el("trendReviewHint").textContent = "点击最终推荐摘要中的“查看趋势”后显示候选变量复核提示。";
+  el("trendReviewHint").textContent = "点击可信度审查摘要中的“查看趋势”后显示候选变量审查提示。";
   el("trendLegend").innerHTML = "";
   clearTrendStats();
   clearScatterMatrix();
@@ -8222,9 +8260,9 @@ function reset() {
   el("enhancedRollingTable").textContent = "点击“运行增强筛选”后显示滚动稳定性评分。";
   resetOptionalTable("conditionalGrangerTable", "未运行 条件 Granger 预测验证。");
   clearOptionalElement("finalReviewQualityOverview");
-  resetOptionalTable("finalReviewSummaryTable", "未运行 最终推荐摘要。");
+  resetOptionalTable("finalReviewSummaryTable", "未运行 可信度审查摘要。");
   closeDetailModal();
-  resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量综合证据复核表。");
+  resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量可信度审查证据表。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
   clearOptionalElement("xgbRunSummary");

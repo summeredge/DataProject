@@ -8,7 +8,7 @@ import pandas as pd
 from chem_ts_corr.common import to_float
 
 
-INTERPRETATION = "final review summary only; not a causal conclusion"
+INTERPRETATION = "confounder review summary only; not a causal conclusion"
 
 SUMMARY_COLUMNS = [
     "final_rank",
@@ -32,6 +32,11 @@ SUMMARY_COLUMNS = [
     "evidence_conflict_type",
     "evidence_conflict_reason",
     "interpretation",
+    "independent_predictive_support",
+    "confounder_assessment",
+    "control_relation_assessment",
+    "statistical_limitation",
+    "direction_assessment",
 ]
 
 _DECISION_ORDER = {
@@ -47,25 +52,25 @@ _DECISION_ORDER = {
 _DATA_PRIORITY_ORDER = {"high": 1, "medium": 2, "low": 3}
 
 _KEY_REASONS = {
-    "priority_review": "多证据支持，建议优先复核。",
-    "priority_review_with_statistical_limit": "数据证据强，但统计检验受限，建议优先复核。",
-    "secondary_review": "存在预测线索，建议二级复核。",
-    "secondary_review_with_statistical_limit": "存在预测线索，但受统计限制，建议二级复核。",
-    "risk_limited_review": "存在风险约束，仅限人工复核参考。",
+    "priority_review": "独立预测支持较强，建议优先进行可信度审查。",
+    "priority_review_with_statistical_limit": "独立预测支持较强，但统计检验受限，建议优先进行可信度审查。",
+    "secondary_review": "存在预测线索，建议后续进行可信度审查。",
+    "secondary_review_with_statistical_limit": "存在预测线索，但受统计限制，建议后续进行可信度审查。",
+    "risk_limited_review": "存在风险约束，仅限人工可信度审查参考。",
     "manual_review_only": "证据不完整或风险较高，仅建议人工查看。",
-    "insufficient_evidence": "当前证据不足，可增加数据后复核。",
-    "not_recommended": "当前证据不足，不建议优先复核。",
+    "insufficient_evidence": "当前证据不足，可增加数据后进行可信度审查。",
+    "not_recommended": "当前证据不足，不建议优先进行可信度审查。",
 }
 
 _NEXT_ACTIONS = {
-    "priority_review": "优先核查工艺机理、操作方向、滞后时间和上下游关系。",
-    "priority_review_with_statistical_limit": "优先核查，但需重点检查共线性、共同负荷或滞后边界导致的统计限制。",
-    "secondary_review": "作为二级候选，结合工艺流程和趋势图进一步确认。",
-    "secondary_review_with_statistical_limit": "作为二级候选，优先检查统计限制来源，再判断是否保留。",
-    "risk_limited_review": "仅作风险受限复核，需先排查共同负荷、稳定性或数据质量问题。",
-    "manual_review_only": "仅人工查看，不建议直接进入优先候选。",
-    "insufficient_evidence": "证据不足，可增加数据量或调整滞后参数后复核。",
-    "not_recommended": "当前不建议优先复核。",
+    "priority_review": "优先核查共同驱动、控制响应、工艺方向、滞后时间和上下游关系。",
+    "priority_review_with_statistical_limit": "优先核查，并重点检查共线性、共同负荷或滞后边界导致的统计限制。",
+    "secondary_review": "结合工艺流程和趋势图继续审查其独立预测贡献。",
+    "secondary_review_with_statistical_limit": "优先检查统计限制来源，再判断独立预测贡献是否可解释。",
+    "risk_limited_review": "仅作风险受限审查，先排查共同负荷、控制关系、稳定性或数据质量问题。",
+    "manual_review_only": "仅人工查看，不建议直接作为优先候选。",
+    "insufficient_evidence": "证据不足，可增加数据量或调整滞后参数后重新审查。",
+    "not_recommended": "当前不建议优先进行可信度审查。",
 }
 
 _ROLE_HINTS = {
@@ -81,7 +86,12 @@ def build_final_review_summary(
     conditional_granger_scores: pd.DataFrame | None = None,
     ranked_features: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Build an engineer-facing manual review priority list from evidence rows."""
+    """Build an engineer-facing third-layer confounder-review summary.
+
+    ``final_rank`` and ``final_recommendation`` are retained legacy output
+    fields.  They describe only third-layer display and downstream compatibility;
+    they never change ``final_score``, ``driver_rank``, or first-layer Top-K.
+    """
     evidence = causal_review_evidence.copy(deep=True) if causal_review_evidence is not None else pd.DataFrame()
     conditional = conditional_granger_scores.copy(deep=True) if conditional_granger_scores is not None else pd.DataFrame()
     ranked = ranked_features.copy(deep=True) if ranked_features is not None else pd.DataFrame()
@@ -121,6 +131,11 @@ def build_final_review_summary(
             "evidence_conflict_type": conflict_type,
             "evidence_conflict_reason": conflict_reason,
             "interpretation": INTERPRETATION,
+            "independent_predictive_support": _text(source.get("independent_predictive_support")),
+            "confounder_assessment": _text(source.get("confounder_assessment")),
+            "control_relation_assessment": _text(source.get("control_relation_assessment")),
+            "statistical_limitation": _text(source.get("statistical_limitation")),
+            "direction_assessment": _text(source.get("direction_assessment")),
         }
         if include_role:
             role = _role_for(rank_row)
@@ -133,6 +148,8 @@ def build_final_review_summary(
     out["_priority_order"] = out["data_priority"].map(_DATA_PRIORITY_ORDER).fillna(99)
     out["_evidence_sort"] = pd.to_numeric(out["evidence_score"], errors="coerce").fillna(-math.inf)
     out["_screening_sort"] = pd.to_numeric(out["screening_score"], errors="coerce").fillna(-math.inf)
+    # Preserve the legacy third-layer display order for schema and downstream
+    # compatibility.  This order is never written back to the first layer.
     out = out.sort_values(
         ["_decision_order", "_priority_order", "_evidence_sort", "_screening_sort"],
         ascending=[True, True, False, False],
@@ -161,7 +178,7 @@ def _index_by_variable(frame: pd.DataFrame) -> dict[str, dict[str, Any]]:
 
 
 def _key_reason(decision: str, row: pd.Series) -> str:
-    base = _KEY_REASONS.get(decision, "当前证据不足，不建议优先复核。")
+    base = _KEY_REASONS.get(decision, "当前证据不足，不建议优先进行可信度审查。")
     details = [_text(row.get(col)) for col in ["integrated_review_reason", "evidence_reason", "statistical_limit_reason"]]
     details = [d for d in details if d]
     return base if not details else f"{base} 依据：{'; '.join(details[:2])}"

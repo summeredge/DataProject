@@ -35,11 +35,12 @@ def run_causal_review_stage(
     target_mask: pd.Series | None = None,
     prefer_ranked_lag: bool = False,
 ) -> dict[str, pd.DataFrame]:
-    """Run the standalone v0.4 causal-review stage.
+    """Run the standalone third-layer confounder-review stage.
 
     This runner intentionally stays independent from the v0.3 pipeline and
-    Web/UI. It produces predictive-validation evidence for manual review only;
-    it does not claim final causality.
+    Web/UI. It explains independent predictive support, confounders, control
+    relations, and statistical limits for manual review only; it does not claim
+    final causality or modify first-layer ranking.
     """
     selected_candidates = _select_candidates(causal_review_candidates, top_n=top_n)
     variables = _candidate_variables(selected_candidates)

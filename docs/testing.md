@@ -77,7 +77,7 @@
 
 历史兼容测试覆盖：`poor_data_quality` 与旧 `poor_quality` 分类、旧推荐用途或旧
 `medium` 风险等级并存时，仍只作为普通质量提示；精确
-`severe_data_quality` 才触发综合复核硬降级和 XGBoost 自动排除。排名基线的质量风险
+`severe_data_quality` 才触发可信度审查硬降级和 XGBoost 自动排除。排名基线的质量风险
 及 A/B 风险计数按唯一变量断言，重复行不得重复计数。
 
 ## Raw 主筛查回归基线测试
@@ -260,7 +260,7 @@
 - downstream 开始前允许 raw → processed 切换；存在
   `screening_downstream.lock` 后切换必须拒绝
   `initial_screening_branch_locked`；
-- `awaiting_confirmation` 时增强筛选 / Granger / Model / 三级复核 /
+- `awaiting_confirmation` 时增强筛选 / Granger / Model / 可信度审查 /
   XGBoost 五个 Web endpoint 全部明确阻断（`initial_screening_branch_not_confirmed`），
   不得自动 Raw fallback；
 - 五个 downstream Web endpoint 与 CLI `run-*` 命令只调用对应
@@ -271,7 +271,7 @@
   `_load_secondary_candidate_context(` 用于正式执行；
 - XGB Web API 走 `run_xgb_for_active_branch()` fold-safe 路径，不再使用
   `_prepared_frame_for_validation() + run_xgb_analysis()`；
-- 三级复核运行前后 `causal_review_candidates.csv` byte-identical，
+- 可信度审查运行前后 `causal_review_candidates.csv` byte-identical，
   `risk_flag_filter` 只过滤展示结果；
 - UI 静态契约：`awaiting_confirmation` 时 downstream 按钮禁用并提示
   “请先确认正式初筛分支。”；`confirmed/not_required` 时启用；
@@ -313,7 +313,7 @@
   不调用 legacy 回顾性 helper；future suffix 变化不得改变既有 prefix，
   predictor 缺失不得使用未来值做双向插值；
 - Enhanced 强制禁止复用 ranked lag evidence；Model 对全部实际候选重算
-  causal signed lag；三级复核只接收内存 causal ranked lag view，初筛 CSV
+  causal signed lag；可信度审查只接收内存 causal ranked lag view，初筛 CSV
   仍 byte-identical；
 - Raw workflow（`not_required`）下两个入口可直接运行并使用 `raw`；
 - context 是 source of truth：调用方传入冲突的 `preprocess_mode` /
@@ -377,29 +377,29 @@
   `initial_screening_context_missing` / `initial_screening_context_invalid`；
 - SHAP 不可用时仍可运行并产出 `random_forest_feature_importance`，不得让
   正式 runner 失败；
-- 只执行模型时不得自动生成 conditional Granger、causal/final review、
+- 只执行模型时不得自动生成 conditional Granger、可信度审查、
   XGBoost 等未执行阶段文件；
 - 正式 runner 源码不得使用 `abs(lag)` / `abs(best_lag)`，不得读取
   `screening_branches/` 构造候选。
 
-## PR-11 Conditional Granger / Causal Review / Final Review 正式 branch/context 测试边界
+## PR-11 Conditional Granger / 可信度审查正式 branch/context 测试边界
 
-`tests/test_pr11_active_branch_causal_review.py` 覆盖正式三级复核 backend
+`tests/test_pr11_active_branch_causal_review.py` 覆盖正式第三层可信度审查 backend
 入口（`run_causal_review_for_active_branch()`）：
 
 - `awaiting_confirmation` 时拒绝 `initial_screening_branch_not_confirmed`，
-  不生成四个三级输出、不创建 `screening_downstream.lock`；
-- `selected_preprocessing_mode = lowpass_diff` 但确认 Raw 时三级实际收到
+  不生成四个第三层输出、不创建 `screening_downstream.lock`；
+- `selected_preprocessing_mode = lowpass_diff` 但确认 Raw 时第三层实际收到
   `preprocess_mode = raw`，不得使用 selected 模式；
 - 确认 Processed 时 `preprocess_mode` / `lowpass_tau_minutes` /
   `diff_interval_minutes` / `resample_rule` 与 context 一致；
 - context 是 source of truth：调用方冲突的 preprocessing config 不得覆盖
   active 模式与 context 参数；
-- 正式三级候选唯一来自 root `causal_review_candidates.csv`，不得从
+- 正式第三层候选唯一来自 root `causal_review_candidates.csv`，不得从
   ranked / secondary candidate context / 非 active branch /
   model discovered candidates 重新生成或扩大；执行前后
   `causal_review_candidates.csv` byte-identical；
-- 正式三级复核显式启用 causal ranked-lag precedence：候选表历史 lag 为 20、
+- 正式第三层审查显式启用 causal ranked-lag precedence：候选表历史 lag 为 20、
   内存 causal lag 为 2 时 ranked-window 为 `[1, 2, 3]`；causal lag 缺失时沿用
   `fallback_missing_ranked_lag`，不得回退历史 lag。standalone 默认仍保持
   候选表 lag 优先；
@@ -419,28 +419,31 @@
 - 运行前后 `ranked_features.csv` / `recommended_candidates.csv` /
   `causal_review_candidates.csv` / `risk_flags.csv` byte-identical，
   `final_score` / `driver_rank` / 候选顺序不变；
-- 成功执行只生成四个三级输出
+- 成功执行只生成四个可信度审查输出
   （`conditional_granger_scores.csv`、`causal_review_report.csv`、
   `causal_review_evidence.csv`、`final_review_summary.csv`），不新增综合
   score/rank 文件，不生成其他阶段文件；
-- optional evidence 缺失时三级仍可执行，不自动运行对应前置阶段；已有
+- optional evidence 缺失时可信度审查仍可执行，不自动运行对应前置阶段；已有
   optional evidence（`enhanced_validation_summary.csv`、
   `model_variable_importance.csv` 等）可被现有 stage 从 `output_dir`
   读取，`pipeline.py` 不复制 optional evidence 读取逻辑；
-- 三级作为第一个 downstream stage 时创建 lock；已有 lock（增强筛选 /
-  Granger / Model 先运行）后三级仍可运行；三级运行后切换 branch 必须拒绝
+- 可信度审查作为第一个 downstream stage 时创建 lock；已有 lock（增强筛选 /
+  Granger / Model 先运行）后可信度审查仍可运行；可信度审查运行后切换 branch 必须拒绝
   `initial_screening_branch_locked`；
 - 正式 root 缺少四个必需输入中任一文件时失败
-  `initial_screening_formal_output_missing`，不创建 lock、不生成三级输出、
+  `initial_screening_formal_output_missing`，不创建 lock、不生成可信度审查输出、
   不读 branch 目录；context 缺失 / JSON 非法 / 状态非法分别失败
   `initial_screening_context_missing` / `initial_screening_context_invalid`；
-- 只执行三级复核时不得自动生成 Enhanced / ordinary Granger / Model /
+- 只执行可信度审查时不得自动生成 Enhanced / ordinary Granger / Model /
   XGBoost 等未执行阶段文件；
 - 正式 runner 源码约束：不得包含 `_save_secondary_candidate_context` /
   `_load_secondary_candidate_context` / `_build_causal_review_candidate_table`
   / `build_causal_review_candidates` / `screening_branches` /
   `preprocessing_comparison.csv` / `model_discovered_candidates` /
   `final_score >= 0.30` / `abs(lag` / `abs(best_lag`。
+- 可信度审查输出的解释字段（独立预测支持、混杂风险、控制关系、统计限制和方向审查）变化时，
+  `ranked_features.csv` 必须 byte-identical，`final_score`、`driver_rank`、Top-K 和初筛
+  推荐顺序不变；解释字段不得成为初筛排序或评分输入。
 
 ## 二级验证优化回归边界（Task-V1 ~ V7）
 
@@ -466,7 +469,7 @@
 - `awaiting_confirmation` 拒绝 `initial_screening_branch_not_confirmed`，
   不生成 `xgb_validation/`、不创建 `screening_downstream.lock`；
 - 缺失 `final_review_summary.csv` 明确失败
-  `initial_screening_formal_output_missing`，不自动运行三级复核；
+  `initial_screening_formal_output_missing`，不自动运行可信度审查；
 - 确认 Raw 优先于 `selected_preprocessing_mode`；确认 Processed 时
   `preprocess_mode` / `lowpass_tau_minutes` / `diff_interval_minutes` /
   `resample_rule` 与 context 一致；caller config 不得覆盖 context；

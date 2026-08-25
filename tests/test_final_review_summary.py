@@ -98,6 +98,31 @@ def test_interpretation_is_fixed():
     assert set(out["interpretation"]) == {INTERPRETATION}
 
 
+def test_confidence_review_fields_are_forwarded_as_explanation_only():
+    evidence = _evidence([
+        {
+            "variable": "x1",
+            "integrated_review_decision": "priority_review",
+            "independent_predictive_support": "supported",
+            "confounder_assessment": "no_flagged_confounder",
+            "control_relation_assessment": "no_control_relation_flagged",
+            "statistical_limitation": "no_flagged_statistical_limitation",
+            "direction_assessment": "variable_leads_target",
+        }
+    ])
+    ranked = pd.DataFrame([{"variable": "x1", "final_score": 0.1, "driver_rank": 9, "lag": 1}])
+    ranked_before = ranked.copy(deep=True)
+
+    out = build_final_review_summary(evidence, ranked_features=ranked)
+
+    assert out.loc[0, "independent_predictive_support"] == "supported"
+    assert out.loc[0, "confounder_assessment"] == "no_flagged_confounder"
+    assert out.loc[0, "control_relation_assessment"] == "no_control_relation_flagged"
+    assert out.loc[0, "statistical_limitation"] == "no_flagged_statistical_limitation"
+    assert out.loc[0, "direction_assessment"] == "variable_leads_target"
+    pd.testing.assert_frame_equal(ranked, ranked_before)
+
+
 def test_ranked_lag_outside_maxlag_status_generates_hint():
     out = build_final_review_summary(_evidence([
         {

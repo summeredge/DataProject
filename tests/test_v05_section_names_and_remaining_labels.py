@@ -5,8 +5,8 @@ from chem_ts_corr.web import INDEX_HTML
 
 def test_section_names_are_clearer():
     required = [
-        "<h3>最终推荐结果质检总览</h3>",
-        "<h2>逐变量综合证据复核表</h2>",
+        "<h3>可信度审查概览</h3>",
+        "<h2>逐变量可信度审查证据表</h2>",
         'id="finalReviewQualityOverview"',
         'id="causalReviewEvidenceTable"',
     ]

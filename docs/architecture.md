@@ -4,7 +4,7 @@
 
 数据输入 → 数据预处理 → 第一阶段：主筛查 → 一级初筛候选池 →
 二级验证复核池 → Enhanced / Granger / Model Explanation →
-第三阶段：综合复核 → 第四阶段：时间外预测验证
+第三阶段：可信度审查（Confounder Review） → 第四阶段：时间外预测验证
 
 ## 阶段边界
 
@@ -26,7 +26,7 @@
 禁止：
 
 -   模型结果 → 初筛评分
--   综合复核 → 覆盖初筛结果
+-   可信度审查 → 覆盖初筛结果
 -   未执行分析 → 展示分析结论
 
 ## 二级验证复核池
@@ -41,8 +41,11 @@
 
 Enhanced、普通 Granger 和 Model Explanation 从复核池读取变量，并且仍只读取正式 root
 的初筛输入和冻结的 preprocessing context。复核池不回写 `ranked_features.csv`、
-`recommended_candidates.csv`、`final_score`、Top-K 或一级候选池；三级复核的既有候选
+`recommended_candidates.csv`、`final_score`、Top-K 或一级候选池；第三层可信度审查的既有候选
 契约保持不变。
+
+第三阶段是可信度审查层，不是综合评分层。它解释第二层预测价值是否可能由共同驱动、控制
+响应或统计限制造成；它不产生第一层的最终排名，也不回写第一层任何评分、排序或候选。
 
 ## 排除窗口（PR-TR1 / PR-TR2 / PR-TR3）
 
@@ -191,16 +194,16 @@ run_directory/
   `risk_flags.csv` 等输入，生成 `shap_or_importance.csv`、
   `model_variable_importance.csv`、`model_discovered_candidates.csv`
   三个模型解释输出，不自动运行其他 downstream stage；
-- conditional Granger / causal review / final review 正式 branch/context 接入
+- conditional Granger / 可信度审查正式 branch/context 接入
   （`run_causal_review_for_active_branch()`）：与增强筛选相同的 context
   gate / lock 语义，只消费正式 root 的 `ranked_features.csv`、
   `recommended_candidates.csv`、`causal_review_candidates.csv`、
   `risk_flags.csv`，复用现有 `run_causal_review_stage()`，生成
   `conditional_granger_scores.csv`、`causal_review_report.csv`、
-  `causal_review_evidence.csv`、`final_review_summary.csv` 四个三级复核
+  `causal_review_evidence.csv`、`final_review_summary.csv` 四个可信度审查
   输出，不自动运行其他 downstream stage；
 - 初筛允许为历史筛查使用回顾性预处理；增强筛选、普通 Granger、RF/SHAP
-  与 conditional Granger/三级复核统一使用 causal preprocessing，禁止读取
+  与 conditional Granger/可信度审查统一使用 causal preprocessing，禁止读取
   未来过程值；XGBoost 保持独立的 fold-safe causal preprocessing；
 - `ranked_features.lag` 继续只表示历史初筛证据；正式 Enhanced、RF/SHAP
   与 conditional Granger 在 causal frame 上单独重算其 lag evidence，且只在
@@ -240,7 +243,7 @@ run_directory/
   - downstream 开始前允许切换分支；`screening_downstream.lock` 创建后另一
     分支确认被禁用/拒绝（`initial_screening_branch_locked`），后端以正式
     runner 的 context gate 为最终权威；
-  - 增强筛选 / 普通 Granger / RF/SHAP / 三级复核 / XGBoost 的 Web API 与
+  - 增强筛选 / 普通 Granger / RF/SHAP / 可信度审查 / XGBoost 的 Web API 与
     CLI 命令统一改为调用 `run_*_for_active_branch()` 正式 runner，Web
     endpoint 不再保留并行 orchestration；
   - Result payload 增加 `preprocessingContext`、`preprocessingComparison`、

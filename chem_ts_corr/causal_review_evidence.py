@@ -5,7 +5,15 @@ import pandas as pd
 from chem_ts_corr.common import as_text, left_join_missing, to_float
 
 
-INTERPRETATION = "integrated review evidence only; not a causal conclusion"
+INTERPRETATION = "confounder review evidence only; not a causal conclusion"
+
+CONFIDENCE_REVIEW_COLUMNS = [
+    "independent_predictive_support",
+    "confounder_assessment",
+    "control_relation_assessment",
+    "statistical_limitation",
+    "direction_assessment",
+]
 
 EVIDENCE_COLUMNS = [
     "variable",
@@ -45,6 +53,7 @@ EVIDENCE_COLUMNS = [
     "integrated_review_decision",
     "integrated_review_reason",
     "interpretation",
+    *CONFIDENCE_REVIEW_COLUMNS,
 ]
 
 
@@ -83,11 +92,12 @@ def build_causal_review_evidence(
     granger_tests: pd.DataFrame | None = None,
     model_variable_importance: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Build a conservative multi-evidence table for manual review.
+    """Build third-layer confounder-review evidence for manual review.
 
-    The output integrates predictive-validation signals only and does not change
-    screening scores, model calculations, or the existing three-layer review
-    decision.
+    The output explains whether predictive value may remain independently
+    supported or be limited by confounding, control relations, or statistical
+    constraints.  It does not change screening scores, model calculations, or
+    first-layer ranking.
     """
     if ranked_features.empty or "variable" not in ranked_features.columns:
         return pd.DataFrame(columns=EVIDENCE_COLUMNS)
@@ -180,6 +190,10 @@ def build_causal_review_evidence(
     for col in assessed.columns:
         evidence[col] = assessed[col]
     evidence["interpretation"] = INTERPRETATION
+    review_assessments = evidence.apply(_confidence_review_assessments, axis=1, result_type="expand")
+    review_assessments.columns = CONFIDENCE_REVIEW_COLUMNS
+    for col in CONFIDENCE_REVIEW_COLUMNS:
+        evidence[col] = review_assessments[col]
     return evidence[EVIDENCE_COLUMNS].copy(deep=True)
 
 
@@ -188,6 +202,100 @@ def _ensure_columns(frame: pd.DataFrame, columns: list[str]) -> None:
     for col in columns:
         if col not in frame.columns:
             frame[col] = pd.NA
+
+
+def _confidence_review_assessments(row: pd.Series) -> tuple[str, str, str, str, str]:
+    """Classify existing review evidence without changing any calculations."""
+    return (
+        _independent_predictive_support(row),
+        _confounder_assessment(row),
+        _control_relation_assessment(row),
+        _statistical_limitation(row),
+        _direction_assessment(row),
+    )
+
+
+def _independent_predictive_support(row: pd.Series) -> str:
+    status = _text(row.get("conditional_granger_status")).lower()
+    q_value = _number(row.get("conditional_fdr_q_value"))
+    contribution = _number(row.get("predictive_contribution"))
+    if not status or _is_insufficient_status(status):
+        return "not_computed"
+    if status == "high_collinearity_risk":
+        return "limited_by_collinearity"
+    if "fallback_missing_ranked_lag" in status:
+        return "limited_by_lag_fallback" if q_value is not None and q_value <= 0.10 else "not_supported"
+    if status.startswith("ok") and q_value is not None and q_value <= 0.10:
+        return "supported" if contribution is not None and contribution > 0 else "supported_without_positive_contribution"
+    if status.startswith("ok"):
+        return "not_supported"
+    return "not_computed"
+
+
+def _confounder_assessment(row: pd.Series) -> str:
+    tokens = _risk_flag_tokens(row)
+    if "strong_formula_leakage" in tokens:
+        return "formula_relation_risk"
+    if "common_capacity_driver" in tokens:
+        return "common_driver_risk"
+    if "residual_collinearity" in tokens:
+        return "shared_signal_risk"
+    if not _has_assessment_input(row, "risk_flags", "risk_level", "recommended_use"):
+        return "not_assessed"
+    return "no_flagged_confounder"
+
+
+def _control_relation_assessment(row: pd.Series) -> str:
+    tokens = _risk_flag_tokens(row)
+    recommended_use = _text(row.get("recommended_use")).lower()
+    if recommended_use == "control_variable_reference":
+        return "control_reference"
+    if recommended_use == "formula_coupled_reference":
+        return "formula_coupled_reference"
+    if "target_leads_variable" in tokens:
+        return "possible_control_response"
+    if "common_capacity_driver" in tokens:
+        return "shared_capacity_or_control_context"
+    if not _has_assessment_input(row, "risk_flags", "recommended_use"):
+        return "not_assessed"
+    return "no_control_relation_flagged"
+
+
+def _statistical_limitation(row: pd.Series) -> str:
+    level = _text(row.get("statistical_limit_level")).lower()
+    if not level:
+        return "not_computed"
+    if level == "none":
+        return "no_flagged_statistical_limitation"
+    return f"{level}_statistical_limitation"
+
+
+def _direction_assessment(row: pd.Series) -> str:
+    lag = _number(row.get("lag"))
+    if lag is None:
+        return "not_computed"
+    if lag > 0:
+        return "variable_leads_target"
+    if lag < 0:
+        return "target_leads_variable"
+    return "zero_lag"
+
+
+def _has_assessment_input(row: pd.Series, *columns: str) -> bool:
+    return any(not _is_missing(row.get(column)) for column in columns)
+
+
+def _is_missing(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        missing = pd.isna(value)
+    except (TypeError, ValueError):
+        return False
+    try:
+        return bool(missing)
+    except (TypeError, ValueError):
+        return False
 
 
 def _assess_row(row: pd.Series) -> tuple[float, str, str, str, str, str, str, str, str, str]:

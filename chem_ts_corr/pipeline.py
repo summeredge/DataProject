@@ -1557,7 +1557,7 @@ def run_causal_review_for_active_branch(
         base_config=base_config,
         required_formal_files=CAUSAL_REVIEW_FORMAL_INPUT_FILES,
     )
-    _progress(progress_callback, "正在运行三级复核（正式 branch）")
+    _progress(progress_callback, "正在运行第三层可信度审查（正式 branch）")
     from chem_ts_corr import web as web_module
     from chem_ts_corr.causal_review_runner import run_causal_review_stage
 
@@ -1574,7 +1574,7 @@ def run_causal_review_for_active_branch(
         or []
     )
     web_module._ensure_columns_not_excluded(
-        config, resolved_control_columns, "三层复核控制列"
+        config, resolved_control_columns, "可信度审查控制列"
     )
     resolved_maxlag = (
         config.resolved_granger_maxlag() if maxlag is None else maxlag
@@ -1631,7 +1631,7 @@ def run_causal_review_for_active_branch(
         index=False,
         encoding="utf-8-sig",
     )
-    _progress(progress_callback, "三级复核完成")
+    _progress(progress_callback, "第三层可信度审查完成")
     return {
         "run_dir": run_dir,
         "active_screening_branch": context["active_screening_branch"],
@@ -1659,7 +1659,7 @@ def run_xgb_for_active_branch(
     The formal ``preprocessing_context.json`` is the only source of truth for
     the branch and its preprocessing parameters. XGB requires the promoted
     ``ranked_features.csv`` and the PR-11 ``final_review_summary.csv``; it
-    never re-runs the three-tier review and never reads branch directories or
+    never re-runs the third-layer confounder review and never reads branch directories or
     preprocessing comparisons. The existing fold-safe backend keeps
     lowpass/detrend/diff/forward-fill state isolated per fold.
     """

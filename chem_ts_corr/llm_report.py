@@ -55,7 +55,7 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
     final_by_var = _index_by_variable(final)
 
     highly = [_compact(row, ["variable", "final_score", "evidence_completeness", "data_quality_score", "evidence_confidence", "candidate_grade", "lag", "direction", "risk_flags", "risk_level", "recommended_use"]) for row in _rows(ranked, top_n)]
-    attention = [_compact(row, ["final_rank", "variable", "integrated_review_decision", "priority_label", "key_reason", "conflict_type", "conflict_reason", "lag_boundary_hint"]) for row in _rows(final, top_n)]
+    attention = [_compact(row, ["final_rank", "variable", "final_recommendation", "key_reason", "independent_predictive_support", "confounder_assessment", "control_relation_assessment", "statistical_limitation", "direction_assessment", "evidence_conflict_type", "evidence_conflict_reason", "lag_boundary_hint"]) for row in _rows(final, top_n)]
 
     names = list(dict.fromkeys(
         [str(r.get("variable")) for r in _rows(conditional, top_n) if r.get("variable")]
@@ -66,8 +66,8 @@ def build_llm_analysis_package(run_dir: str | Path | None = None, *, run_id: str
     for name in names:
         merged = {"variable": name}
         merged.update(_compact(conditional_by_var.get(name, {}), ["status", "best_lag", "tested_lags", "fdr_q_value", "predictive_contribution", "interpretation"]))
-        merged.update(_compact(evidence_by_var.get(name, {}), ["evidence_score", "evidence_level", "data_priority", "risk_constraint_level", "statistical_limit_level", "statistical_limit_reason", "integrated_review_decision", "integrated_review_reason"]))
-        merged["evidence_scope"] = "预测验证/复核证据，不是确定性因果结论"
+        merged.update(_compact(evidence_by_var.get(name, {}), ["evidence_score", "evidence_level", "data_priority", "risk_constraint_level", "statistical_limit_level", "statistical_limit_reason", "independent_predictive_support", "confounder_assessment", "control_relation_assessment", "statistical_limitation", "direction_assessment", "integrated_review_decision", "integrated_review_reason"]))
+        merged["evidence_scope"] = "可信度审查证据：解释独立预测贡献、混杂风险、控制关系和统计限制；不是确定性因果结论"
         predictive.append(_clean(merged))
 
     control = []
@@ -138,9 +138,9 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 ## 硬约束
 - 不得声称发现确定性因果关系。
 - 不得使用未经限定的“X 导致 Y”、“X 是 Y 的原因”或直接控制建议。
-- 必须区分：高相关变量、最需要关注变量、预测验证/因果复核证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
+- 必须区分：高相关变量、最需要关注变量、可信度审查证据靠前变量、可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量。
 - APC 术语必须严格：DV / FF = 扰动变量 / 前馈变量候选；CV = 被控变量 / 约束变量候选；不得把 DV 写成被控变量，也不得把前馈扰动候选误写为受控目标。
-- predictive_causal_evidence 只能解释为预测验证/复核证据，不是确定性因果。
+- predictive_causal_evidence 只能解释为可信度审查证据：用于判断预测价值是否可能受共同驱动、控制响应或统计限制影响，不是确定性因果，也不改变初筛排序。
 - 必须按 overview.score_method 说明当前评分版本；评分版本仅表示评分语义，不代表新的因果算法，也不得据此声称确定性因果关系。
 - evidence_confidence 的中文含义为“证据修正系数”，当前仅由 data_quality_score 决定。evidence_completeness 和 evidence_coverage_status 只表示基础关联、数据质量和时间方向三个核心字段的覆盖情况，不参与 evidence_score、final_score 或候选排名。
 - 去负荷后 Residual 与稳定性一致性只可作为 V5 的有限正向支持奖励；缺失或较弱时不扣分。变化量、模型预测、Granger 与其他后续复核结果不参与初步 final_score。

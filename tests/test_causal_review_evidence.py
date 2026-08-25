@@ -31,7 +31,58 @@ def test_only_ranked_features_outputs_fixed_columns():
 
     assert list(out.columns) == EVIDENCE_COLUMNS
     assert out.iloc[0]["variable"] == "x1"
-    assert out.iloc[0]["interpretation"] == "integrated review evidence only; not a causal conclusion"
+    assert out.iloc[0]["interpretation"] == "confounder review evidence only; not a causal conclusion"
+
+
+def test_confidence_review_fields_are_explanatory_only_and_preserve_screening_values():
+    ranked = _ranked(driver_rank=7)
+    before = ranked.copy(deep=True)
+    supported = build_causal_review_evidence(
+        ranked,
+        pd.DataFrame([
+            {
+                "variable": "x1",
+                "status": "ok",
+                "fdr_q_value": 0.01,
+                "predictive_contribution": 0.08,
+            }
+        ]),
+    ).iloc[0]
+    limited = build_causal_review_evidence(
+        ranked,
+        pd.DataFrame([
+            {
+                "variable": "x1",
+                "status": "high_collinearity_risk",
+                "fdr_q_value": pd.NA,
+                "predictive_contribution": 0.08,
+            }
+        ]),
+        risk_flags=pd.DataFrame([
+            {"variable": "x1", "risk_flags": "common_capacity_driver", "risk_level": "medium"}
+        ]),
+    ).iloc[0]
+
+    assert supported["independent_predictive_support"] == "supported"
+    assert supported["confounder_assessment"] == "no_flagged_confounder"
+    assert supported["control_relation_assessment"] == "no_control_relation_flagged"
+    assert supported["statistical_limitation"] == "no_flagged_statistical_limitation"
+    assert supported["direction_assessment"] == "variable_leads_target"
+    assert limited["independent_predictive_support"] == "limited_by_collinearity"
+    assert limited["confounder_assessment"] == "common_driver_risk"
+    assert limited["control_relation_assessment"] == "shared_capacity_or_control_context"
+    assert limited["statistical_limitation"] == "medium_statistical_limitation"
+    pd.testing.assert_frame_equal(ranked, before)
+    assert ranked.loc[0, ["final_score", "driver_rank"]].tolist() == [0.9, 7]
+
+
+def test_confidence_review_direction_keeps_signed_lag_and_missing_state():
+    negative = build_causal_review_evidence(_ranked(lag=-2), pd.DataFrame()).iloc[0]
+    missing = build_causal_review_evidence(_ranked(lag=pd.NA), pd.DataFrame()).iloc[0]
+
+    assert negative["direction_assessment"] == "target_leads_variable"
+    assert missing["independent_predictive_support"] == "not_computed"
+    assert missing["direction_assessment"] == "not_computed"
 
 
 def test_significant_conditional_granger_low_risk_gets_priority_review():

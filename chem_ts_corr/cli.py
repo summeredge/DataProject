@@ -240,7 +240,7 @@ def main() -> None:
             min_rows=args.min_rows,
             top_n=args.top_n,
         )
-        print("三级复核完成。")
+        print("第三层可信度审查完成。")
     elif args.command == "run-xgb":
         result = run_xgb_for_active_branch(
             args.output,

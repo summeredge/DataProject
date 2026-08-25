@@ -1631,6 +1631,16 @@ def run_causal_review_for_active_branch(
         index=False,
         encoding="utf-8-sig",
     )
+    evidence_matrix = result.get("evidence_matrix")
+    if evidence_matrix is None:
+        from chem_ts_corr.causal_review_evidence import EVIDENCE_MATRIX_COLUMNS
+
+        evidence_matrix = pd.DataFrame(columns=EVIDENCE_MATRIX_COLUMNS)
+    evidence_matrix.to_csv(
+        run_dir / "evidence_matrix.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
     _progress(progress_callback, "第三层可信度审查完成")
     return {
         "run_dir": run_dir,
@@ -1641,6 +1651,7 @@ def run_causal_review_for_active_branch(
         "causal_review_report_path": run_dir / "causal_review_report.csv",
         "causal_review_evidence_path": run_dir / "causal_review_evidence.csv",
         "final_review_summary_path": run_dir / "final_review_summary.csv",
+        "evidence_matrix_path": run_dir / "evidence_matrix.csv",
     }
 
 

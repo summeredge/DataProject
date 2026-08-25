@@ -200,8 +200,9 @@ run_directory/
   `recommended_candidates.csv`、`causal_review_candidates.csv`、
   `risk_flags.csv`，复用现有 `run_causal_review_stage()`，生成
   `conditional_granger_scores.csv`、`causal_review_report.csv`、
-  `causal_review_evidence.csv`、`final_review_summary.csv` 四个可信度审查
-  输出，不自动运行其他 downstream stage；
+  `causal_review_evidence.csv`、`final_review_summary.csv` 和
+  `evidence_matrix.csv` 五个可信度审查输出，不自动运行其他 downstream
+  stage；其中 `evidence_matrix.csv` 仅用于人工复核展示，不属于评分或排名。
 - 初筛允许为历史筛查使用回顾性预处理；增强筛选、普通 Granger、RF/SHAP
   与 conditional Granger/可信度审查统一使用 causal preprocessing，禁止读取
   未来过程值；XGBoost 保持独立的 fold-safe causal preprocessing；

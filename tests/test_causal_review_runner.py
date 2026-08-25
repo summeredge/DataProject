@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from chem_ts_corr.causal_review_runner import run_causal_review_stage
-from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS
+from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, EVIDENCE_MATRIX_COLUMNS
 from chem_ts_corr.causal_review_service import REPORT_COLUMNS
 from chem_ts_corr.conditional_granger import OUT_COLS
 
@@ -32,10 +32,17 @@ def test_causal_review_runner_returns_expected_tables():
         min_rows=80,
     )
 
-    assert set(out) == {"conditional_granger_scores", "causal_review_report", "causal_review_evidence", "final_review_summary"}
+    assert set(out) == {
+        "conditional_granger_scores",
+        "causal_review_report",
+        "causal_review_evidence",
+        "final_review_summary",
+        "evidence_matrix",
+    }
     assert not out["conditional_granger_scores"].empty
     assert not out["causal_review_report"].empty
     assert not out["final_review_summary"].empty
+    assert list(out["evidence_matrix"].columns) == EVIDENCE_MATRIX_COLUMNS
 
 
 def test_causal_review_runner_handles_empty_candidates():

@@ -25,6 +25,7 @@ THREE_TIER_OUTPUT_FILES = [
     "causal_review_report.csv",
     "causal_review_evidence.csv",
     "final_review_summary.csv",
+    "evidence_matrix.csv",
 ]
 FORMAL_ROOT_FILES = [
     "ranked_features.csv",

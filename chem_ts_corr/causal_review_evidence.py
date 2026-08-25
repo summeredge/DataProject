@@ -17,6 +17,8 @@ CONFIDENCE_REVIEW_COLUMNS = [
 
 EVIDENCE_COLUMNS = [
     "variable",
+    "review_priority",
+    "review_reason",
     "candidate_grade",
     "final_score",
     "lag",
@@ -55,6 +57,90 @@ EVIDENCE_COLUMNS = [
     "interpretation",
     *CONFIDENCE_REVIEW_COLUMNS,
 ]
+
+# ``evidence_matrix`` is a read-only handoff for engineers.  Its fields are
+# status/evidence references only; none of them are inputs to screening,
+# scoring, ranking, candidate selection, or XGBoost execution.
+EVIDENCE_MATRIX_COLUMNS = [
+    "variable",
+    "initial_rank",
+    "final_score",
+    "validation_status",
+    "evidence_consistency",
+    "supporting_methods",
+    *CONFIDENCE_REVIEW_COLUMNS,
+    "xgb_status",
+    "generalization_status",
+]
+
+EVIDENCE_MATRIX_STATUS_LABELS = {
+    "validation_status": {
+        "not_run": "未执行",
+        "not_computed": "未计算",
+        "missing": "证据缺失",
+        "supported": "已有支持证据",
+        "limited": "证据有限或存在限制",
+        "failed": "执行失败",
+    },
+    "evidence_consistency": {
+        "not_run": "未执行",
+        "not_computed": "未计算",
+        "missing": "证据缺失",
+        "consistent": "证据较一致",
+        "partial": "证据部分一致",
+    },
+    "independent_predictive_support": {
+        "supported": "独立预测贡献证据较强",
+        "supported_with_limitations": "存在独立预测贡献证据，但存在限制",
+        "not_supported": "未形成独立预测贡献证据",
+        "not_computed": "未计算",
+    },
+    "confounder_assessment": {
+        "not_assessed": "未审查",
+        "no_flagged_confounder": "未发现明显混杂风险",
+        "common_driver_risk": "可能存在共同驱动影响",
+        "shared_signal_risk": "可能存在共享信号影响",
+        "formula_relation_risk": "可能存在公式关系影响",
+    },
+    "control_relation_assessment": {
+        "not_assessed": "未审查",
+        "no_control_relation_flagged": "未发现明显控制关系风险",
+        "control_reference": "控制参考变量",
+        "possible_control_response": "可能属于控制响应信号",
+        "shared_capacity_or_control_context": "可能存在负荷或控制背景影响",
+    },
+    "statistical_limitation": {
+        "not_computed": "未计算",
+        "no_flagged_statistical_limitation": "未发现明显统计限制",
+        "high_collinearity_limitation": "高共线性限制",
+        "insufficient_sample_limitation": "样本不足限制",
+        "failed_statistical_limitation": "统计计算失败",
+    },
+    "direction_assessment": {
+        "variable_leads_target": "变量领先目标",
+        "target_leads_variable": "目标领先变量",
+        "zero_lag": "零滞后",
+        "not_computed": "未计算",
+    },
+    "xgb_status": {
+        "not_computed": "未计算",
+        "missing": "证据缺失",
+        "validated_incremental_signal": "时间外预测增量已支持",
+        "weak_incremental_value": "时间外预测增量较弱",
+        "redundant_with_baseline": "与基线信息重复",
+        "unstable_out_of_time": "时间外预测增量不稳定",
+        "insufficient_features": "有效特征不足",
+    },
+    "generalization_status": {
+        "not_computed": "未计算",
+        "missing": "证据缺失",
+        "validated_incremental_signal": "时间外预测增量已支持",
+        "weak_incremental_value": "时间外预测增量较弱",
+        "redundant_with_baseline": "与基线信息重复",
+        "unstable_out_of_time": "时间外预测增量不稳定",
+        "insufficient_features": "有效特征不足",
+    },
+}
 
 
 RISK_ORDER = {"none": 0, "weak": 1, "medium": 2, "strong": 3}
@@ -104,6 +190,8 @@ def build_causal_review_evidence(
 
     base_cols = [
         "variable",
+        "review_priority",
+        "review_reason",
         "candidate_grade",
         "final_score",
         "lag",
@@ -208,6 +296,147 @@ def build_causal_review_evidence(
     for col in CONFIDENCE_REVIEW_COLUMNS:
         evidence[col] = review_assessments[col]
     return evidence[EVIDENCE_COLUMNS].copy(deep=True)
+
+
+def build_evidence_matrix(
+    ranked_features: pd.DataFrame | None,
+    validation_summary: pd.DataFrame | None,
+    causal_review_evidence: pd.DataFrame | None,
+    *,
+    xgb_candidate_uplift: pd.DataFrame | None = None,
+    xgb_summary: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Build the explanation-only evidence matrix for manual review.
+
+    ``validation_summary`` and the optional XGB tables are read-only inputs.
+    ``None`` means that the corresponding stage was not computed; a supplied
+    table without a row for a variable is represented as ``missing``.  This
+    distinction keeps not-computed, missing, and real numeric zero semantics
+    separate while preserving the existing second-/fourth-layer values.
+    """
+    evidence = (
+        causal_review_evidence.copy(deep=True)
+        if causal_review_evidence is not None
+        else pd.DataFrame()
+    )
+    if evidence.empty or "variable" not in evidence.columns:
+        return pd.DataFrame(columns=EVIDENCE_MATRIX_COLUMNS)
+
+    ranked_by_variable = _rows_by_variable(ranked_features)
+    validation_by_variable = _rows_by_variable(validation_summary)
+    xgb_by_variable = _rows_by_variable(xgb_candidate_uplift)
+    if xgb_summary is not None and not xgb_summary.empty:
+        # Some callers may provide a per-variable fourth-layer sidecar rather
+        # than the candidate uplift table.  Prefer the explicit sidecar row
+        # only when the uplift table has no row for that variable.
+        xgb_summary_by_variable = _rows_by_variable(xgb_summary)
+    else:
+        xgb_summary_by_variable = {}
+
+    validation_missing_state = "not_computed" if validation_summary is None else "missing"
+    xgb_missing_state = (
+        "not_computed"
+        if xgb_candidate_uplift is None and xgb_summary is None
+        else "missing"
+    )
+    rows: list[dict[str, object]] = []
+    for _, source in evidence.iterrows():
+        variable = _text(source.get("variable"))
+        ranked = ranked_by_variable.get(variable, {})
+        validation = validation_by_variable.get(variable, {})
+        xgb = xgb_by_variable.get(variable) or xgb_summary_by_variable.get(variable, {})
+
+        row = {
+            "variable": variable,
+            # ``driver_rank`` and ``final_score`` are references to the first
+            # layer.  Do not infer a rank from matrix order or recalculate a
+            # score when the source field is absent.
+            "initial_rank": _first_present(
+                source.get("initial_rank"),
+                source.get("driver_rank"),
+                ranked.get("driver_rank"),
+            ),
+            "final_score": _first_present(
+                source.get("final_score"),
+                ranked.get("final_score"),
+            ),
+            "validation_status": _matrix_state(
+                validation,
+                "validation_status",
+                default=validation_missing_state,
+            ),
+            "evidence_consistency": _matrix_state(
+                validation,
+                "evidence_consistency",
+                default=validation_missing_state,
+            ),
+            "supporting_methods": _first_present(
+                validation.get("supporting_methods"),
+            ),
+        }
+        for column in CONFIDENCE_REVIEW_COLUMNS:
+            row[column] = _matrix_state(source, column, default="not_computed")
+
+        # Only copy fourth-layer fields that already exist.  In particular,
+        # do not derive generalization status from an overall JSON status or
+        # start XGB here.
+        row["xgb_status"] = _matrix_state(
+            xgb,
+            "xgb_status",
+            default=_first_present(xgb.get("validation_status"), xgb_missing_state),
+        )
+        row["generalization_status"] = _matrix_state(
+            xgb,
+            "generalization_status",
+            default=xgb_missing_state,
+        )
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=EVIDENCE_MATRIX_COLUMNS)
+
+
+def evidence_status_label(field: str, value: object) -> str:
+    """Return the shared Chinese display text for a matrix status code."""
+    code = _text(value)
+    if not code:
+        return ""
+    return EVIDENCE_MATRIX_STATUS_LABELS.get(field, {}).get(code, code)
+
+
+def evidence_matrix_status_labels() -> dict[str, dict[str, str]]:
+    """Return a copy safe to expose in API/report payloads."""
+    return {
+        field: dict(labels)
+        for field, labels in EVIDENCE_MATRIX_STATUS_LABELS.items()
+    }
+
+
+def _rows_by_variable(frame: pd.DataFrame | None) -> dict[str, dict[str, object]]:
+    if frame is None or frame.empty or "variable" not in frame.columns:
+        return {}
+    rows: dict[str, dict[str, object]] = {}
+    for row in frame.to_dict(orient="records"):
+        variable = _text(row.get("variable"))
+        if variable and variable not in rows:
+            rows[variable] = row
+    return rows
+
+
+def _first_present(*values: object) -> object:
+    for value in values:
+        if not _is_missing(value):
+            return value
+    return pd.NA
+
+
+def _matrix_state(
+    row: dict[str, object] | pd.Series,
+    column: str,
+    *,
+    default: object,
+) -> object:
+    value = row.get(column) if row is not None else None
+    return default if _is_missing(value) else value
 
 
 

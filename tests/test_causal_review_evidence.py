@@ -1,7 +1,13 @@
 import pandas as pd
 import pytest
 
-from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
+from chem_ts_corr.causal_review_evidence import (
+    EVIDENCE_COLUMNS,
+    EVIDENCE_MATRIX_COLUMNS,
+    build_causal_review_evidence,
+    build_evidence_matrix,
+    evidence_status_label,
+)
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.final_review_summary import build_final_review_summary
 
@@ -32,6 +38,51 @@ def test_only_ranked_features_outputs_fixed_columns():
     assert list(out.columns) == EVIDENCE_COLUMNS
     assert out.iloc[0]["variable"] == "x1"
     assert out.iloc[0]["interpretation"] == "confounder review evidence only; not a causal conclusion"
+
+
+def test_evidence_matrix_has_manual_review_contract_and_shared_labels():
+    ranked = _ranked(driver_rank=4)
+    evidence = build_causal_review_evidence(ranked, pd.DataFrame())
+    matrix = build_evidence_matrix(ranked, None, evidence)
+
+    assert list(matrix.columns) == EVIDENCE_MATRIX_COLUMNS
+    assert matrix.loc[0, "initial_rank"] == 4
+    assert matrix.loc[0, "final_score"] == 0.9
+    assert matrix.loc[0, "validation_status"] == "not_computed"
+    assert matrix.loc[0, "independent_predictive_support"] == "not_computed"
+    assert matrix.loc[0, "xgb_status"] == "not_computed"
+    assert matrix.loc[0, "generalization_status"] == "not_computed"
+    assert evidence_status_label(
+        "independent_predictive_support", "supported_with_limitations"
+    ) == "存在独立预测贡献证据，但存在限制"
+
+
+def test_evidence_matrix_keeps_second_layer_missing_and_zero_distinct():
+    ranked = _ranked(driver_rank=1)
+    evidence = build_causal_review_evidence(ranked, pd.DataFrame())
+    validation = pd.DataFrame(
+        [{
+            "variable": "x1",
+            "validation_status": "supported",
+            "evidence_consistency": "consistent",
+            "supporting_methods": "granger",
+        }]
+    )
+    matrix = build_evidence_matrix(ranked, validation, evidence)
+    assert matrix.loc[0, "validation_status"] == "supported"
+    assert matrix.loc[0, "evidence_consistency"] == "consistent"
+    assert matrix.loc[0, "supporting_methods"] == "granger"
+
+    missing = build_evidence_matrix(ranked, pd.DataFrame(columns=validation.columns), evidence)
+    assert missing.loc[0, "validation_status"] == "missing"
+
+    conditional = pd.DataFrame([
+        {"variable": "x1", "status": "ok", "fdr_q_value": 0.0, "predictive_contribution": 0.0}
+    ])
+    zero_evidence = build_causal_review_evidence(ranked, conditional)
+    zero_matrix = build_evidence_matrix(ranked, validation, zero_evidence)
+    assert zero_evidence.loc[0, "conditional_fdr_q_value"] == 0.0
+    assert zero_matrix.loc[0, "independent_predictive_support"] == "not_supported"
 
 
 def test_confidence_review_fields_are_explanatory_only_and_preserve_screening_values():

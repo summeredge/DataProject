@@ -13,6 +13,8 @@ INTERPRETATION = "confounder review summary only; not a causal conclusion"
 SUMMARY_COLUMNS = [
     "final_rank",
     "variable",
+    "review_priority",
+    "review_reason",
     "final_recommendation",
     "data_priority",
     "evidence_level",
@@ -112,6 +114,8 @@ def build_final_review_summary(
         conflict_type, conflict_reason = _conflicts(source)
         row = {
             "variable": variable,
+            "review_priority": _coalesce(source.get("review_priority"), rank_row.get("review_priority")),
+            "review_reason": _coalesce(source.get("review_reason"), rank_row.get("review_reason")),
             "final_recommendation": decision,
             "data_priority": _text(source.get("data_priority")),
             "evidence_level": _text(source.get("evidence_level")),

@@ -73,6 +73,7 @@ FOLLOWUP_OUTPUTS = {
     "regime_scores.csv", "model_lift_scores.csv", "rolling_corr_scores.csv",
     "enhanced_validation_summary.csv", "conditional_granger_scores.csv",
     "causal_review_report.csv", "causal_review_evidence.csv", "final_review_summary.csv",
+    "evidence_matrix.csv",
 }
 
 PR3_CANDIDATE_FIELDS = {

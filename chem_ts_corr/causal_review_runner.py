@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from chem_ts_corr.causal_review_evidence import EVIDENCE_COLUMNS, build_causal_review_evidence
+from chem_ts_corr.causal_review_evidence import (
+    EVIDENCE_COLUMNS,
+    EVIDENCE_MATRIX_COLUMNS,
+    build_causal_review_evidence,
+    build_evidence_matrix,
+)
 from chem_ts_corr.causal_review_service import REPORT_COLUMNS, build_causal_review_report
 from chem_ts_corr.final_review_summary import SUMMARY_COLUMNS, build_final_review_summary
 from chem_ts_corr.conditional_granger import (
@@ -57,6 +62,7 @@ def run_causal_review_stage(
             "causal_review_report": pd.DataFrame(columns=REPORT_COLUMNS),
             "causal_review_evidence": pd.DataFrame(columns=EVIDENCE_COLUMNS),
             "final_review_summary": pd.DataFrame(columns=SUMMARY_COLUMNS),
+            "evidence_matrix": pd.DataFrame(columns=EVIDENCE_MATRIX_COLUMNS),
         }
 
     optional_tables = _load_optional_evidence_tables(
@@ -110,11 +116,19 @@ def run_causal_review_stage(
         conditional_granger_scores=conditional_granger_scores,
         ranked_features=ranked_features_for_review,
     )
+    evidence_matrix = build_evidence_matrix(
+        ranked_features=ranked_features_for_review,
+        validation_summary=optional_tables["validation_summary"],
+        causal_review_evidence=causal_review_evidence,
+        xgb_candidate_uplift=optional_tables["xgb_candidate_uplift"],
+        xgb_summary=optional_tables["xgb_summary"],
+    )
     return {
         "conditional_granger_scores": conditional_granger_scores,
         "causal_review_report": causal_review_report,
         "causal_review_evidence": causal_review_evidence,
         "final_review_summary": final_review_summary,
+        "evidence_matrix": evidence_matrix,
     }
 
 
@@ -223,6 +237,9 @@ def _load_optional_evidence_tables(
         "enhanced_validation_summary": enhanced_validation_summary,
         "granger_tests": granger_tests,
         "model_variable_importance": model_variable_importance,
+        "validation_summary": None,
+        "xgb_candidate_uplift": None,
+        "xgb_summary": None,
     }
     if output_dir is None:
         return tables
@@ -232,10 +249,16 @@ def _load_optional_evidence_tables(
         "enhanced_validation_summary": "enhanced_validation_summary.csv",
         "granger_tests": "granger_tests.csv",
         "model_variable_importance": "model_variable_importance.csv",
+        "validation_summary": "validation_summary.csv",
+        "xgb_candidate_uplift": "xgb_validation/xgb_candidate_uplift.csv",
     }
     for key, file_name in files.items():
         if tables[key] is None:
-            tables[key] = _safe_read_csv(directory / file_name)
+            path = directory / file_name
+            tables[key] = _safe_read_csv(path) if path.exists() else None
+    # The overall JSON is intentionally not interpreted here: a stage-level
+    # status is not a per-variable generalization result.  A caller may still
+    # pass an explicit per-variable sidecar through ``xgb_summary``.
     return tables
 
 

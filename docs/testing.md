@@ -6,6 +6,22 @@
 
 ## 三类测试
 
+## PR-C4 第三层证据矩阵
+
+第三层新增的 `evidence_matrix.csv` 仅用于人工复核展示，测试必须验证：
+
+- 字段顺序固定为 `variable`、`initial_rank`、`final_score`、二级
+  `validation_status` / `evidence_consistency` / `supporting_methods`、五项
+  可信度审查状态和第四层已有的 `xgb_status` / `generalization_status`；
+- 第三层运行前后 `ranked_features.csv`、`final_score`、`driver_rank` 和 Top-K
+  byte-identical；矩阵不得成为新的排名、排行榜或综合评分；
+- `not_computed`、`missing`、真实 `0.0` 和 `not_supported` 保持不同语义，signed
+  lag 方向不被绝对值改写；
+- API 和 Web 只将矩阵展示为“变量 → 初筛结果 → 预测价值证据 → 独立性审查 →
+  混杂风险 → 控制关系 → 统计限制”，并使用统一状态显示文本；
+- 文案不得出现“发现因果变量”“证明因果”“确认根因”“确定原因”或任何第三层/最终
+  因果排名表述，允许使用“统计证据”“预测贡献证据”“建议人工复核”。
+
 ### 行为测试
 
 验证：
@@ -419,10 +435,10 @@
 - 运行前后 `ranked_features.csv` / `recommended_candidates.csv` /
   `causal_review_candidates.csv` / `risk_flags.csv` byte-identical，
   `final_score` / `driver_rank` / 候选顺序不变；
-- 成功执行只生成四个可信度审查输出
+- 成功执行生成四个可信度审查输出和一个解释性产物
   （`conditional_granger_scores.csv`、`causal_review_report.csv`、
-  `causal_review_evidence.csv`、`final_review_summary.csv`），不新增综合
-  score/rank 文件，不生成其他阶段文件；
+  `causal_review_evidence.csv`、`final_review_summary.csv`、
+  `evidence_matrix.csv`），不新增综合 score/rank 文件，不生成其他阶段文件；
 - optional evidence 缺失时可信度审查仍可执行，不自动运行对应前置阶段；已有
   optional evidence（`enhanced_validation_summary.csv`、
   `model_variable_importance.csv` 等）可被现有 stage 从 `output_dir`

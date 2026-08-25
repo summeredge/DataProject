@@ -630,10 +630,11 @@ run_causal_review_for_active_branch(
 - signed lag 保持方向：正式 runner 使用 `ranked_features.csv` 的真实
   signed lag，不得使用 `abs(lag)` / `abs(best_lag)` / `abs(granger_lag)`
   把负 lag 转正；
-- 成功执行仅写现有四个可信度审查输出：`conditional_granger_scores.csv`、
-  `causal_review_report.csv`、`causal_review_evidence.csv`、
-  `final_review_summary.csv`；既有核心字段名和语义保持兼容，新增的解释字段遵循本节
-  下方契约，不得新增
+- 成功执行写现有四个可信度审查输出以及一个解释性产物：
+  `conditional_granger_scores.csv`、`causal_review_report.csv`、
+  `causal_review_evidence.csv`、`final_review_summary.csv` 和
+  `evidence_matrix.csv`；既有核心字段名和语义保持兼容，新增的解释字段遵循本节
+  下方契约。`evidence_matrix.csv` 只供人工复核展示，不得新增
   `causal_score.csv` / `combined_score.csv` / `final_rank.csv` 等综合评分
   文件；
 - optional evidence（`enhanced_validation_summary.csv`、
@@ -677,6 +678,48 @@ Top-K 或第一层排序。
 `failed_statistical_limitation` 表示已执行但失败。`direction_assessment` 只按带符号 lag
 区分 `variable_leads_target`、`target_leads_variable`、`zero_lag`、`not_computed`，不得
 使用绝对值。未计算、失败、不显著、缺失和真实 `0.0` 不得被同一解释状态伪造或混淆。
+
+### evidence_matrix.csv 人工复核契约
+
+`evidence_matrix.csv` 固定为 UTF-8-SIG CSV，字段顺序为：
+
+```text
+variable
+initial_rank
+final_score
+validation_status
+evidence_consistency
+supporting_methods
+independent_predictive_support
+confounder_assessment
+control_relation_assessment
+statistical_limitation
+direction_assessment
+xgb_status
+generalization_status
+```
+
+其中 `initial_rank` / `final_score` 仅引用 `ranked_features.csv` 的
+`driver_rank` / `final_score`，不由第三层重算；二级字段仅引用已有的
+`validation_summary.csv`；`xgb_status` / `generalization_status` 仅在已有第四层
+逐变量字段时引用，否则分别保持 `not_computed` 或 `missing`。矩阵不得触发 XGBoost，
+不得改变 `final_score`、`driver_rank`、Top-K、候选池或任何初筛顺序。
+
+前端和报告使用统一状态映射显示文本，例如：
+
+- `supported` → `独立预测贡献证据较强`；
+- `supported_with_limitations` → `存在独立预测贡献证据，但存在限制`；
+- `not_supported` → `未形成独立预测贡献证据`；
+- `not_computed` → `未计算`；
+- `common_driver_risk` → `可能存在共同驱动影响`；
+- `shared_signal_risk` → `可能存在共享信号影响`；
+- `formula_relation_risk` → `可能存在公式关系影响`；
+- `control_reference` → `控制参考变量`；
+- `possible_control_response` → `可能属于控制响应信号`；
+- `shared_capacity_or_control_context` → `可能存在负荷或控制背景影响`。
+
+展示结构固定为“变量 → 初筛结果 → 预测价值证据 → 独立性审查 → 混杂风险 → 控制
+关系 → 统计限制”，不得将矩阵解释为第三层排名、最终因果排名或综合因果评分。
 
 历史兼容字段 `evidence_score`、`final_rank`、`final_recommendation` 继续保留其 CSV/API
 字段名和既有第三层展示/下游兼容行为，但绝不是第一层评分或排序依据；不得新增

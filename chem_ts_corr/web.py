@@ -54,6 +54,10 @@ from chem_ts_corr.validation_summary import (
     build_validation_fields_from_output_dir,
     build_validation_summary_from_output_dir,
 )
+from chem_ts_corr.causal_review_evidence import (
+    EVIDENCE_MATRIX_COLUMNS,
+    evidence_matrix_status_labels,
+)
 from chem_ts_corr.verification_review_pool import (
     FILENAME as VERIFICATION_REVIEW_POOL_FILENAME,
     add_to_verification_review_pool,
@@ -103,6 +107,7 @@ DOWNLOAD_FILES = {
     "causal_review_report.csv",
     "final_review_summary.csv",
     "causal_review_evidence.csv",
+    "evidence_matrix.csv",
     "enhanced_validation_summary.csv",
     VERIFICATION_REVIEW_POOL_FILENAME,
     VALIDATION_SUMMARY_FILENAME,
@@ -869,6 +874,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
     rolling = _safe_read_result_csv(output_dir / "rolling_corr_scores.csv")
     enhanced = _safe_read_result_csv(output_dir / "enhanced_validation_summary.csv")
     validation = _validation_summary_for_payload(output_dir)
+    evidence_matrix = _evidence_matrix_for_payload(output_dir)
     granger = _safe_read_result_csv(output_dir / "granger_tests.csv")
     importance = _safe_read_result_csv(output_dir / "shap_or_importance.csv")
     model_variable_importance = _safe_read_result_csv(output_dir / "model_variable_importance.csv")
@@ -925,6 +931,8 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "enhancedValidationSummary": _records(enhanced.head(200)),
         "validationSummary": _records(validation.head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
+        "evidenceMatrix": _records(evidence_matrix.head(500)),
+        "evidenceMatrixStatusLabels": evidence_matrix_status_labels(),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
@@ -979,6 +987,15 @@ def _validation_fields_for_payload(output_dir: Path) -> pd.DataFrame:
     if not set(VALIDATION_FIELDS_COLUMNS).issubset(fields.columns):
         return pd.DataFrame(columns=VALIDATION_FIELDS_COLUMNS)
     return fields[VALIDATION_FIELDS_COLUMNS]
+
+
+def _evidence_matrix_for_payload(output_dir: Path) -> pd.DataFrame:
+    """Read the explanation-only matrix without deriving or rerunning stages."""
+    path = output_dir / "evidence_matrix.csv"
+    matrix = _safe_read_result_csv(path)
+    if not path.exists() or not set(EVIDENCE_MATRIX_COLUMNS).issubset(matrix.columns):
+        return pd.DataFrame(columns=EVIDENCE_MATRIX_COLUMNS)
+    return matrix[EVIDENCE_MATRIX_COLUMNS]
 
 
 def _build_pending_payload(
@@ -1403,6 +1420,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     report = _safe_read_result_csv(output_dir / "causal_review_report.csv")
     evidence = _safe_read_result_csv(output_dir / "causal_review_evidence.csv")
     final_summary = _safe_read_result_csv(output_dir / "final_review_summary.csv")
+    evidence_matrix = _evidence_matrix_for_payload(output_dir)
     risk_filter = _list_field(form, "risk_flag_filter")
     if risk_filter:
         risk = _safe_read_result_csv(output_dir / "risk_flags.csv")
@@ -1410,11 +1428,16 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
             final_summary, risk, risk_filter
         )
         report = _filter_candidates_by_risk_flags(report, risk, risk_filter)
+        evidence_matrix = _filter_candidates_by_risk_flags(
+            evidence_matrix, risk, risk_filter
+        )
     return {
         "conditionalGrangerScores": _records(conditional.head(500)),
         "causalReviewReport": _records(report.head(500)),
         "finalReviewSummary": _records(final_summary.head(500)),
         "causalReviewEvidence": _records(evidence.head(500)),
+        "evidenceMatrix": _records(evidence_matrix.head(500)),
+        "evidenceMatrixStatusLabels": evidence_matrix_status_labels(),
         "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
@@ -3736,6 +3759,10 @@ INDEX_HTML = r"""<!doctype html>
         <div class="help">该表整合主筛查、增强筛选、Granger、随机森林模型解释、条件 Granger 和风险标签，用于判断预测价值的独立性及其混杂、控制关系和统计限制。对于高共线性、共同负荷等限制，平台会保留工程审查建议并标记限制。该表不是因果结论，也不改变初筛结果。</div>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量可信度审查证据表。</div>
+        <h2>人工复核证据矩阵</h2>
+        <div class="help">按“变量 → 初筛结果 → 预测价值证据 → 独立性审查 → 混杂风险 → 控制关系 → 统计限制”组织展示。矩阵只引用已有初筛、二级验证、可信度审查和（如已执行）XGB字段，不产生新的评分或排名；“复核展示序号”也不改变初筛顺序。</div>
+        <div class="download-buttons" id="evidenceMatrixDownload"></div>
+        <div id="evidenceMatrixTable" class="empty">未运行 可信度审查，暂无人工复核证据矩阵。</div>
       </div>
 
 
@@ -3854,6 +3881,19 @@ let lastValidationFieldsRows = [];
 let lastVerificationReviewPoolRows = [];
 let lastConditionalRows = [];
 let lastCausalEvidenceRows = [];
+let lastEvidenceMatrixRows = [];
+const DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS = {
+  validation_status: {not_run: "未执行", not_computed: "未计算", missing: "证据缺失", supported: "已有支持证据", limited: "证据有限或存在限制", failed: "执行失败"},
+  evidence_consistency: {not_run: "未执行", not_computed: "未计算", missing: "证据缺失", consistent: "证据较一致", partial: "证据部分一致"},
+  independent_predictive_support: {supported: "独立预测贡献证据较强", supported_with_limitations: "存在独立预测贡献证据，但存在限制", not_supported: "未形成独立预测贡献证据", not_computed: "未计算"},
+  confounder_assessment: {not_assessed: "未审查", no_flagged_confounder: "未发现明显混杂风险", common_driver_risk: "可能存在共同驱动影响", shared_signal_risk: "可能存在共享信号影响", formula_relation_risk: "可能存在公式关系影响"},
+  control_relation_assessment: {not_assessed: "未审查", no_control_relation_flagged: "未发现明显控制关系风险", control_reference: "控制参考变量", possible_control_response: "可能属于控制响应信号", shared_capacity_or_control_context: "可能存在负荷或控制背景影响"},
+  statistical_limitation: {not_computed: "未计算", no_flagged_statistical_limitation: "未发现明显统计限制", high_collinearity_limitation: "高共线性限制", insufficient_sample_limitation: "样本不足限制", failed_statistical_limitation: "统计计算失败"},
+  direction_assessment: {variable_leads_target: "变量领先目标", target_leads_variable: "目标领先变量", zero_lag: "零滞后", not_computed: "未计算"},
+  xgb_status: {not_computed: "未计算", missing: "证据缺失", validated_incremental_signal: "时间外预测增量已支持", weak_incremental_value: "时间外预测增量较弱", redundant_with_baseline: "与基线信息重复", unstable_out_of_time: "时间外预测增量不稳定", insufficient_features: "有效特征不足"},
+  generalization_status: {not_computed: "未计算", missing: "证据缺失", validated_incremental_signal: "时间外预测增量已支持", weak_incremental_value: "时间外预测增量较弱", redundant_with_baseline: "与基线信息重复", unstable_out_of_time: "时间外预测增量不稳定", insufficient_features: "有效特征不足"},
+};
+let evidenceMatrixStatusLabels = DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS;
 let lastFinalReviewSummaryRows = [];
 let lastXgbModelSummaryRows = [];
 let lastXgbCandidateUpliftRows = [];
@@ -4318,6 +4358,8 @@ function renderAnalysisResult(data) {
   lastVerificationReviewPoolRows = data.verificationReviewPool || [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
+  lastEvidenceMatrixRows = data.evidenceMatrix || [];
+  evidenceMatrixStatusLabels = data.evidenceMatrixStatusLabels || evidenceMatrixStatusLabels;
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
@@ -4351,6 +4393,7 @@ function renderAnalysisResult(data) {
   renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
   renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
+  renderEvidenceMatrixTable(lastEvidenceMatrixRows);
   renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
   renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
   renderXgbRunSummary(lastXgbValidationSummary);
@@ -4384,6 +4427,7 @@ function renderPendingBranchResult(data) {
   lastVerificationReviewPoolRows = [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
+  lastEvidenceMatrixRows = [];
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
@@ -4395,6 +4439,8 @@ function renderPendingBranchResult(data) {
   renderValidationFieldsTable(lastValidationFieldsRows);
   renderVerificationReviewPool(lastVerificationReviewPoolRows);
   renderGenericTable("preprocessingComparisonTable", data.preprocessingComparison || [], preprocessingComparisonColumns());
+  resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
+  clearOptionalElement("evidenceMatrixDownload");
   renderDownloads(data.downloads || []);
   updateBranchSelectionUi(data);
   setDownstreamGate(true);
@@ -4631,6 +4677,8 @@ async function runCausalReview() {
     const data = await postForm("/api/run_causal_review", form);
     lastConditionalRows = data.conditionalGrangerScores || [];
     lastCausalEvidenceRows = data.causalReviewEvidence || [];
+    lastEvidenceMatrixRows = data.evidenceMatrix || [];
+    evidenceMatrixStatusLabels = data.evidenceMatrixStatusLabels || evidenceMatrixStatusLabels;
     lastFinalReviewSummaryRows = data.finalReviewSummary || [];
     lastValidationSummaryRows = data.validationSummary || lastValidationSummaryRows;
     lastValidationFieldsRows = data.validationFields || lastValidationFieldsRows;
@@ -4642,6 +4690,7 @@ async function runCausalReview() {
     renderFinalReviewQualityOverview(lastFinalReviewSummaryRows);
     renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
     renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
+    renderEvidenceMatrixTable(lastEvidenceMatrixRows);
     renderReviewDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
@@ -6143,7 +6192,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable";
+  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable" || targetId === "evidenceMatrixTable";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
@@ -7200,6 +7249,10 @@ function validationSummarySupportingMethods(value) {
 }
 
 function displayCellValue(column, value) {
+  const matrixLabels = evidenceMatrixStatusLabels[column];
+  if (matrixLabels && Object.prototype.hasOwnProperty.call(matrixLabels, String(value ?? ""))) {
+    return matrixLabels[String(value ?? "")];
+  }
   if (column === "supporting_methods") {
     return validationSummarySupportingMethods(value);
   }
@@ -7462,6 +7515,20 @@ function renderCausalReviewEvidenceTable(rows) {
   });
 }
 
+function evidenceMatrixColumns() {
+  return [
+    "variable", "initial_rank", "final_score",
+    "validation_status", "evidence_consistency", "supporting_methods",
+    "independent_predictive_support", "confounder_assessment",
+    "control_relation_assessment", "statistical_limitation",
+    "direction_assessment", "xgb_status", "generalization_status",
+  ];
+}
+
+function renderEvidenceMatrixTable(rows) {
+  renderGenericTable("evidenceMatrixTable", rows || [], evidenceMatrixColumns());
+}
+
 function cellHtml(column, value, formatter = null) {
   const rendered = formatter ? formatter(column, value) : escapeHtml(formatCellValue(column, value));
   const title = cellTitle(column, value);
@@ -7566,6 +7633,7 @@ function renderReviewDownloads(downloads) {
   renderDownloadTarget("conditionalDownload", downloads, "conditional_granger_scores.csv");
   renderDownloadTarget("finalReviewSummaryDownload", downloads, "final_review_summary.csv");
   renderDownloadTarget("causalEvidenceDownload", downloads, "causal_review_evidence.csv");
+  renderDownloadTarget("evidenceMatrixDownload", downloads, "evidence_matrix.csv");
 }
 
 function renderXgbDownloads(downloads) {
@@ -7658,6 +7726,9 @@ const STATUS_COLUMNS = new Set([
   "rolling_status", "stability_status", "recommended_use", "final_decision",
   "final_recommendation", "integrated_review_decision", "candidate_grade", "lag_quality",
   "lag_quality_status", "risk_constraint_level", "statistical_limit_level",
+  "validation_status", "evidence_consistency", "independent_predictive_support",
+  "confounder_assessment", "control_relation_assessment", "statistical_limitation",
+  "direction_assessment", "xgb_status", "generalization_status",
 ]);
 
 function statusTone(column, value) {
@@ -7902,6 +7973,7 @@ function columnLabel(column) {
   const labels = {
     variable: "变量",
     driver_rank: "初筛排名",
+    initial_rank: "初筛结果（原始排名）",
     candidate_source: "候选来源",
     source_rank: "初筛排名",
     include_reason: "加入原因",
@@ -8038,6 +8110,13 @@ function columnLabel(column) {
     validation_status: "验证状态",
     evidence_consistency: "证据一致性",
     supporting_methods: "主要支持证据",
+    independent_predictive_support: "独立预测贡献证据",
+    confounder_assessment: "混杂风险审查",
+    control_relation_assessment: "控制关系审查",
+    statistical_limitation: "统计限制审查",
+    direction_assessment: "方向审查（带符号滞后）",
+    xgb_status: "XGB状态（已有结果）",
+    generalization_status: "泛化状态（已有结果）",
     limiting_factors: "限制因素",
     initial_screening_lag: "初筛滞后（signed）",
     validation_lag: "验证滞后（signed）",
@@ -8154,6 +8233,8 @@ function reset() {
   lastVerificationReviewPoolRows = [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
+  lastEvidenceMatrixRows = [];
+  evidenceMatrixStatusLabels = DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS;
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
@@ -8269,6 +8350,7 @@ function reset() {
   resetOptionalTable("finalReviewSummaryTable", "未运行 可信度审查摘要。");
   closeDetailModal();
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量可信度审查证据表。");
+  resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
   clearOptionalElement("xgbRunSummary");
@@ -8282,6 +8364,7 @@ function reset() {
   clearOptionalElement("conditionalDownload");
   clearOptionalElement("finalReviewSummaryDownload");
   clearOptionalElement("causalEvidenceDownload");
+  clearOptionalElement("evidenceMatrixDownload");
   el("causalTopN").value = "";
   el("riskFlagFilter").value = "";
   el("conditionalLagMode").value = "ranked_window";

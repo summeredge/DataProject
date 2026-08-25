@@ -91,8 +91,10 @@ def build_final_review_summary(
     """Build an engineer-facing third-layer confounder-review summary.
 
     ``final_rank`` and ``final_recommendation`` are retained legacy output
-    fields.  They describe only third-layer display and downstream compatibility;
-    they never change ``final_score``, ``driver_rank``, or first-layer Top-K.
+    fields.  ``final_rank`` is only an engineer-facing manual-review priority
+    (display sequence), while ``final_recommendation`` is a review suggestion;
+    neither represents an algorithmic conclusion or changes ``final_score``,
+    ``driver_rank``, or first-layer Top-K.
     """
     evidence = causal_review_evidence.copy(deep=True) if causal_review_evidence is not None else pd.DataFrame()
     conditional = conditional_granger_scores.copy(deep=True) if conditional_granger_scores is not None else pd.DataFrame()

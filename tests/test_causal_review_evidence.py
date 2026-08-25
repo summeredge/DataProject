@@ -1,7 +1,10 @@
+import inspect
+
 import pandas as pd
 import pytest
 
 from chem_ts_corr.causal_review_evidence import (
+    CONFIDENCE_REVIEW_COLUMNS,
     EVIDENCE_COLUMNS,
     EVIDENCE_MATRIX_COLUMNS,
     build_causal_review_evidence,
@@ -10,6 +13,11 @@ from chem_ts_corr.causal_review_evidence import (
 )
 from chem_ts_corr.causal_review import build_causal_review_candidates
 from chem_ts_corr.final_review_summary import build_final_review_summary
+from chem_ts_corr.screening import (
+    build_recommended_candidates,
+    final_ranked_features,
+    order_initial_candidates,
+)
 
 
 def _ranked(**extra):
@@ -611,3 +619,91 @@ def test_high_collinearity_with_independent_model_support_can_keep_limited_prior
 
     assert row["data_priority"] == "high"
     assert row["integrated_review_decision"] == "priority_review_with_statistical_limit"
+
+
+def test_evidence_matrix_preserves_primary_snapshot_and_top_k(tmp_path):
+    ranked = pd.DataFrame(
+        [
+            {"variable": "x1", "driver_rank": 1, "final_score": 0.91, "association_score": 0.91, "lag_quality": 0.9},
+            {"variable": "x2", "driver_rank": 2, "final_score": 0.82, "association_score": 0.82, "lag_quality": 0.8},
+            {"variable": "x3", "driver_rank": 3, "final_score": 0.71, "association_score": 0.71, "lag_quality": 0.7},
+        ]
+    )
+    ranked_path = tmp_path / "ranked_features.csv"
+    ranked.to_csv(ranked_path, index=False, encoding="utf-8-sig")
+    ranked_bytes_before = ranked_path.read_bytes()
+    ranked_before = ranked.copy(deep=True)
+    top_k_before = ranked.head(2)["variable"].tolist()
+
+    conditional = pd.DataFrame(
+        [
+            {"variable": "x1", "status": "ok", "fdr_q_value": 0.01, "predictive_contribution": 0.08},
+            {"variable": "x2", "status": "high_collinearity_risk", "fdr_q_value": pd.NA, "predictive_contribution": 0.04},
+            {"variable": "x3", "status": "ok", "fdr_q_value": 0.2, "predictive_contribution": 0.0},
+        ]
+    )
+    evidence = build_causal_review_evidence(ranked, conditional)
+    matrix = build_evidence_matrix(ranked, None, evidence)
+    summary = build_final_review_summary(evidence, ranked_features=ranked)
+
+    assert ranked_path.read_bytes() == ranked_bytes_before
+    pd.testing.assert_frame_equal(ranked, ranked_before)
+    assert ranked["final_score"].tolist() == [0.91, 0.82, 0.71]
+    assert ranked["driver_rank"].tolist() == [1, 2, 3]
+    assert ranked.head(2)["variable"].tolist() == top_k_before == ["x1", "x2"]
+    assert matrix["variable"].tolist() == ["x1", "x2", "x3"]
+    assert summary["variable"].tolist() == ["x1", "x2", "x3"]
+
+    # Adding all third-layer explanation fields must not alter initial ordering
+    # or the selected candidate variables.
+    enriched = ranked.copy(deep=True)
+    for column in CONFIDENCE_REVIEW_COLUMNS:
+        enriched[column] = matrix[column].tolist()
+    baseline_order = order_initial_candidates(ranked)
+    enriched_order = order_initial_candidates(enriched)
+    for column in ["variable", "final_score", "driver_rank"]:
+        assert enriched_order[column].tolist() == baseline_order[column].tolist()
+    baseline_candidates = build_recommended_candidates(ranked, top_k=2)
+    enriched_candidates = build_recommended_candidates(enriched, top_k=2)
+    for column in ["variable", "raw_candidate_rank", "candidate_pool_rank"]:
+        assert enriched_candidates[column].tolist() == baseline_candidates[column].tolist()
+
+
+def test_confidence_review_fields_are_not_primary_score_or_selection_inputs():
+    for function in [final_ranked_features, order_initial_candidates, build_recommended_candidates]:
+        source = inspect.getsource(function)
+        for field in CONFIDENCE_REVIEW_COLUMNS:
+            assert field not in source
+
+
+def test_evidence_matrix_keeps_not_computed_missing_zero_and_not_supported_distinct():
+    ranked = pd.DataFrame(
+        [
+            {"variable": "x1", "driver_rank": 1, "final_score": 0.9, "lag": 1},
+            {"variable": "x2", "driver_rank": 2, "final_score": 0.8, "lag": 2},
+        ]
+    )
+    not_computed_evidence = build_causal_review_evidence(ranked, pd.DataFrame())
+    not_computed_matrix = build_evidence_matrix(ranked, None, not_computed_evidence)
+
+    validation = pd.DataFrame(
+        [{"variable": "x1", "validation_status": "supported", "evidence_consistency": "consistent"}]
+    )
+    missing_matrix = build_evidence_matrix(ranked, validation, not_computed_evidence)
+
+    zero_conditional = pd.DataFrame(
+        [{"variable": "x1", "status": "ok", "fdr_q_value": 0.0, "predictive_contribution": 0.0}]
+    )
+    zero_evidence = build_causal_review_evidence(ranked, zero_conditional)
+    zero_matrix = build_evidence_matrix(ranked, validation, zero_evidence)
+
+    assert not_computed_matrix.loc[0, "validation_status"] == "not_computed"
+    assert missing_matrix.loc[1, "validation_status"] == "missing"
+    assert zero_evidence.loc[0, "conditional_fdr_q_value"] == 0.0
+    assert zero_evidence.loc[0, "predictive_contribution"] == 0.0
+    assert zero_matrix.loc[0, "independent_predictive_support"] == "not_supported"
+    assert {not_computed_matrix.loc[0, "validation_status"], missing_matrix.loc[1, "validation_status"], zero_matrix.loc[0, "independent_predictive_support"]} == {
+        "not_computed",
+        "missing",
+        "not_supported",
+    }

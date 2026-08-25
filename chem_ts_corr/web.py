@@ -137,6 +137,12 @@ MAX_TREND_TOTAL_POINTS = 300000
 MAX_EXCLUDE_WINDOW_CONTEXTS = 4
 EXCLUDE_WINDOW_CONTEXTS: dict[tuple[str, str], dict[str, Any]] = {}
 EXCLUDE_WINDOW_CONTEXTS_LOCK = threading.Lock()
+FINAL_REVIEW_SUMMARY_FIELD_NOTES = {
+    "final_rank": "人工复核优先级（展示序号）；仅用于第三层人工复核，不参与初筛评分或排序。",
+    "review_priority": "人工复核优先级。",
+    "review_reason": "证据摘要。",
+    "final_recommendation": "复核建议。",
+}
 INITIAL_SCREENING_COLUMNS = (
     "variable", "driver_rank", "final_score", "pearson", "spearman", "method", "dominant_corr",
     "correlation_direction", "lag", "direction", "lag_quality", "lag_quality_status",
@@ -933,6 +939,7 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "evidenceMatrix": _records(evidence_matrix.head(500)),
         "evidenceMatrixStatusLabels": evidence_matrix_status_labels(),
+        "finalReviewSummaryFieldNotes": dict(FINAL_REVIEW_SUMMARY_FIELD_NOTES),
         "grangerTests": _records(granger.head(200)),
         "importance": _records(importance.head(200)),
         "modelVariableImportance": _records(model_variable_importance.head(200)),
@@ -1438,6 +1445,7 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
         "causalReviewEvidence": _records(evidence.head(500)),
         "evidenceMatrix": _records(evidence_matrix.head(500)),
         "evidenceMatrixStatusLabels": evidence_matrix_status_labels(),
+        "finalReviewSummaryFieldNotes": dict(FINAL_REVIEW_SUMMARY_FIELD_NOTES),
         "validationSummary": _records(_validation_summary_for_payload(output_dir).head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "downloads": _download_links(run_id, output_dir),
@@ -3750,7 +3758,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
         <h2>可信度审查摘要</h2>
-        <div class="help">该表基于逐变量可信度审查证据生成，用于解释独立预测贡献、混杂风险、控制关系和统计限制。结果不是因果结论，也不改变初筛评分、排序或 Top-K。复核展示序号仅便于查看；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
+        <div class="help">该表基于逐变量可信度审查证据生成，用于解释独立预测贡献、混杂风险、控制关系和统计限制。结果不是因果结论，也不改变初筛评分、排序或 Top-K。人工复核优先级仅用于第三层展示和复核建议，不参与算法评分或初筛排序；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
         <div class="download-buttons" id="finalReviewSummaryDownload"></div>
         <h3>可信度审查概览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
@@ -3760,7 +3768,7 @@ INDEX_HTML = r"""<!doctype html>
         <div class="download-buttons" id="causalEvidenceDownload"></div>
         <div id="causalReviewEvidenceTable" class="empty">未运行 逐变量可信度审查证据表。</div>
         <h2>人工复核证据矩阵</h2>
-        <div class="help">按“变量 → 初筛结果 → 预测价值证据 → 独立性审查 → 混杂风险 → 控制关系 → 统计限制”组织展示。矩阵只引用已有初筛、二级验证、可信度审查和（如已执行）XGB字段，不产生新的评分或排名；“复核展示序号”也不改变初筛顺序。</div>
+        <div class="help">按“变量 → 初筛结果 → 预测价值证据 → 独立性审查 → 混杂风险 → 控制关系 → 统计限制”组织展示。矩阵只引用已有初筛、二级验证、可信度审查和（如已执行）XGB字段，不产生新的评分或排序；人工复核优先级仅用于展示，不改变初筛顺序。</div>
         <div class="download-buttons" id="evidenceMatrixDownload"></div>
         <div id="evidenceMatrixTable" class="empty">未运行 可信度审查，暂无人工复核证据矩阵。</div>
       </div>
@@ -8125,16 +8133,16 @@ function columnLabel(column) {
     validation_model_lift: "验证模型提升",
     candidate_grade: "候选等级",
     review_tier: "复核层级",
-    review_priority: "复核优先级",
-    review_reason: "复核原因",
+    review_priority: "人工复核优先级",
+    review_reason: "证据摘要",
     final_review_decision: "可信度审查建议",
-    final_review_reason: "可信度审查原因",
+    final_review_reason: "证据摘要",
     conditional_granger_status: "条件Granger状态",
-    final_rank: "复核展示序号（不影响初筛）",
+    final_rank: "人工复核优先级（展示序号；不参与初筛评分或排序）",
     final_recommendation: "可信度审查建议",
     final_decision: "可信度审查建议",
-    key_reason: "主要原因",
-    main_reason: "主要原因",
+    key_reason: "主要原因（证据摘要）",
+    main_reason: "主要原因（证据摘要）",
     suggested_next_action: "建议下一步",
     screening_grade: "主筛查等级",
     screening_score: "主筛查得分",
@@ -8156,7 +8164,7 @@ function columnLabel(column) {
     statistical_limit_reason: "统计限制原因",
     risk_constraint_level: "风险约束等级",
     integrated_review_decision: "可信度审查建议",
-    integrated_review_reason: "可信度审查原因",
+    integrated_review_reason: "证据摘要",
     independent_predictive_support: "独立预测贡献审查",
     confounder_assessment: "混杂风险审查",
     control_relation_assessment: "控制关系审查",

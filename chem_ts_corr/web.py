@@ -116,6 +116,7 @@ DOWNLOAD_FILES = {
     "llm_prompt.md",
     "llm_report.md",
     "xgb_validation/xgb_fold_metrics.csv",
+    "xgb_validation/xgb_fold_context.csv",
     "xgb_validation/xgb_model_summary.csv",
     "xgb_validation/xgb_candidate_uplift.csv",
     "xgb_validation/xgb_candidate_fold_metrics.csv",
@@ -1464,6 +1465,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
             "status": "skipped",
             "error_message": None,
             "xgbModelSummary": [],
+            "xgbFoldContext": [],
             "xgbCandidateUplift": [],
             "xgbCandidateFoldMetrics": [],
             "xgbValidationSummary": {},
@@ -1540,6 +1542,7 @@ def _xgb_response_payload(
     error_message: str | None,
 ) -> dict[str, Any]:
     model_summary = pd.DataFrame()
+    fold_context = pd.DataFrame()
     candidate_uplift = pd.DataFrame()
     candidate_fold_metrics = pd.DataFrame()
     validation_summary: dict[str, Any] = {}
@@ -1547,6 +1550,9 @@ def _xgb_response_payload(
     if status == "success":
         model_summary = _safe_read_result_csv(
             output_dir / "xgb_validation" / "xgb_model_summary.csv"
+        )
+        fold_context = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_fold_context.csv"
         )
         candidate_uplift = _safe_read_result_csv(
             output_dir / "xgb_validation" / "xgb_candidate_uplift.csv"
@@ -1570,6 +1576,7 @@ def _xgb_response_payload(
         "status": status,
         "error_message": error_message,
         "xgbModelSummary": _records(model_summary),
+        "xgbFoldContext": _records(fold_context),
         "xgbCandidateUplift": _records(candidate_uplift),
         "xgbCandidateFoldMetrics": _records(candidate_fold_metrics),
         "xgbValidationSummary": validation_summary,
@@ -3787,6 +3794,8 @@ INDEX_HTML = r"""<!doctype html>
         <h2>XGBoost 时间外预测验证</h2>
         <div class="help">第四层回答：候选变量在时间顺序隔离的数据中，是否仍提供额外预测信息。结果是候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不用于因果结论、工艺根因判断或变量排名，不改变前三层结果。</div>
         <div class="help">Baseline（M1）：目标变量历史信息 + 配置的控制变量历史；Candidate：同一 M1 基线 + 单个候选变量历史信息。预测改善只表示候选变量提供额外预测信息，不表示候选变量决定目标变量。</div>
+        <div class="help">工业连续时序中的相邻采样点通常存在自相关，因此样本行数不等于独立信息量。时间外验证应同时查看实际样本数和 train / validation / test 的时间覆盖范围。</div>
+        <div class="help">当前使用连续时间块的 expanding time folds，不进行随机抽样，因此测试集始终位于训练数据之后。</div>
         <div class="row">
           <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 时间外预测验证</label>
           <label>候选数量<input id="xgbTopN" type="number" min="1" max="10" value="8"></label>
@@ -3799,6 +3808,12 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div id="xgbStatus" class="help" aria-live="polite">XGB 时间外预测验证未启用。</div>
         <div id="xgbRunSummary" class="overview-grid"></div>
+        <details id="xgbFoldContextDetails">
+          <summary>时间折覆盖信息</summary>
+          <div class="help">以下时间范围、样本数、采样间隔、gap 和最大使用滞后均来自实际送入各 fold 模型的时间索引；行数代表模型使用的数据点数量，不等于统计意义上的独立样本数。</div>
+          <div id="xgbFoldContextTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        </details>
+        <div class="download-buttons" id="xgbFoldContextDownload"></div>
         <h2>模型时间外验证摘要</h2>
         <div class="download-buttons" id="xgbModelSummaryDownload"></div>
         <div class="download-buttons" id="xgbFoldMetricsDownload"></div>
@@ -3922,6 +3937,7 @@ const DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS = {
 let evidenceMatrixStatusLabels = DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS;
 let lastFinalReviewSummaryRows = [];
 let lastXgbModelSummaryRows = [];
+let lastXgbFoldContextRows = [];
 let lastXgbCandidateUpliftRows = [];
 let lastXgbCandidateFoldMetricRows = [];
 let lastXgbValidationSummary = {};
@@ -4389,6 +4405,7 @@ function renderAnalysisResult(data) {
   evidenceMatrixStatusLabels = data.evidenceMatrixStatusLabels || evidenceMatrixStatusLabels;
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
+  lastXgbFoldContextRows = [];
   lastXgbCandidateUpliftRows = [];
   lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
@@ -4423,6 +4440,7 @@ function renderAnalysisResult(data) {
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderEvidenceMatrixTable(lastEvidenceMatrixRows);
   renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+  renderXgbFoldContextTable(lastXgbFoldContextRows);
   renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
   clearXgbCandidateFoldDetails();
   renderXgbRunSummary(lastXgbValidationSummary);
@@ -4459,10 +4477,12 @@ function renderPendingBranchResult(data) {
   lastEvidenceMatrixRows = [];
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
+  lastXgbFoldContextRows = [];
   lastXgbCandidateUpliftRows = [];
   lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
   clearXgbCandidateFoldDetails();
+  clearXgbFoldContext();
   closeDetailModal();
   renderOverview({});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
@@ -4767,8 +4787,10 @@ async function runXgbValidation() {
     lastXgbModelSummaryRows = data.xgbModelSummary || [];
     lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
     lastXgbCandidateFoldMetricRows = data.xgbCandidateFoldMetrics || [];
+    lastXgbFoldContextRows = data.xgbFoldContext || [];
     lastXgbValidationSummary = data.xgbValidationSummary || {};
     renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+    renderXgbFoldContextTable(lastXgbFoldContextRows);
     renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
     clearXgbCandidateFoldDetails();
     renderXgbRunSummary(lastXgbValidationSummary);
@@ -6866,6 +6888,7 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
   conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
   xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
+  xgbFoldContextTable: ["fold", "train_time_range", "train_rows", "train_duration_minutes", "validation_time_range", "validation_rows", "validation_duration_minutes", "test_time_range", "test_rows", "test_duration_minutes", "sampling_interval_minutes", "gap_rows", "gap_duration_minutes", "max_used_lag", "max_used_lag_duration_minutes"],
   xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"],
   xgbCandidateFoldMetricsTable: ["variable", "fold", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"]
 };
@@ -7377,6 +7400,7 @@ function missingText(targetId) {
   if (targetId === "finalReviewSummaryTable") return "未运行 可信度审查摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量可信度审查证据表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 时间外预测验证。";
+  if (targetId === "xgbFoldContextTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbCandidateFoldMetricsTable") return "当前候选没有可展示的逐时间折明细。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
@@ -7422,6 +7446,38 @@ function conditionalGrangerColumns() {
 
 function xgbModelSummaryColumns() {
   return ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"];
+}
+
+function xgbFoldContextColumns() {
+  return [
+    "fold", "train_time_range", "train_rows", "train_duration_minutes",
+    "validation_time_range", "validation_rows", "validation_duration_minutes",
+    "test_time_range", "test_rows", "test_duration_minutes",
+    "sampling_interval_minutes", "gap_rows", "gap_duration_minutes",
+    "max_used_lag", "max_used_lag_duration_minutes",
+  ];
+}
+
+function xgbFoldContextDisplayRows(rows) {
+  return (rows || []).map((row) => ({
+    ...row,
+    train_time_range: `${row.train_start ?? ""} ~ ${row.train_end ?? ""}`,
+    validation_time_range: `${row.validation_start ?? ""} ~ ${row.validation_end ?? ""}`,
+    test_time_range: `${row.test_start ?? ""} ~ ${row.test_end ?? ""}`,
+  }));
+}
+
+function renderXgbFoldContextTable(rows) {
+  const displayRows = xgbFoldContextDisplayRows(rows);
+  renderGenericTable("xgbFoldContextTable", displayRows, xgbFoldContextColumns());
+  const details = el("xgbFoldContextDetails");
+  if (details) details.open = false;
+}
+
+function clearXgbFoldContext() {
+  const details = el("xgbFoldContextDetails");
+  if (details) details.open = false;
+  resetOptionalTable("xgbFoldContextTable", "未运行 XGB 时间外预测验证。");
 }
 
 function xgbCandidateUpliftColumns() {
@@ -7665,6 +7721,12 @@ function formatCellValue(column, value) {
   if (SIGNIFICANCE_COLUMNS.has(column) && Number.isFinite(scoreValue)) {
     return scoreValue.toPrecision(3);
   }
+  if ([
+    "train_duration_minutes", "validation_duration_minutes", "test_duration_minutes",
+    "sampling_interval_minutes", "gap_duration_minutes", "max_used_lag_duration_minutes",
+  ].includes(column) && Number.isFinite(scoreValue)) {
+    return formatMinutes(scoreValue);
+  }
   if (column === "n" && Number.isFinite(scoreValue)) {
     return String(Math.round(scoreValue));
   }
@@ -7733,8 +7795,17 @@ function renderReviewDownloads(downloads) {
   renderDownloadTarget("evidenceMatrixDownload", downloads, "evidence_matrix.csv");
 }
 
+function formatMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes >= 1440) return `${(minutes / 1440).toFixed(1)} 天`;
+  if (minutes > 60) return `${(minutes / 60).toFixed(1)} 小时`;
+  return `${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} min`;
+}
+
 function renderXgbDownloads(downloads) {
   renderDownloadTarget("xgbFoldMetricsDownload", downloads, "xgb_validation/xgb_fold_metrics.csv");
+  renderDownloadTarget("xgbFoldContextDownload", downloads, "xgb_validation/xgb_fold_context.csv");
   renderDownloadTarget("xgbModelSummaryDownload", downloads, "xgb_validation/xgb_model_summary.csv");
   renderDownloadTarget("xgbCandidateUpliftDownload", downloads, "xgb_validation/xgb_candidate_uplift.csv");
   renderDownloadTarget("xgbCandidateFoldMetricsDownload", downloads, "xgb_validation/xgb_candidate_fold_metrics.csv");
@@ -8208,9 +8279,19 @@ function columnLabel(column) {
     test_start: "测试开始",
     test_end: "测试结束",
     test_time_range: "测试时间范围",
+    train_time_range: "训练时间范围",
+    validation_time_range: "验证时间范围",
     train_rows: "训练样本数",
     validation_rows: "验证样本数",
     test_rows: "测试样本数",
+    train_duration_minutes: "训练时间跨度",
+    validation_duration_minutes: "验证时间跨度",
+    test_duration_minutes: "测试时间跨度",
+    sampling_interval_minutes: "采样间隔",
+    gap_rows: "Gap行数",
+    gap_duration_minutes: "Gap时间跨度",
+    max_used_lag: "最大使用滞后",
+    max_used_lag_duration_minutes: "最大使用滞后时间跨度",
     mean_rmse: "平均RMSE",
     mean_mae: "平均MAE",
     mean_r2: "平均R²",
@@ -8352,6 +8433,7 @@ function reset() {
   evidenceMatrixStatusLabels = DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS;
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
+  lastXgbFoldContextRows = [];
   lastXgbCandidateUpliftRows = [];
   lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
@@ -8468,11 +8550,13 @@ function reset() {
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量可信度审查证据表。");
   resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 时间外预测验证。");
+  clearXgbFoldContext();
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 时间外预测验证。");
   clearXgbCandidateFoldDetails();
   clearOptionalElement("xgbRunSummary");
   clearOptionalElement("xgbModelSummaryDownload");
   clearOptionalElement("xgbFoldMetricsDownload");
+  clearOptionalElement("xgbFoldContextDownload");
   clearOptionalElement("xgbCandidateUpliftDownload");
   clearOptionalElement("xgbCandidateFoldMetricsDownload");
   clearOptionalElement("xgbValidationSummaryDownload");

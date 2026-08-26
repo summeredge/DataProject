@@ -464,7 +464,7 @@ def test_xgb_keeps_formal_root_byte_identical(tmp_path: Path, monkeypatch):
     assert set(summary).isdisjoint(forbidden_decision_fields)
 
 
-def test_xgb_writes_exactly_six_outputs(tmp_path: Path, monkeypatch):
+def test_xgb_writes_exactly_seven_outputs(tmp_path: Path, monkeypatch):
     config = _make_raw_run(tmp_path)
     _write_input_csv(config)
     _install_fake_dependency(monkeypatch)

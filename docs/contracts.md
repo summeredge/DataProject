@@ -734,7 +734,7 @@ generalization_status
   下限检查真正送入模型的有效行数。
 - 任一 partition 有效样本不足时整个 XGB 返回 `invalid_input`，不得静默跳过
   fold、减少 fold 数、自动放宽下限、关闭工况 mask、减少 lag 或继续生成部分
-  结果；已有 `xgb_validation/` 六个输出按 transactional 行为保护。
+  结果；已有 `xgb_validation/` 七个输出按 transactional 行为保护。
 - formal fold-safe `row_count` 表示实际 out-of-time prediction rows（即
   `xgb_predictions.csv` 行数）；legacy runner 的 `row_count` 仍表示 legacy
   feature-set 有效行数。字段名不变。
@@ -762,11 +762,21 @@ generalization_status
   M1 的跨时间折预测增量证据，不表示候选变量决定目标变量。
 - `xgb_candidate_fold_metrics.csv` 才是候选变量 × 时间折的逐折明细；每一行对应一个实际可计算的
   候选变量和一个时间折。时间范围来自该折实际送入模型的数据索引，其中 baseline 是同折 M1，
-  candidate 是同折 `M1 + 单个候选变量`。该文件只复用已计算的 fold-level 结果，是
+  candidate 是同折 `M1 + 单个候选变量`；其 train / validation / test 时间范围、样本数、时间跨度、
+  sampling interval 和 gap 与 `xgb_fold_context.csv` 保持一致。该文件只复用已计算的 fold-level 结果，是
   `xgb_candidate_uplift.csv` 汇总结果的审计证据，不重复训练。
+- `xgb_fold_context.csv` 每个 fold 一行，记录实际模型输入的 `train_start` / `train_end`、
+  `validation_start` / `validation_end`、`test_start` / `test_end`、三类 partition 行数与
+  `*_duration_minutes`、`sampling_interval_minutes`、`gap_rows`、`gap_duration_minutes`、
+  `max_used_lag` 和 `max_used_lag_duration_minutes`。时间跨度由实际时间索引的最后时间戳减去第一时间戳，
+  不由行数乘采样间隔推算；无法可靠取得采样间隔时，相关换算字段保持缺失。
+- 工业连续时序中的相邻采样点通常存在自相关，行数代表模型实际使用的数据点数量，不等于统计意义上的
+  独立样本数。时间外验证应同时查看样本数和 train / validation / test 时间覆盖；当前使用连续时间块的
+  expanding time folds，不进行随机抽样，因此测试集始终位于训练数据之后。本层不计算有效独立样本数，
+  不新增可靠性评分或新的 validation status。
 - `positive_rmse_fold_ratio` 只表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分
   或因果置信度。逐折明细不得改变 `xgb_candidate_uplift.csv` 的既有字段、汇总结果、状态或顺序。
-- `xgb_fold_metrics.csv`、`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、
+- `xgb_fold_metrics.csv`、`xgb_fold_context.csv`、`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、
   `xgb_candidate_fold_metrics.csv`、`xgb_predictions.csv` 和
   `xgb_validation_summary.json` 中的 XGBoost 字段仅用于 prediction evidence；不得进入
   ranking、scoring 或 candidate selection。

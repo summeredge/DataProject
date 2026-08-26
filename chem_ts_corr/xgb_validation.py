@@ -13,7 +13,12 @@ from chem_ts_corr.feature_alignment import (
     predict_tabular_model,
 )
 
-from chem_ts_corr.time_axis import lagged_series, physical_gap_starts, sample_period_ns
+from chem_ts_corr.time_axis import (
+    SAMPLE_PERIOD_NS_ATTR,
+    lagged_series,
+    physical_gap_starts,
+    sample_period_ns,
+)
 
 try:
     from xgboost import XGBRegressor
@@ -180,6 +185,12 @@ CANDIDATE_FOLD_METRICS_COLUMNS = (
     "train_rows",
     "validation_rows",
     "test_rows",
+    "train_duration_minutes",
+    "validation_duration_minutes",
+    "test_duration_minutes",
+    "sampling_interval_minutes",
+    "gap_rows",
+    "gap_duration_minutes",
     "baseline_rmse",
     "candidate_rmse",
     "rmse_improvement_pct",
@@ -188,6 +199,27 @@ CANDIDATE_FOLD_METRICS_COLUMNS = (
     "mae_improvement_pct",
     "candidate_r2",
     "best_iteration",
+)
+
+XGB_FOLD_CONTEXT_COLUMNS = (
+    "fold",
+    "train_start",
+    "train_end",
+    "validation_start",
+    "validation_end",
+    "test_start",
+    "test_end",
+    "train_rows",
+    "validation_rows",
+    "test_rows",
+    "train_duration_minutes",
+    "validation_duration_minutes",
+    "test_duration_minutes",
+    "sampling_interval_minutes",
+    "gap_rows",
+    "gap_duration_minutes",
+    "max_used_lag",
+    "max_used_lag_duration_minutes",
 )
 
 
@@ -208,6 +240,137 @@ class CandidateUpliftSummary:
     def __post_init__(self) -> None:
         if self.validation_status not in XGB_VALIDATION_STATUS:
             raise ValueError("unknown candidate uplift validation_status")
+
+
+def build_xgb_fold_context(
+    fold_indices: Mapping[int, tuple[pd.Index, pd.Index, pd.Index]],
+    splits: Sequence[XGBTimeSplit],
+    *,
+    max_used_lag: int,
+    sampling_source: pd.DataFrame | pd.Series | None = None,
+) -> pd.DataFrame:
+    """Build audit-only time coverage from the actual model input indexes.
+
+    The indexes are supplied by the caller after feature alignment and
+    complete-case handling. This function only describes those indexes; it
+    does not rebuild features, alter split geometry, or affect model results.
+    """
+    rows: list[dict[str, object]] = []
+    resolved_max_used_lag = int(max_used_lag)
+    for split in splits:
+        if split.fold not in fold_indices:
+            raise ValueError(f"fold {split.fold} has no input indexes")
+        indexes = fold_indices[split.fold]
+        if len(indexes) != 3:
+            raise ValueError(
+                f"fold {split.fold} must provide train, validation and test indexes"
+            )
+        coverage = _fold_partition_coverage(indexes, sampling_source)
+        sampling_interval = coverage["sampling_interval_minutes"]
+        rows.append(
+            {
+                "fold": int(split.fold),
+                **coverage,
+                "gap_rows": int(split.gap),
+                "gap_duration_minutes": (
+                    float(split.gap) * sampling_interval
+                    if sampling_interval is not None
+                    else None
+                ),
+                "max_used_lag": resolved_max_used_lag,
+                "max_used_lag_duration_minutes": (
+                    float(resolved_max_used_lag) * sampling_interval
+                    if sampling_interval is not None
+                    else None
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=XGB_FOLD_CONTEXT_COLUMNS)
+
+
+def _fold_partition_coverage(
+    indexes: tuple[pd.Index, pd.Index, pd.Index],
+    sampling_source: pd.DataFrame | pd.Series | None,
+) -> dict[str, object]:
+    train_index, validation_index, test_index = indexes
+    sampling_period = _fold_sampling_period_ns(indexes, sampling_source)
+    sampling_interval = (
+        float(sampling_period / 60_000_000_000.0)
+        if sampling_period is not None
+        else None
+    )
+    train_start, train_end = _safe_index_range(train_index)
+    validation_start, validation_end = _safe_index_range(validation_index)
+    test_start, test_end = _safe_index_range(test_index)
+    return {
+        "train_start": train_start,
+        "train_end": train_end,
+        "validation_start": validation_start,
+        "validation_end": validation_end,
+        "test_start": test_start,
+        "test_end": test_end,
+        "train_rows": int(len(train_index)),
+        "validation_rows": int(len(validation_index)),
+        "test_rows": int(len(test_index)),
+        "train_duration_minutes": _duration_minutes(train_index),
+        "validation_duration_minutes": _duration_minutes(validation_index),
+        "test_duration_minutes": _duration_minutes(test_index),
+        "sampling_interval_minutes": sampling_interval,
+    }
+
+
+def _fold_sampling_period_ns(
+    indexes: tuple[pd.Index, pd.Index, pd.Index],
+    sampling_source: pd.DataFrame | pd.Series | None,
+) -> int | None:
+    combined = (
+        pd.Index(indexes[0])
+        .append(pd.Index(indexes[1]))
+        .append(pd.Index(indexes[2]))
+    )
+    probe = pd.DataFrame(index=combined)
+    if sampling_source is not None:
+        probe.attrs = dict(sampling_source.attrs)
+        stored = sampling_source.attrs.get(SAMPLE_PERIOD_NS_ATTR)
+        try:
+            stored = int(stored)
+        except (TypeError, ValueError, OverflowError):
+            stored = 0
+        if stored > 0 and isinstance(combined, pd.DatetimeIndex):
+            return sample_period_ns(probe)
+
+    # Do not use the artificial gaps between train/validation/test as sample
+    # intervals. A mode over within-partition deltas ignores isolated large
+    # data gaps and remains missing when there is not enough evidence.
+    positive_deltas: list[int] = []
+    for index in indexes:
+        if not isinstance(index, pd.DatetimeIndex) or len(index) < 2:
+            continue
+        deltas = np.diff(np.sort(index.asi8))
+        positive_deltas.extend(int(delta) for delta in deltas if delta > 0)
+    if len(positive_deltas) < 2:
+        return None
+    periods, counts = np.unique(
+        np.asarray(positive_deltas, dtype=np.int64), return_counts=True
+    )
+    return int(periods[np.argmax(counts)])
+
+
+def _duration_minutes(index: pd.Index) -> float | None:
+    if not isinstance(index, pd.DatetimeIndex) or len(index) == 0:
+        return None
+    start, end = _index_range(index)
+    if pd.isna(start) or pd.isna(end):
+        return None
+    try:
+        minutes = (pd.Timestamp(end) - pd.Timestamp(start)).total_seconds() / 60.0
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return float(minutes) if np.isfinite(minutes) and minutes >= 0 else None
+
+
+def _safe_index_range(index: pd.Index) -> tuple[object, object]:
+    return _index_range(index) if len(index) else (None, None)
 
 
 def build_xgb_candidate_pool(
@@ -865,6 +1028,8 @@ def run_candidate_uplift_validation(
 def build_candidate_fold_metrics(
     metrics: pd.DataFrame | None,
     fold_indices: Mapping[int, tuple[pd.Index, pd.Index, pd.Index]],
+    *,
+    fold_context: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Expose per-fold candidate evidence using the actual model input indexes.
 
@@ -883,6 +1048,23 @@ def build_candidate_fold_metrics(
             + ", ".join(sorted(missing))
         )
 
+    context_by_fold: dict[int, dict[str, object]] = {}
+    if fold_context is not None:
+        missing_context = set(XGB_FOLD_CONTEXT_COLUMNS).difference(
+            fold_context.columns
+        )
+        if missing_context:
+            raise ValueError(
+                "fold context missing columns: " + ", ".join(sorted(missing_context))
+            )
+        for context in fold_context.to_dict("records"):
+            fold = _integer(context.get("fold"))
+            if fold is None:
+                raise ValueError("fold context fold is invalid")
+            if fold in context_by_fold:
+                raise ValueError(f"fold context contains duplicate fold {fold}")
+            context_by_fold[fold] = context
+
     rows: list[dict[str, object]] = []
     for metric in metrics.to_dict("records"):
         try:
@@ -894,22 +1076,33 @@ def build_candidate_fold_metrics(
         train_index, validation_index, test_index = fold_indices[fold]
         if not len(train_index) or not len(validation_index) or not len(test_index):
             continue
-        train_start, train_end = _index_range(train_index)
-        validation_start, validation_end = _index_range(validation_index)
-        test_start, test_end = _index_range(test_index)
+        coverage = context_by_fold.get(fold)
+        if fold_context is not None and coverage is None:
+            raise ValueError(f"candidate uplift metric fold {fold} has no fold context")
+        if coverage is None:
+            coverage = _fold_partition_coverage(
+                (train_index, validation_index, test_index), None
+            )
+            coverage.update({"gap_rows": None, "gap_duration_minutes": None})
         rows.append(
             {
                 "variable": metric["variable"],
                 "fold": fold,
-                "train_start": train_start,
-                "train_end": train_end,
-                "validation_start": validation_start,
-                "validation_end": validation_end,
-                "test_start": test_start,
-                "test_end": test_end,
-                "train_rows": len(train_index),
-                "validation_rows": len(validation_index),
-                "test_rows": len(test_index),
+                "train_start": coverage["train_start"],
+                "train_end": coverage["train_end"],
+                "validation_start": coverage["validation_start"],
+                "validation_end": coverage["validation_end"],
+                "test_start": coverage["test_start"],
+                "test_end": coverage["test_end"],
+                "train_rows": coverage["train_rows"],
+                "validation_rows": coverage["validation_rows"],
+                "test_rows": coverage["test_rows"],
+                "train_duration_minutes": coverage["train_duration_minutes"],
+                "validation_duration_minutes": coverage["validation_duration_minutes"],
+                "test_duration_minutes": coverage["test_duration_minutes"],
+                "sampling_interval_minutes": coverage["sampling_interval_minutes"],
+                "gap_rows": coverage["gap_rows"],
+                "gap_duration_minutes": coverage["gap_duration_minutes"],
                 "baseline_rmse": metric["baseline_rmse"],
                 "candidate_rmse": metric["rmse"],
                 "rmse_improvement_pct": metric["rmse_improvement_pct"],

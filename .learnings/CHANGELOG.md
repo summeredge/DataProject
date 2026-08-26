@@ -19,3 +19,8 @@
 {"ts":"2026-08-18T00:00:01+08:00","action":"add","type":"learning","id":"LRN-20260818-001","summary":"Shadow 晋级正式评分需逐变量断言正式分数与诊断分解一致"}
 {"ts":"2026-08-26T00:00:00+08:00","action":"add","type":"error","id":"ERR-20260826-001","summary":"FastCtx 独立 MCP 调用因 Transport closed 失败，改用只读 PowerShell 读取"}
 {"ts":"2026-08-26T00:00:01+08:00","action":"add","type":"error","id":"ERR-20260826-002","summary":"指定 luna_worker 时不能同时启用 full-history fork"}
+{"ts":"2026-08-26T00:00:02+08:00","action":"add","type":"error","id":"ERR-20260826-003","summary":"跨 shell 的 python -c 换行转义导致插件清单解析语法错误"}
+{"ts":"2026-08-26T00:00:03+08:00","action":"add","type":"error","id":"ERR-20260826-004","summary":"apply_patch 目标路径重复拼接导致补丁未执行"}
+{"ts":"2026-08-26T00:00:04+08:00","action":"add","type":"error","id":"ERR-20260826-005","summary":"PowerShell 调用 Node 时正则反斜杠转义导致语法检查命令失败"}
+{"ts":"2026-08-26T00:00:05+08:00","action":"add","type":"error","id":"ERR-20260826-006","summary":"工作区 bundled Python 未包含 Ruff 模块，静态检查未执行"}
+{"ts":"2026-08-26T00:00:06+08:00","action":"add","type":"error","id":"ERR-20260826-007","summary":"完整 pytest 的既有 v05 overviewTop 顺序断言失败"}

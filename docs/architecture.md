@@ -63,11 +63,18 @@ Baseline（M1）是目标变量历史信息加
 规则不变；逐折结果只是当前分析数据范围内的多时间折时间外预测验证证据，不是随机交叉验证、
 长期泛化证明、跨月稳定性证明或跨季节验证。
 
-第四层正式输出包含 `xgb_fold_metrics.csv`、`xgb_model_summary.csv`、
-`xgb_candidate_uplift.csv`、`xgb_candidate_fold_metrics.csv`、`xgb_predictions.csv` 和
-`xgb_validation_summary.json`。其中 `xgb_candidate_fold_metrics.csv` 显式记录每个候选变量每个
-实际可计算时间折的 train / validation / test 时间范围、样本数和 Candidate_i 相对同折 M1 的指标；
-它复用已计算的 fold-level 结果，不重复训练，也不生成新的评分或排名。
+第四层正式输出包含 `xgb_fold_metrics.csv`、`xgb_fold_context.csv`、
+`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、`xgb_candidate_fold_metrics.csv`、
+`xgb_predictions.csv` 和 `xgb_validation_summary.json`。其中 `xgb_fold_context.csv` 显式记录
+每个时间折实际送入模型的 train / validation / test 时间范围、样本数、时间跨度、采样间隔、gap
+和最大使用滞后时间尺度；`xgb_candidate_fold_metrics.csv` 记录每个候选变量每个实际可计算时间折
+的相同时间覆盖与 Candidate_i 相对同折 M1 的指标。两者均复用已计算的 fold-level 结果，不重复训练，
+也不生成新的评分或排名。
+
+时间跨度由实际模型输入时间索引的最后时间戳减去第一时间戳，不由行数推算。工业连续时序中的相邻
+采样点通常存在自相关，样本行数不等于统计意义上的独立样本数；工程复核应同时查看样本数与
+train / validation / test 时间覆盖。当前使用连续时间块的 expanding time folds，不进行随机抽样，
+因此测试集始终位于训练数据之后。本层不计算有效独立样本数，不新增可靠性评分或新的 validation status。
 
 该层只供人工复核参考，不用于因果结论或工艺根因判断。XGBoost 输出不得回写或重排
 `final_score`、`ranked_features.csv`、`driver_rank`、Top-K、初筛推荐顺序、第二层

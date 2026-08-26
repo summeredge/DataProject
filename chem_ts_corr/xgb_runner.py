@@ -45,6 +45,7 @@ from chem_ts_corr.xgb_validation import (
     build_expanding_time_splits,
     build_xgb_candidate_pool,
     build_xgb_feature_sets,
+    build_xgb_fold_context,
     resolve_xgb_max_used_lag,
     run_candidate_uplift_validation,
     run_xgb_time_validation,
@@ -57,6 +58,7 @@ from chem_ts_corr.xgb_validation import (
 
 XGB_OUTPUT_FILES = (
     "xgb_fold_metrics.csv",
+    "xgb_fold_context.csv",
     "xgb_model_summary.csv",
     "xgb_candidate_uplift.csv",
     "xgb_candidate_fold_metrics.csv",
@@ -206,16 +208,24 @@ def run_xgb_validation(
             candidate_pool,
             baseline_result=model_result,
         )
+        fold_indices = {
+            split.fold: (
+                feature_sets.features.iloc[split.train_slice].index,
+                feature_sets.features.iloc[split.validation_slice].index,
+                feature_sets.features.iloc[split.test_slice].index,
+            )
+            for split in splits
+        }
+        fold_context = build_xgb_fold_context(
+            fold_indices,
+            splits,
+            max_used_lag=feature_sets.max_used_lag,
+            sampling_source=data,
+        )
         candidate_fold_metrics = build_candidate_fold_metrics(
             candidate_metrics,
-            {
-                split.fold: (
-                    feature_sets.features.iloc[split.train_slice].index,
-                    feature_sets.features.iloc[split.validation_slice].index,
-                    feature_sets.features.iloc[split.test_slice].index,
-                )
-                for split in splits
-            },
+            fold_indices,
+            fold_context=fold_context,
         )
         timings["candidate_uplift"] = _elapsed_seconds(stage_started_at)
     except RuntimeError as exc:
@@ -254,6 +264,7 @@ def run_xgb_validation(
             output_dir,
             {
                 "xgb_fold_metrics.csv": model_result.fold_metrics,
+                "xgb_fold_context.csv": fold_context,
                 "xgb_model_summary.csv": model_result.summary,
                 "xgb_candidate_uplift.csv": candidate_summary,
                 "xgb_candidate_fold_metrics.csv": candidate_fold_metrics,
@@ -434,6 +445,21 @@ def run_xgb_validation_fold_safe(
     stage_started_at = time.perf_counter()
     try:
         valid_candidates, invalid_variables = _fold_safe_candidate_map(candidate_pool, candidate_map)
+        fold_indices = {
+            int(entry["fold"]): (
+                entry["train_fs"].features.index,
+                entry["validation_features"].index,
+                entry["test_features"].index,
+            )
+            for entry in fold_data
+        }
+        actual_max_used_lag = int(fold_data[0]["train_fs"].max_used_lag)
+        fold_context = build_xgb_fold_context(
+            fold_indices,
+            splits,
+            max_used_lag=actual_max_used_lag,
+            sampling_source=split_base,
+        )
         candidate_metric_rows = _fold_safe_run_candidates(
             fold_data,
             valid_candidates,
@@ -468,14 +494,8 @@ def run_xgb_validation_fold_safe(
         candidate_metrics = pd.DataFrame(candidate_metric_rows, columns=candidate_columns)
         candidate_fold_metrics = build_candidate_fold_metrics(
             candidate_metrics,
-            {
-                int(entry["fold"]): (
-                    entry["train_fs"].features.index,
-                    entry["validation_features"].index,
-                    entry["test_features"].index,
-                )
-                for entry in fold_data
-            },
+            fold_indices,
+            fold_context=fold_context,
         )
         candidate_summary = summarize_candidate_uplift(candidate_metrics)
         if invalid_variables:
@@ -528,6 +548,7 @@ def run_xgb_validation_fold_safe(
             output_dir,
             {
                 "xgb_fold_metrics.csv": fold_metrics,
+                "xgb_fold_context.csv": fold_context,
                 "xgb_model_summary.csv": summary,
                 "xgb_candidate_uplift.csv": candidate_summary,
                 "xgb_candidate_fold_metrics.csv": candidate_fold_metrics,
@@ -936,7 +957,7 @@ def _write_outputs_transactionally(
                 (staged_dir / name).replace(output_dir / name)
                 committed.append(name)
 
-            # Measure after one complete six-file commit; the final replace persists the timings.
+            # Measure after one complete seven-file commit; the final replace persists the timings.
             if timings is not None and write_started_at is not None:
                 timings["write_outputs"] = _elapsed_seconds(write_started_at)
             if timings is not None and total_started_at is not None:

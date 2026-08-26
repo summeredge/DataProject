@@ -38,6 +38,18 @@ CANDIDATE_COLUMNS = [
 ]
 
 
+def test_xgb_output_contract_has_exactly_seven_files():
+    assert XGB_OUTPUT_FILES == (
+        "xgb_fold_metrics.csv",
+        "xgb_fold_context.csv",
+        "xgb_model_summary.csv",
+        "xgb_candidate_uplift.csv",
+        "xgb_candidate_fold_metrics.csv",
+        "xgb_predictions.csv",
+        "xgb_validation_summary.json",
+    )
+
+
 def _inputs(rows: int = 20):
     data = pd.DataFrame(
         {

@@ -182,6 +182,32 @@ ERROR: file or directory not found: tests/test_preprocess.py
 
 ---
 
+## [ERR-20260826-003] Python 清单解析命令的转义错误
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+通过 PowerShell 调用 `python -c` 时把字面量 `\n` 传给 Python，导致清单解析脚本语法错误。
+
+### 错误信息
+```text
+SyntaxError: unexpected character after line continuation character
+```
+
+### 上下文
+- 目的：只读校验插件 `plugin.json` 是否可解析。
+- 原因：在跨 shell 字符串中嵌入带转义换行的多行 Python 代码。
+
+### 建议修复
+优先使用 PowerShell 原生 JSON 解析；需要 Python 时使用单行分号表达式或先生成临时脚本，避免依赖跨 shell 的换行转义。
+
+### 元数据
+- Reproducible: yes
+
+---
+
 ## [ERR-20260826-001] FastCtx MCP 传输通道关闭
 
 **Priority**: low
@@ -208,6 +234,111 @@ FastCtx 传输失败后使用等价的只读本地文件读取路径；不要因
 ### 元数据
 - Reproducible: unknown
 - See Also: ERR-20260818-001
+
+---
+
+## [ERR-20260826-004] 补丁目标路径重复拼接
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+调用 `apply_patch` 时把工作区目录重复拼接到绝对路径，导致补丁未执行。
+
+### 错误信息
+```text
+apply_patch verification failed: Failed to read file to update ... 系统找不到指定的路径。
+```
+
+### 上下文
+- 目标文件已经使用绝对路径，但补丁路径又重复包含工作区目录。
+- 后续改用单一绝对路径重试，未产生文件修改。
+
+### 建议修复
+使用绝对路径时不要再次附加工作区相对目录；补丁失败后先检查目标路径，再重试。
+
+### 元数据
+- Reproducible: yes
+
+---
+
+## [ERR-20260826-005] Node 语法检查正则转义错误
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+通过 PowerShell 调用 Node 提取 HTML 脚本时，正则反斜杠被额外转义，导致 Node 将表达式解析为未闭合正则。
+
+### 错误信息
+```text
+Unterminated regexp literal
+SyntaxError: Invalid regular expression flags
+```
+
+### 上下文
+- 目的：只读检查 `web.py` 内嵌 JavaScript 语法。
+- 原因：PowerShell、Node 字符串和正则表达式多层转义组合不正确。
+
+### 建议修复
+优先使用不含复杂正则的分隔字符串提取脚本，减少跨 shell 的反斜杠转义层数。
+
+### 元数据
+- Reproducible: yes
+
+---
+
+## [ERR-20260826-006] Bundled Python 缺少 Ruff 模块
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+使用工作区规定的 bundled Python 执行 Ruff 检查时，运行时未安装 `ruff` 模块。
+
+### 错误信息
+```text
+No module named ruff
+```
+
+### 上下文
+- 目的：对本次修改的 Python 文件执行静态检查。
+- Python 编译检查和相关 pytest 已通过；没有改用未经配置的系统 Python。
+
+### 建议修复
+若需要 Ruff 检查，应先确认工作区运行时包含该依赖；否则报告未执行并依靠编译和测试验证。
+
+### 元数据
+- Reproducible: yes
+
+---
+
+## [ERR-20260826-007] 完整回归包含既有 UI 顺序断言失败
+
+**Priority**: low
+**Status**: pending
+**Area**: tools
+
+### 摘要
+完整 pytest 通过 2093 项，但未修改的 v05 UI 测试因 `overviewTop` 字段顺序与当前 HEAD 实现不一致而失败。
+
+### 错误信息
+```text
+FAILED tests/test_v05_display_polish.py::test_overview_recommendations_preserve_backend_default_order
+```
+
+### 上下文
+- 本次修改未触及 `overviewTop` 定义或 v05 展示逻辑。
+- XGB 相关测试和新增 fold context 测试均通过。
+
+### 建议修复
+由负责 v05 UI 契约的后续变更同步实现与测试中的默认展示字段顺序；本任务不扩大范围处理。
+
+### 元数据
+- Reproducible: yes
 
 ---
 

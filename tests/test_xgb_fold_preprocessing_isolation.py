@@ -12,7 +12,9 @@ from chem_ts_corr.preprocess import (
     transform_frame_causal,
 )
 from chem_ts_corr.xgb_validation import (
+    CANDIDATE_FOLD_METRICS_COLUMNS,
     XGBFoldMetric,
+    XGB_FOLD_CONTEXT_COLUMNS,
     build_expanding_time_splits,
     resolve_xgb_max_used_lag,
 )
@@ -362,19 +364,35 @@ def test_sufficient_fold_still_succeeds(tmp_path, monkeypatch):
         tmp_path / "xgb_validation/xgb_candidate_fold_metrics.csv"
     )
     assert len(candidate_details) == 3
-    assert candidate_details.columns.tolist() == [
-        "variable", "fold", "train_start", "train_end", "validation_start",
-        "validation_end", "test_start", "test_end", "train_rows", "validation_rows",
-        "test_rows", "baseline_rmse", "candidate_rmse", "rmse_improvement_pct",
-        "baseline_mae", "candidate_mae", "mae_improvement_pct", "candidate_r2",
-        "best_iteration",
-    ]
+    assert candidate_details.columns.tolist() == list(CANDIDATE_FOLD_METRICS_COLUMNS)
     for _, row in candidate_details.iterrows():
         assert pd.Timestamp(row["train_end"]) < pd.Timestamp(row["validation_start"])
         assert pd.Timestamp(row["validation_end"]) < pd.Timestamp(row["test_start"])
         assert row["train_rows"] > 0
         assert row["validation_rows"] > 0
         assert row["test_rows"] > 0
+
+    context = pd.read_csv(tmp_path / "xgb_validation/xgb_fold_context.csv")
+    assert context.columns.tolist() == list(XGB_FOLD_CONTEXT_COLUMNS)
+    assert context["fold"].tolist() == [0, 1, 2]
+    assert (context["sampling_interval_minutes"] == 1.0).all()
+    assert (context["gap_rows"] == 5).all()
+    assert (context["gap_duration_minutes"] == 5.0).all()
+    assert (context["max_used_lag"] == 5).all()
+    assert (context["max_used_lag_duration_minutes"] == 5.0).all()
+    for _, row in context.iterrows():
+        assert row["train_duration_minutes"] == row["train_rows"] - 1
+        assert row["validation_duration_minutes"] == row["validation_rows"] - 1
+        assert row["test_duration_minutes"] == row["test_rows"] - 1
+        detail = candidate_details[candidate_details["fold"] == row["fold"]].iloc[0]
+        for field in (
+            "train_start", "train_end", "validation_start", "validation_end",
+            "test_start", "test_end", "train_rows", "validation_rows", "test_rows",
+            "train_duration_minutes", "validation_duration_minutes",
+            "test_duration_minutes", "sampling_interval_minutes", "gap_rows",
+            "gap_duration_minutes",
+        ):
+            assert detail[field] == row[field]
 
 
 def test_effective_row_failure_preserves_existing_outputs(tmp_path, monkeypatch):

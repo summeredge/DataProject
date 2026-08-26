@@ -91,18 +91,35 @@ test 仅用于报告指标。整体语义是当前分析数据范围内的多时
 输出位于运行目录的 `xgb_validation/`：
 
 - `xgb_fold_metrics.csv`：M0/M1/M2 各时间折指标。
+- `xgb_fold_context.csv`：每个时间折实际送入模型的 train / validation / test 时间范围、样本数、
+  时间跨度、采样间隔、gap 和最大使用滞后对应的时间尺度。
 - `xgb_model_summary.csv`：整体模型跨折摘要及 M2 相对 M1 的改善（时间外表现证据）。
 - `xgb_candidate_uplift.csv`：逐候选相对 M1 baseline 的预测增量证据和状态。
 - `xgb_candidate_fold_metrics.csv`：逐候选、逐时间折的预测增量明细，包括实际训练、验证、测试
-  时间范围和对应的 baseline/candidate 指标；该文件复用已训练的 Candidate_i 与同折 M1 结果，不重复训练。
+  时间范围、实际时间跨度、采样间隔、gap 和对应的 baseline/candidate 指标；该文件复用已训练的
+  Candidate_i 与同折 M1 结果，不重复训练。
 - `xgb_predictions.csv`：各测试折真实值与 M0/M1/M2 预测，供时间外表现复核。
 - `xgb_validation_summary.json`：数据规模、特征规模、配置、provenance fingerprint、阶段耗时和文件清单。
 
-以上六个文件属于第四层正式输出。逐折明细是 `xgb_candidate_uplift.csv` 汇总结果的审计证据，
+以上七个文件属于第四层正式输出。`xgb_fold_context.csv` 和逐折明细是第四层工程审计信息，
+其中逐折明细是 `xgb_candidate_uplift.csv` 汇总结果的审计证据，
 不改变汇总字段、状态、候选顺序或前三层结果。候选为 `insufficient_features` 或未计算时不生成
 伪造的逐折模型指标，但正式文件仍保留空表 schema。
 
 JSON 不包含原始数据值、用户文件路径或前三层排名字段。
+
+### 时间覆盖与可靠性审计
+
+`xgb_fold_context.csv` 的 `*_duration_minutes` 均由该 partition 实际送入模型的时间索引计算，
+即最后实际时间戳减去第一实际时间戳，不通过行数乘采样间隔推算。`sampling_interval_minutes`
+优先复用现有时间轴采样周期识别；没有可靠时间间隔时保持缺失。`gap_rows` 直接记录现有
+`XGBTimeSplit.gap`，`gap_duration_minutes` 和 `max_used_lag_duration_minutes` 仅按采样间隔
+换算，采样间隔缺失时也保持缺失。
+
+工业连续时序中的相邻采样点通常存在自相关，因此样本行数代表模型实际使用的数据点数量，不等于
+统计意义上的独立样本数量。工程复核应同时查看实际样本数和 train / validation / test 的时间覆盖范围。
+当前使用连续时间块的 expanding time folds，不进行随机抽样，因此测试集始终位于训练数据之后。
+本层不计算有效独立样本数，也不新增可靠性评分或新的 validation status。
 
 ## 8. 性能说明
 
@@ -153,8 +170,8 @@ target 缺失处理、固定采样周期），随后对每个 `train` / `gap_1` 
 `gap_2` / `test` 分区独立执行 causal preprocessing 与 transform，lowpass /
 detrend / diff / forward-fill 状态不跨 fold 边界；gap 仍等于实际 max used lag，
 并作为 positive lag history buffer。M0 / M1 / M2 定义、candidate uplift 判定、
-XGB 参数与既有汇总输出 schema 均保持不变；新增 `xgb_candidate_fold_metrics.csv` 仅显式化
-已计算的逐候选逐折证据。
+XGB 参数与既有汇总输出 schema 均保持不变；新增 `xgb_fold_context.csv` 和时间覆盖字段仅提供
+已计算的逐折工程审计证据。
 
 ### 有效样本下限与审计字段
 

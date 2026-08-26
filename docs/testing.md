@@ -493,7 +493,7 @@
 - 只消费正式 root `ranked_features.csv` 与 `final_review_summary.csv`，
   不读 `screening_branches/`、`preprocessing_comparison.csv` 或
   `model_discovered_candidates.csv`；
-- 运行前后前三层正式文件 byte-identical；成功只写六个 XGB 输出文件；
+- 运行前后前三层正式文件 byte-identical；成功只写七个 XGB 输出文件；
 - 首次成功创建 downstream lock，已有 lock 仍可继续运行；
 - 缺失 xgboost 返回 `missing_dependency`；
 - 正式入口返回有效样本不足导致的 `invalid_input`（例如工况 mask 使
@@ -509,7 +509,7 @@
 - raw 分支仍使用 expanding split、gap 与 positive lag；
 - 每个 fold 在 preprocessing / target mask / lag / dropna 后再次校验
   100 / 30 / 30 有效样本下限，不足时返回 `invalid_input` 且不训练任何模型，
-  已有六个输出保持不变；
+  已有七个输出保持不变；
 - lowpass_diff 或 lag 删除导致有效样本不足时正确阻断；
 - `row_count` 等于实际 out-of-time prediction rows，不等于 split-base 行数；
 - `data_fingerprint` 覆盖所有 fold 实际 train / validation / test 输入：修改

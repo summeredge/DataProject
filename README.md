@@ -86,11 +86,17 @@ Fold 2 为更多历史到更后的时间段，Fold 3 为更多历史到最后的
 - 计算每个候选变量相对基线模型的 RMSE/MAE 改善；
 - 检查正向改善是否在多个时间折中重复出现；
 - 提供 `xgb_candidate_fold_metrics.csv`，显式展示每个候选变量每个时间折的真实训练、验证、测试
-  时间范围、样本数和相对同折 M1 的预测指标；
+  时间范围、样本数、实际时间跨度、采样间隔、gap 和相对同折 M1 的预测指标；
+- 提供默认折叠的 `xgb_fold_context.csv`，审计每个时间折实际 train / validation / test 的时间覆盖、
+  样本数、gap 与最大使用滞后对应的时间尺度；
 - 区分增量信号、弱增量、基线冗余和跨时间不稳定等状态。
 
 `positive_rmse_fold_ratio` 仅表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分或
 因果置信度。逐折明细属于第四层人工复核证据，不参与前三层评分、排序、Top-K 或候选选择。
+
+工业连续时序中的相邻采样点通常存在自相关，因此样本行数不等于统计意义上的独立样本数。时间外验证
+应同时查看实际样本数和 train / validation / test 的时间覆盖范围。当前使用连续时间块的 expanding
+time folds，不进行随机抽样，因此测试集始终位于训练数据之后。
 
 XGBoost 结果只表示候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不会回写或
 重排 `final_score`、`ranked_features.csv`、Top-K、第二层 `validation_summary` 或第三层
@@ -276,11 +282,12 @@ Web 页面是主要使用入口；命令行适合固定参数的批量运行。
 | `preprocessing_comparison.csv` | Raw 与所选预处理模式的分支对比（非 Raw 工作流） |
 | `preprocessing_context.json` | 正式分支选择与预处理上下文（审计用） |
 | `xgb_validation/xgb_fold_metrics.csv` | M0/M1/M2 各时间折指标 |
+| `xgb_validation/xgb_fold_context.csv` | 各时间折实际时间覆盖、样本数、采样间隔、gap 与最大使用滞后时间尺度 |
 | `xgb_validation/xgb_model_summary.csv` | 模型跨时间折摘要 |
 | `xgb_validation/xgb_candidate_uplift.csv` | 候选变量增量汇总与现有状态 |
 | `xgb_validation/xgb_candidate_fold_metrics.csv` | 候选变量逐时间折增量明细与真实时间范围 |
 | `xgb_validation/xgb_predictions.csv` | 各测试折真实值与模型预测 |
-| `xgb_validation/xgb_validation_summary.json` | XGB 运行配置、摘要与六文件清单 |
+| `xgb_validation/xgb_validation_summary.json` | XGB 运行配置、摘要与七文件清单 |
 | `llm_prompt.md` / `llm_report.md` | AI 综合解读材料 |
 
 ## 使用边界

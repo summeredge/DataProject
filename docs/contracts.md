@@ -756,11 +756,14 @@ generalization_status
 
 - M0 是目标变量自身历史的简单模型；M1 是目标变量历史信息加配置的控制变量历史，
   也是逐候选比较使用的 baseline；M2 在 M1 上加入全部候选变量特征。
-- `xgb_candidate_uplift.csv` 的每一行比较同一时间折的 `M1 + 单个候选变量` 与 M1。
-  Baseline 和 Candidate 的差异只表示候选变量的额外预测信息，不表示候选变量决定目标变量。
-- `xgb_candidate_fold_metrics.csv` 的每一行表示一个候选变量与一个实际可计算时间折，时间范围
-  来自该折实际送入模型的数据索引；其中 baseline 指标是同折 M1，candidate 指标是同折
-  `M1 + 单个候选变量`。该文件只复用已计算的 fold-level 结果，不重复训练。
+- `xgb_candidate_uplift.csv` 的每一行对应一个候选变量的跨时间折汇总结果，包含
+  `fold_count`、`positive_rmse_fold_ratio`、RMSE/MAE improvement 的 median、mean、
+  worst-fold 等现有汇总字段，以及 `validation_status`。这些汇总结果只表示候选变量相对
+  M1 的跨时间折预测增量证据，不表示候选变量决定目标变量。
+- `xgb_candidate_fold_metrics.csv` 才是候选变量 × 时间折的逐折明细；每一行对应一个实际可计算的
+  候选变量和一个时间折。时间范围来自该折实际送入模型的数据索引，其中 baseline 是同折 M1，
+  candidate 是同折 `M1 + 单个候选变量`。该文件只复用已计算的 fold-level 结果，是
+  `xgb_candidate_uplift.csv` 汇总结果的审计证据，不重复训练。
 - `positive_rmse_fold_ratio` 只表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分
   或因果置信度。逐折明细不得改变 `xgb_candidate_uplift.csv` 的既有字段、汇总结果、状态或顺序。
 - `xgb_fold_metrics.csv`、`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、

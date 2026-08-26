@@ -33,6 +33,7 @@ from chem_ts_corr.xgb_validation import (
     DEFAULT_XGB_MIN_VALIDATION_ROWS,
     DEFAULT_XGB_TOP_N,
     DEFAULT_XGB_PARAMS,
+    build_candidate_fold_metrics,
     CandidateUpliftMetric,
     CandidateUpliftSummary,
     XGBFoldMetric,
@@ -58,6 +59,7 @@ XGB_OUTPUT_FILES = (
     "xgb_fold_metrics.csv",
     "xgb_model_summary.csv",
     "xgb_candidate_uplift.csv",
+    "xgb_candidate_fold_metrics.csv",
     "xgb_predictions.csv",
     "xgb_validation_summary.json",
 )
@@ -198,11 +200,22 @@ def run_xgb_validation(
 
     stage_started_at = time.perf_counter()
     try:
-        _, candidate_summary = run_candidate_uplift_validation(
+        candidate_metrics, candidate_summary = run_candidate_uplift_validation(
             feature_sets,
             splits,
             candidate_pool,
             baseline_result=model_result,
+        )
+        candidate_fold_metrics = build_candidate_fold_metrics(
+            candidate_metrics,
+            {
+                split.fold: (
+                    feature_sets.features.iloc[split.train_slice].index,
+                    feature_sets.features.iloc[split.validation_slice].index,
+                    feature_sets.features.iloc[split.test_slice].index,
+                )
+                for split in splits
+            },
         )
         timings["candidate_uplift"] = _elapsed_seconds(stage_started_at)
     except RuntimeError as exc:
@@ -243,6 +256,7 @@ def run_xgb_validation(
                 "xgb_fold_metrics.csv": model_result.fold_metrics,
                 "xgb_model_summary.csv": model_result.summary,
                 "xgb_candidate_uplift.csv": candidate_summary,
+                "xgb_candidate_fold_metrics.csv": candidate_fold_metrics,
                 "xgb_predictions.csv": model_result.predictions,
             },
             summary_payload,
@@ -452,6 +466,17 @@ def run_xgb_validation_fold_safe(
 
         candidate_columns = list(CandidateUpliftMetric.__dataclass_fields__)
         candidate_metrics = pd.DataFrame(candidate_metric_rows, columns=candidate_columns)
+        candidate_fold_metrics = build_candidate_fold_metrics(
+            candidate_metrics,
+            {
+                int(entry["fold"]): (
+                    entry["train_fs"].features.index,
+                    entry["validation_features"].index,
+                    entry["test_features"].index,
+                )
+                for entry in fold_data
+            },
+        )
         candidate_summary = summarize_candidate_uplift(candidate_metrics)
         if invalid_variables:
             candidate_summary = pd.DataFrame(
@@ -505,6 +530,7 @@ def run_xgb_validation_fold_safe(
                 "xgb_fold_metrics.csv": fold_metrics,
                 "xgb_model_summary.csv": summary,
                 "xgb_candidate_uplift.csv": candidate_summary,
+                "xgb_candidate_fold_metrics.csv": candidate_fold_metrics,
                 "xgb_predictions.csv": predictions,
             },
             summary_payload,
@@ -910,7 +936,7 @@ def _write_outputs_transactionally(
                 (staged_dir / name).replace(output_dir / name)
                 committed.append(name)
 
-            # Measure after one complete five-file commit; the final replace persists the timings.
+            # Measure after one complete six-file commit; the final replace persists the timings.
             if timings is not None and write_started_at is not None:
                 timings["write_outputs"] = _elapsed_seconds(write_started_at)
             if timings is not None and total_started_at is not None:

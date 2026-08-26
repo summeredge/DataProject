@@ -13,6 +13,7 @@ import chem_ts_corr.service as service
 import chem_ts_corr.xgb_runner as runner
 from chem_ts_corr.xgb_runner import XGBRunResult, XGB_OUTPUT_FILES, run_xgb_validation
 from chem_ts_corr.xgb_validation import (
+    CANDIDATE_FOLD_METRICS_COLUMNS,
     DEFAULT_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGB_PARAMS,
     XGBFeatureSets,
@@ -119,6 +120,7 @@ def _mock_success(
     expected_top_n: int = 8,
     expected_max_lag: int = 5,
     expected_target_mask: pd.Series | None = None,
+    candidate_metrics: pd.DataFrame | None = None,
 ):
     pool = pd.DataFrame([{"candidate_order": 1, "variable": "x", "screening_lag": 3}])
     feature_sets = _feature_sets()
@@ -155,7 +157,8 @@ def _mock_success(
         assert received_features is feature_sets
         assert received_splits is splits
         assert kwargs["baseline_result"] is model_result
-        return pd.DataFrame(), _candidate_summary()
+        metrics = candidate_metrics if candidate_metrics is not None else pd.DataFrame()
+        return metrics, _candidate_summary()
 
     monkeypatch.setattr(runner, "build_xgb_candidate_pool", build_pool)
     monkeypatch.setattr(runner, "build_xgb_feature_sets", build_features)
@@ -207,12 +210,50 @@ def test_success_writes_all_fixed_files_and_exact_frames(
         check_dtype=False,
     )
     assert pd.read_csv(output_dir / "xgb_candidate_uplift.csv").columns.tolist() == CANDIDATE_COLUMNS
+    assert pd.read_csv(output_dir / "xgb_candidate_fold_metrics.csv").columns.tolist() == list(
+        CANDIDATE_FOLD_METRICS_COLUMNS
+    )
     assert pd.read_csv(output_dir / "xgb_predictions.csv").columns.tolist() == (
         _model_result().predictions.columns.tolist()
     )
     assert result.fold_metrics_path == str(output_dir / "xgb_fold_metrics.csv")
     assert result.summary_path == str(output_dir / "xgb_model_summary.csv")
     assert result.candidate_uplift_path == str(output_dir / "xgb_candidate_uplift.csv")
+
+
+def test_legacy_runner_writes_candidate_fold_ranges_from_actual_feature_indexes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[str] = []
+    candidate_metrics = pd.DataFrame([{
+        "variable": "x", "fold": 0,
+        "train_rows": 6, "validation_rows": 3, "test_rows": 3,
+        "rmse": 0.9, "mae": 0.92, "r2": 0.5,
+        "baseline_rmse": 1.0, "baseline_mae": 1.0,
+        "rmse_improvement_pct": 10.0, "mae_improvement_pct": 8.0,
+        "best_iteration": 4,
+    }])
+    _mock_success(monkeypatch, calls, candidate_metrics=candidate_metrics)
+    data, final, ranked = _inputs()
+
+    result = run_xgb_validation(
+        run_dir=tmp_path, target="target", data=data,
+        final_review_summary=final, ranked_features=ranked,
+    )
+
+    assert result.status == "success"
+    details = pd.read_csv(tmp_path / "xgb_validation/xgb_candidate_fold_metrics.csv")
+    row = details.iloc[0]
+    assert row["train_start"] == 0
+    assert row["train_end"] == 5
+    assert row["validation_start"] == 6
+    assert row["validation_end"] == 8
+    assert row["test_start"] == 9
+    assert row["test_end"] == 11
+    assert row["candidate_rmse"] == 0.9
+    assert row["candidate_mae"] == 0.92
+    assert row["rmse_improvement_pct"] == 10.0
+    assert row["mae_improvement_pct"] == 8.0
 
 
 def test_json_summary_is_auditable_and_has_no_ranking_fields(

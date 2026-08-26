@@ -57,6 +57,18 @@ Baseline（M1）是目标变量历史信息加
 配置的控制变量历史；Candidate 是同一 M1 基线再加入单个候选变量历史信息。改善只说明
 候选变量提供额外预测信息，不表示候选变量决定目标变量。
 
+当前第四层使用现有的 3 个 expanding time folds（`DEFAULT_OUTER_SPLITS = 3`，由
+`build_expanding_time_splits()` 构造）：Fold 1 是较早历史到后续时间段，Fold 2 是更多历史到更后的
+时间段，Fold 3 是更多历史到最后的时间段。每折的 train / validation / test 与 gap 几何保持现有
+规则不变；逐折结果只是当前分析数据范围内的多时间折时间外预测验证证据，不是随机交叉验证、
+长期泛化证明、跨月稳定性证明或跨季节验证。
+
+第四层正式输出包含 `xgb_fold_metrics.csv`、`xgb_model_summary.csv`、
+`xgb_candidate_uplift.csv`、`xgb_candidate_fold_metrics.csv`、`xgb_predictions.csv` 和
+`xgb_validation_summary.json`。其中 `xgb_candidate_fold_metrics.csv` 显式记录每个候选变量每个
+实际可计算时间折的 train / validation / test 时间范围、样本数和 Candidate_i 相对同折 M1 的指标；
+它复用已计算的 fold-level 结果，不重复训练，也不生成新的评分或排名。
+
 该层只供人工复核参考，不用于因果结论或工艺根因判断。XGBoost 输出不得回写或重排
 `final_score`、`ranked_features.csv`、`driver_rank`、Top-K、初筛推荐顺序、第二层
 `validation_summary` 或第三层可信度审查结果，也不得进入 ranking、scoring 或

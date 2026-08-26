@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import asdict, dataclass
 from numbers import Integral
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -166,6 +166,29 @@ class CandidateUpliftMetric:
     rmse_improvement_pct: float
     mae_improvement_pct: float
     best_iteration: int | None
+
+
+CANDIDATE_FOLD_METRICS_COLUMNS = (
+    "variable",
+    "fold",
+    "train_start",
+    "train_end",
+    "validation_start",
+    "validation_end",
+    "test_start",
+    "test_end",
+    "train_rows",
+    "validation_rows",
+    "test_rows",
+    "baseline_rmse",
+    "candidate_rmse",
+    "rmse_improvement_pct",
+    "baseline_mae",
+    "candidate_mae",
+    "mae_improvement_pct",
+    "candidate_r2",
+    "best_iteration",
+)
 
 
 @dataclass(frozen=True)
@@ -839,6 +862,67 @@ def run_candidate_uplift_validation(
     return metrics, summary
 
 
+def build_candidate_fold_metrics(
+    metrics: pd.DataFrame | None,
+    fold_indices: Mapping[int, tuple[pd.Index, pd.Index, pd.Index]],
+) -> pd.DataFrame:
+    """Expose per-fold candidate evidence using the actual model input indexes.
+
+    ``metrics`` is produced by ``run_candidate_uplift_validation`` and already
+    contains the fitted candidate and same-fold M1 measurements. This helper
+    only projects those rows together with the train/validation/test indexes;
+    it never rebuilds features or trains another model.
+    """
+    if metrics is None or metrics.empty:
+        return pd.DataFrame(columns=CANDIDATE_FOLD_METRICS_COLUMNS)
+    required = set(CandidateUpliftMetric.__dataclass_fields__)
+    missing = required.difference(metrics.columns)
+    if missing:
+        raise ValueError(
+            "candidate uplift metrics missing columns: "
+            + ", ".join(sorted(missing))
+        )
+
+    rows: list[dict[str, object]] = []
+    for metric in metrics.to_dict("records"):
+        try:
+            fold = int(metric["fold"])
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError("candidate uplift metric fold is invalid") from exc
+        if fold not in fold_indices:
+            raise ValueError(f"candidate uplift metric fold {fold} has no input indexes")
+        train_index, validation_index, test_index = fold_indices[fold]
+        if not len(train_index) or not len(validation_index) or not len(test_index):
+            continue
+        train_start, train_end = _index_range(train_index)
+        validation_start, validation_end = _index_range(validation_index)
+        test_start, test_end = _index_range(test_index)
+        rows.append(
+            {
+                "variable": metric["variable"],
+                "fold": fold,
+                "train_start": train_start,
+                "train_end": train_end,
+                "validation_start": validation_start,
+                "validation_end": validation_end,
+                "test_start": test_start,
+                "test_end": test_end,
+                "train_rows": len(train_index),
+                "validation_rows": len(validation_index),
+                "test_rows": len(test_index),
+                "baseline_rmse": metric["baseline_rmse"],
+                "candidate_rmse": metric["rmse"],
+                "rmse_improvement_pct": metric["rmse_improvement_pct"],
+                "baseline_mae": metric["baseline_mae"],
+                "candidate_mae": metric["mae"],
+                "mae_improvement_pct": metric["mae_improvement_pct"],
+                "candidate_r2": metric["r2"],
+                "best_iteration": metric["best_iteration"],
+            }
+        )
+    return pd.DataFrame(rows, columns=CANDIDATE_FOLD_METRICS_COLUMNS)
+
+
 def _xgb_validation_provenance(
     feature_sets: XGBFeatureSets,
     splits: list[XGBTimeSplit],
@@ -1276,6 +1360,10 @@ def _integer(value: object) -> int | None:
     if number is None or not number.is_integer():
         return None
     return int(number)
+
+
+def _index_range(index: pd.Index) -> tuple[object, object]:
+    return index[0], index[-1]
 
 
 def _required_int(value: object, field: str, fold: int) -> int:

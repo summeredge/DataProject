@@ -182,6 +182,61 @@ ERROR: file or directory not found: tests/test_preprocess.py
 
 ---
 
+## [ERR-20260826-001] FastCtx MCP 传输通道关闭
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+本次会话直接调用 FastCtx 的 `inspect_local_file` 与 `glob` 时均因传输通道关闭而失败。
+
+### 错误信息
+```
+tool call failed for `fastctx/inspect_local_file`
+Caused by:
+    Transport closed
+```
+
+### 上下文
+- 读取任务附件和仓库文件时，FastCtx 独立 MCP 调用连续返回 `Transport closed`。
+- 后续改用只读 PowerShell 读取，未影响实现和验证。
+
+### 建议修复
+FastCtx 传输失败后使用等价的只读本地文件读取路径；不要因此修改项目代码或测试语义。
+
+### 元数据
+- Reproducible: unknown
+- See Also: ERR-20260818-001
+
+---
+
+## [ERR-20260826-002] 子智能体调用参数组合不兼容
+
+**Priority**: low
+**Status**: resolved
+**Area**: tools
+
+### 摘要
+调用指定 `luna_worker` 时同时设置完整历史 fork，工具拒绝了该参数组合。
+
+### 错误信息
+```
+Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.
+```
+
+### 上下文
+- 初次尝试以 `agent_type=luna_worker` 和 `fork_context=true` 启动实现任务。
+- 随后改为不 fork 历史的指定 worker 调用；用户要求后续不再调用任何子智能体。
+
+### 建议修复
+指定 agent type 时不要同时启用 full-history fork；如果用户要求停止子智能体，立即停止后续调用并由主线程继续。
+
+### 元数据
+- Reproducible: yes
+
+---
+
 ## [ERR-20260818-001] FastCtx 不能作为 functions.exec 的嵌套工具调用
 
 **Priority**: low

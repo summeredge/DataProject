@@ -102,6 +102,23 @@ def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
         pd.DataFrame(
             [{"variable": "x", "median_rmse_improvement_pct": 5.0, "validation_status": "validated_incremental_signal"}]
         ).to_csv(output_dir / "xgb_candidate_uplift.csv", index=False)
+        pd.DataFrame(
+            [{
+                "variable": "x", "fold": 0,
+                "train_start": "2025-01-01T00:00:00",
+                "train_end": "2025-01-01T00:09:00",
+                "validation_start": "2025-01-01T00:11:00",
+                "validation_end": "2025-01-01T00:14:00",
+                "test_start": "2025-01-01T00:16:00",
+                "test_end": "2025-01-01T00:19:00",
+                "train_rows": 10, "validation_rows": 4, "test_rows": 4,
+                "baseline_rmse": 1.0, "candidate_rmse": 0.9,
+                "rmse_improvement_pct": 10.0,
+                "baseline_mae": 0.8, "candidate_mae": 0.7,
+                "mae_improvement_pct": 12.5, "candidate_r2": 0.5,
+                "best_iteration": 4,
+            }]
+        ).to_csv(output_dir / "xgb_candidate_fold_metrics.csv", index=False)
         (output_dir / "xgb_validation_summary.json").write_text(
             json.dumps({"status": "success", "candidate_count": 1}), encoding="utf-8"
         )
@@ -138,6 +155,7 @@ def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
     pd.testing.assert_frame_equal(pd.read_csv(run_dir / "ranked_features.csv"), before_ranked)
     assert payload["xgbModelSummary"][0]["model_name"] == "M2"
     assert payload["xgbCandidateUplift"][0]["variable"] == "x"
+    assert payload["xgbCandidateFoldMetrics"][0]["fold"] == 0
     assert payload["xgbValidationSummary"]["candidate_count"] == 1
     assert "候选变量预测增量证据" in payload["message"]
     assert "人工复核参考" in payload["message"]
@@ -145,6 +163,7 @@ def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
     download_names = {item["name"] for item in payload["downloads"]}
     assert "xgb_validation/xgb_model_summary.csv" in download_names
     assert "xgb_validation/xgb_candidate_uplift.csv" in download_names
+    assert "xgb_validation/xgb_candidate_fold_metrics.csv" in download_names
     assert "xgb_validation/xgb_validation_summary.json" in download_names
 
 
@@ -403,8 +422,10 @@ def test_xgb_web_surface_and_architecture_guards():
     for marker in [
         'id="enableXgbValidation"', 'id="xgbTopN"', 'id="xgbMaxLag"',
         'id="xgbWhitelist"', 'id="runXgbValidation"', 'id="xgbModelSummaryTable"',
-        'id="xgbCandidateUpliftTable"', "xgb_validation/xgb_model_summary.csv",
+        'id="xgbCandidateUpliftTable"', 'id="xgbCandidateFoldDetails"',
+        'id="xgbCandidateFoldMetricsTable"', "xgb_validation/xgb_model_summary.csv",
         "xgb_validation/xgb_candidate_uplift.csv", "xgb_validation/xgb_validation_summary.json",
+        "xgb_validation/xgb_candidate_fold_metrics.csv", "逐时间折验证明细",
         'id="xgbRunSummary"', 'max="5000"', "renderXgbRunSummary",
         "row_count", "candidate_count", "fold_count", "m0_feature_count",
         "m1_feature_count", "m2_feature_count", "max_used_lag", "timings.total",
@@ -511,6 +532,10 @@ def test_xgb_candidate_uplift_help_and_columns_remain_explicit():
     assert (
         'return ["variable", "median_rmse_improvement_pct", '
         '"median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];'
+    ) in source
+    assert (
+        'return ["variable", "fold", "test_time_range", "rmse_improvement_pct", '
+        '"mae_improvement_pct", "test_rows"];'
     ) in source
 
 

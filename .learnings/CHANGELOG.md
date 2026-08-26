@@ -17,3 +17,5 @@
 {"ts":"2026-08-14T00:00:00+08:00","action":"add","type":"error","id":"ERR-20260814-001","summary":"pytest 目标文件名先经文件检索确认，避免收集前退出"}
 {"ts":"2026-08-18T00:00:00+08:00","action":"add","type":"error","id":"ERR-20260818-001","summary":"FastCtx 需直接调用，不能假定为 functions.exec 嵌套工具"}
 {"ts":"2026-08-18T00:00:01+08:00","action":"add","type":"learning","id":"LRN-20260818-001","summary":"Shadow 晋级正式评分需逐变量断言正式分数与诊断分解一致"}
+{"ts":"2026-08-26T00:00:00+08:00","action":"add","type":"error","id":"ERR-20260826-001","summary":"FastCtx 独立 MCP 调用因 Transport closed 失败，改用只读 PowerShell 读取"}
+{"ts":"2026-08-26T00:00:01+08:00","action":"add","type":"error","id":"ERR-20260826-002","summary":"指定 luna_worker 时不能同时启用 full-history fork"}

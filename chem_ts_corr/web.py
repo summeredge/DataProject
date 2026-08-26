@@ -115,8 +115,11 @@ DOWNLOAD_FILES = {
     "preprocessing_context.json",
     "llm_prompt.md",
     "llm_report.md",
+    "xgb_validation/xgb_fold_metrics.csv",
     "xgb_validation/xgb_model_summary.csv",
     "xgb_validation/xgb_candidate_uplift.csv",
+    "xgb_validation/xgb_candidate_fold_metrics.csv",
+    "xgb_validation/xgb_predictions.csv",
     "xgb_validation/xgb_validation_summary.json",
 }
 MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
@@ -1462,6 +1465,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
             "error_message": None,
             "xgbModelSummary": [],
             "xgbCandidateUplift": [],
+            "xgbCandidateFoldMetrics": [],
             "xgbValidationSummary": {},
             "downloads": [],
             "message": "XGB 时间外预测验证未启用。",
@@ -1537,6 +1541,7 @@ def _xgb_response_payload(
 ) -> dict[str, Any]:
     model_summary = pd.DataFrame()
     candidate_uplift = pd.DataFrame()
+    candidate_fold_metrics = pd.DataFrame()
     validation_summary: dict[str, Any] = {}
     downloads = _download_links(run_id, output_dir)
     if status == "success":
@@ -1545,6 +1550,9 @@ def _xgb_response_payload(
         )
         candidate_uplift = _safe_read_result_csv(
             output_dir / "xgb_validation" / "xgb_candidate_uplift.csv"
+        )
+        candidate_fold_metrics = _safe_read_result_csv(
+            output_dir / "xgb_validation" / "xgb_candidate_fold_metrics.csv"
         )
         summary_path = output_dir / "xgb_validation" / "xgb_validation_summary.json"
         validation_summary = (
@@ -1563,6 +1571,7 @@ def _xgb_response_payload(
         "error_message": error_message,
         "xgbModelSummary": _records(model_summary),
         "xgbCandidateUplift": _records(candidate_uplift),
+        "xgbCandidateFoldMetrics": _records(candidate_fold_metrics),
         "xgbValidationSummary": validation_summary,
         "downloads": downloads,
         "message": messages.get(status, "XGB 时间外预测验证未运行。"),
@@ -3792,6 +3801,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="xgbRunSummary" class="overview-grid"></div>
         <h2>模型时间外验证摘要</h2>
         <div class="download-buttons" id="xgbModelSummaryDownload"></div>
+        <div class="download-buttons" id="xgbFoldMetricsDownload"></div>
         <div id="xgbModelSummaryTable" class="empty">未运行 XGB 时间外预测验证。</div>
         <h2>候选变量增量验证</h2>
         <div class="help">
@@ -3802,7 +3812,14 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
         <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        <details id="xgbCandidateFoldDetails">
+          <summary>逐时间折验证明细</summary>
+          <div class="help">每一折模拟“使用更早时间段训练，在后续未参与训练的时间段验证”。多个时间折出现正向改善，表示预测增量在当前数据范围内具有更好的跨时间一致性，但不代表长期稳定性或工艺因果关系。</div>
+          <div id="xgbCandidateFoldMetricsTable" class="empty">点击候选变量汇总行后查看该变量的逐时间折明细。</div>
+        </details>
+        <div class="download-buttons" id="xgbCandidateFoldMetricsDownload"></div>
         <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
+        <div class="download-buttons" id="xgbPredictionsDownload"></div>
       </div>
 
 
@@ -3906,6 +3923,7 @@ let evidenceMatrixStatusLabels = DEFAULT_EVIDENCE_MATRIX_STATUS_LABELS;
 let lastFinalReviewSummaryRows = [];
 let lastXgbModelSummaryRows = [];
 let lastXgbCandidateUpliftRows = [];
+let lastXgbCandidateFoldMetricRows = [];
 let lastXgbValidationSummary = {};
 let llmPromptText = "";
 let llmReportMarkdown = "";
@@ -4372,6 +4390,7 @@ function renderAnalysisResult(data) {
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
+  lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
   closeDetailModal();
   renderOverview(data.overview || {});
@@ -4404,7 +4423,8 @@ function renderAnalysisResult(data) {
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderEvidenceMatrixTable(lastEvidenceMatrixRows);
   renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
-  renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+  renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
+  clearXgbCandidateFoldDetails();
   renderXgbRunSummary(lastXgbValidationSummary);
   renderReviewDownloads(data.downloads || []);
   renderDownloads(data.downloads || []);
@@ -4440,7 +4460,9 @@ function renderPendingBranchResult(data) {
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
+  lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
+  clearXgbCandidateFoldDetails();
   closeDetailModal();
   renderOverview({});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
@@ -4744,9 +4766,11 @@ async function runXgbValidation() {
     const data = await postForm("/api/run_xgb_validation", form);
     lastXgbModelSummaryRows = data.xgbModelSummary || [];
     lastXgbCandidateUpliftRows = data.xgbCandidateUplift || [];
+    lastXgbCandidateFoldMetricRows = data.xgbCandidateFoldMetrics || [];
     lastXgbValidationSummary = data.xgbValidationSummary || {};
     renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
-    renderGenericTable("xgbCandidateUpliftTable", lastXgbCandidateUpliftRows, xgbCandidateUpliftColumns());
+    renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
+    clearXgbCandidateFoldDetails();
     renderXgbRunSummary(lastXgbValidationSummary);
     renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
     renderDownloads(data.downloads || []);
@@ -6842,7 +6866,8 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   enhancedRollingTable: ["variable", "best_lag", "best_score", "rolling_corr_median", "rolling_stability"],
   conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
   xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
-  xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"]
+  xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"],
+  xgbCandidateFoldMetricsTable: ["variable", "fold", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"]
 };
 
 function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
@@ -7353,6 +7378,7 @@ function missingText(targetId) {
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量可信度审查证据表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 时间外预测验证。";
+  if (targetId === "xgbCandidateFoldMetricsTable") return "当前候选没有可展示的逐时间折明细。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
   return "无可展示结果。";
 }
@@ -7400,6 +7426,68 @@ function xgbModelSummaryColumns() {
 
 function xgbCandidateUpliftColumns() {
   return ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];
+}
+
+function xgbCandidateFoldMetricColumns() {
+  return ["variable", "fold", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"];
+}
+
+function renderXgbCandidateUpliftTable(rows) {
+  renderGenericTable("xgbCandidateUpliftTable", rows || [], xgbCandidateUpliftColumns());
+  const container = el("xgbCandidateUpliftTable");
+  if (!container) return;
+  container.onclick = (event) => {
+    const rowElement = event.target.closest?.("tbody tr");
+    if (!rowElement || !shouldOpenRowDetail(event)) return;
+    const displayRows = sortedRowsForTable("xgbCandidateUpliftTable", rows || []);
+    const row = displayRows[Number(rowElement.dataset.rowIndex)];
+    if (row) renderXgbCandidateFoldDetails(row.variable);
+  };
+}
+
+function renderXgbCandidateFoldDetails(variable) {
+  const details = el("xgbCandidateFoldDetails");
+  const rows = lastXgbCandidateFoldMetricRows.filter(
+    (row) => String(row.variable ?? "") === String(variable ?? "")
+  );
+  if (details) {
+    details.open = true;
+    const summary = details.querySelector("summary");
+    if (summary) summary.textContent = `逐时间折验证明细：${displayCellValue("variable", variable)}`;
+  }
+  if (!rows.length) {
+    resetOptionalTable(
+      "xgbCandidateFoldMetricsTable",
+      "该候选没有可展示的逐时间折明细（可能为有效特征不足或尚未计算）。"
+    );
+    return;
+  }
+  const displayRows = rows.map((row) => ({
+    variable: row.variable,
+    fold: row.fold,
+    test_time_range: `${row.test_start ?? ""} ~ ${row.test_end ?? ""}`,
+    rmse_improvement_pct: row.rmse_improvement_pct,
+    mae_improvement_pct: row.mae_improvement_pct,
+    test_rows: row.test_rows,
+  }));
+  renderGenericTable(
+    "xgbCandidateFoldMetricsTable",
+    displayRows,
+    xgbCandidateFoldMetricColumns()
+  );
+}
+
+function clearXgbCandidateFoldDetails() {
+  const details = el("xgbCandidateFoldDetails");
+  if (details) {
+    details.open = false;
+    const summary = details.querySelector("summary");
+    if (summary) summary.textContent = "逐时间折验证明细";
+  }
+  resetOptionalTable(
+    "xgbCandidateFoldMetricsTable",
+    "点击候选变量汇总行后查看该变量的逐时间折明细。"
+  );
 }
 
 function renderXgbRunSummary(summary) {
@@ -7646,9 +7734,12 @@ function renderReviewDownloads(downloads) {
 }
 
 function renderXgbDownloads(downloads) {
+  renderDownloadTarget("xgbFoldMetricsDownload", downloads, "xgb_validation/xgb_fold_metrics.csv");
   renderDownloadTarget("xgbModelSummaryDownload", downloads, "xgb_validation/xgb_model_summary.csv");
   renderDownloadTarget("xgbCandidateUpliftDownload", downloads, "xgb_validation/xgb_candidate_uplift.csv");
+  renderDownloadTarget("xgbCandidateFoldMetricsDownload", downloads, "xgb_validation/xgb_candidate_fold_metrics.csv");
   renderDownloadTarget("xgbValidationSummaryDownload", downloads, "xgb_validation/xgb_validation_summary.json");
+  renderDownloadTarget("xgbPredictionsDownload", downloads, "xgb_validation/xgb_predictions.csv");
 }
 
 function renderDownloadTarget(targetId, downloads, fileName) {
@@ -7760,7 +7851,7 @@ function renderTableCell(column, value) {
 function tableCellClass(column, value) {
   const name = String(column || "");
   const number = typeof value === "number" ? value : Number(value);
-  const numericColumn = /(?:^|_)(score|lag|rmse|p_value|q_value|rank|count|n_rows|condition_number|importance|contribution)(?:$|_)/i.test(name);
+  const numericColumn = /(?:^|_)(score|lag|rmse|mae|r2|p_value|q_value|rank|count|rows|fold|condition_number|importance|contribution|iteration)(?:$|_)/i.test(name);
   if (Number.isFinite(number) || numericColumn) return "numeric";
   const wrapColumn = /interpretation|reason|action|risk_flags|control_columns|evidence_reason|statistical_limit_reason|key_reason|suggested_next_action|lag_boundary_hint|supporting_methods|limiting_factors/i.test(name);
   return wrapColumn ? "wrap-cell" : "";
@@ -8109,10 +8200,25 @@ function columnLabel(column) {
     baseline_maxlag: "基准滞后上限",
     interpretation: "解释边界",
     model_name: "模型",
+    fold: "时间折",
+    train_start: "训练开始",
+    train_end: "训练结束",
+    validation_start: "验证开始",
+    validation_end: "验证结束",
+    test_start: "测试开始",
+    test_end: "测试结束",
+    test_time_range: "测试时间范围",
+    train_rows: "训练样本数",
+    validation_rows: "验证样本数",
+    test_rows: "测试样本数",
     mean_rmse: "平均RMSE",
     mean_mae: "平均MAE",
     mean_r2: "平均R²",
     M2_vs_M1_rmse_improvement_pct: "M2相对M1 RMSE改善(%)",
+    rmse_improvement_pct: "RMSE改善(%)",
+    mae_improvement_pct: "MAE改善(%)",
+    candidate_r2: "候选R²",
+    best_iteration: "最佳迭代轮数",
     median_rmse_improvement_pct: "RMSE改善中位数(%)",
     median_mae_improvement_pct: "MAE改善中位数(%)",
     positive_rmse_fold_ratio: "RMSE改善折占比",
@@ -8247,6 +8353,7 @@ function reset() {
   lastFinalReviewSummaryRows = [];
   lastXgbModelSummaryRows = [];
   lastXgbCandidateUpliftRows = [];
+  lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
   lastTrendSeries = [];
   lastTrendAxisMode = "shared";
@@ -8362,10 +8469,14 @@ function reset() {
   resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 时间外预测验证。");
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 时间外预测验证。");
+  clearXgbCandidateFoldDetails();
   clearOptionalElement("xgbRunSummary");
   clearOptionalElement("xgbModelSummaryDownload");
+  clearOptionalElement("xgbFoldMetricsDownload");
   clearOptionalElement("xgbCandidateUpliftDownload");
+  clearOptionalElement("xgbCandidateFoldMetricsDownload");
   clearOptionalElement("xgbValidationSummaryDownload");
+  clearOptionalElement("xgbPredictionsDownload");
   el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
   el("xgbTopN").value = "8";
   el("xgbMaxLag").value = "";

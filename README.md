@@ -74,6 +74,10 @@ XGBoost 时间外预测验证默认关闭。自动候选来自第三层可信度
 包含目标变量历史信息和配置的控制变量历史；Candidate 在同一 M1 基线上加入单个候选变量
 历史信息。改善表示候选变量的额外预测信息，不表示候选变量决定目标变量。
 
+当前使用 3 个 expanding time folds（`DEFAULT_OUTER_SPLITS = 3`）：Fold 1 为较早历史到后续时间段，
+Fold 2 为更多历史到更后的时间段，Fold 3 为更多历史到最后的时间段。它表示当前分析数据范围内
+的多时间折时间外预测验证，不是随机交叉验证，也不代表长期泛化、跨月稳定性或跨季节验证。
+
 主要功能：
 
 - 使用按时间顺序划分的训练、验证和测试区间；
@@ -81,7 +85,12 @@ XGBoost 时间外预测验证默认关闭。自动候选来自第三层可信度
 - 输出 RMSE、MAE、R² 等时间外验证指标；
 - 计算每个候选变量相对基线模型的 RMSE/MAE 改善；
 - 检查正向改善是否在多个时间折中重复出现；
+- 提供 `xgb_candidate_fold_metrics.csv`，显式展示每个候选变量每个时间折的真实训练、验证、测试
+  时间范围、样本数和相对同折 M1 的预测指标；
 - 区分增量信号、弱增量、基线冗余和跨时间不稳定等状态。
+
+`positive_rmse_fold_ratio` 仅表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分或
+因果置信度。逐折明细属于第四层人工复核证据，不参与前三层评分、排序、Top-K 或候选选择。
 
 XGBoost 结果只表示候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不会回写或
 重排 `final_score`、`ranked_features.csv`、Top-K、第二层 `validation_summary` 或第三层
@@ -266,7 +275,12 @@ Web 页面是主要使用入口；命令行适合固定参数的批量运行。
 | `final_review_summary.csv` | 最终人工复核优先级 |
 | `preprocessing_comparison.csv` | Raw 与所选预处理模式的分支对比（非 Raw 工作流） |
 | `preprocessing_context.json` | 正式分支选择与预处理上下文（审计用） |
-| `xgb_validation/` | XGBoost 时间外验证结果 |
+| `xgb_validation/xgb_fold_metrics.csv` | M0/M1/M2 各时间折指标 |
+| `xgb_validation/xgb_model_summary.csv` | 模型跨时间折摘要 |
+| `xgb_validation/xgb_candidate_uplift.csv` | 候选变量增量汇总与现有状态 |
+| `xgb_validation/xgb_candidate_fold_metrics.csv` | 候选变量逐时间折增量明细与真实时间范围 |
+| `xgb_validation/xgb_predictions.csv` | 各测试折真实值与模型预测 |
+| `xgb_validation/xgb_validation_summary.json` | XGB 运行配置、摘要与六文件清单 |
 | `llm_prompt.md` / `llm_report.md` | AI 综合解读材料 |
 
 ## 使用边界

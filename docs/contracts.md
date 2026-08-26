@@ -734,7 +734,7 @@ generalization_status
   下限检查真正送入模型的有效行数。
 - 任一 partition 有效样本不足时整个 XGB 返回 `invalid_input`，不得静默跳过
   fold、减少 fold 数、自动放宽下限、关闭工况 mask、减少 lag 或继续生成部分
-  结果；已有 `xgb_validation/` 五个输出按 transactional 行为保护。
+  结果；已有 `xgb_validation/` 六个输出按 transactional 行为保护。
 - formal fold-safe `row_count` 表示实际 out-of-time prediction rows（即
   `xgb_predictions.csv` 行数）；legacy runner 的 `row_count` 仍表示 legacy
   feature-set 有效行数。字段名不变。
@@ -749,11 +749,22 @@ generalization_status
 隔离的数据中是否仍提供额外预测信息。它输出候选变量预测增量证据和模型时间外表现，
 仅供人工复核参考，不用于因果结论、工艺根因判断或变量排名。
 
+- 当前使用现有的 3 个 expanding time folds（`DEFAULT_OUTER_SPLITS = 3`，由
+  `build_expanding_time_splits()` 构造），不是随机交叉验证。Fold 1 为较早历史到后续时间段，
+  Fold 2 为更多历史到更后的时间段，Fold 3 为更多历史到最后的时间段。统一称为当前分析数据
+  范围内的多时间折时间外预测验证，不表示长期泛化、跨月稳定性或跨季节验证。
+
 - M0 是目标变量自身历史的简单模型；M1 是目标变量历史信息加配置的控制变量历史，
   也是逐候选比较使用的 baseline；M2 在 M1 上加入全部候选变量特征。
 - `xgb_candidate_uplift.csv` 的每一行比较同一时间折的 `M1 + 单个候选变量` 与 M1。
   Baseline 和 Candidate 的差异只表示候选变量的额外预测信息，不表示候选变量决定目标变量。
-- `xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、`xgb_predictions.csv` 和
+- `xgb_candidate_fold_metrics.csv` 的每一行表示一个候选变量与一个实际可计算时间折，时间范围
+  来自该折实际送入模型的数据索引；其中 baseline 指标是同折 M1，candidate 指标是同折
+  `M1 + 单个候选变量`。该文件只复用已计算的 fold-level 结果，不重复训练。
+- `positive_rmse_fold_ratio` 只表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分
+  或因果置信度。逐折明细不得改变 `xgb_candidate_uplift.csv` 的既有字段、汇总结果、状态或顺序。
+- `xgb_fold_metrics.csv`、`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、
+  `xgb_candidate_fold_metrics.csv`、`xgb_predictions.csv` 和
   `xgb_validation_summary.json` 中的 XGBoost 字段仅用于 prediction evidence；不得进入
   ranking、scoring 或 candidate selection。
 - XGBoost 运行前后必须保持 `final_score`、`ranked_features.csv`、`driver_rank`、Top-K、

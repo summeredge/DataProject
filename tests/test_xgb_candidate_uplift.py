@@ -10,6 +10,7 @@ import pytest
 
 import chem_ts_corr.xgb_validation as xgb_module
 from chem_ts_corr.xgb_validation import (
+    CANDIDATE_FOLD_METRICS_COLUMNS,
     CandidateUpliftMetric,
     CandidateUpliftSummary,
     XGBFeatureSets,
@@ -17,6 +18,7 @@ from chem_ts_corr.xgb_validation import (
     XGBTimeSplit,
     XGBValidationResult,
     XGB_VALIDATION_STATUS,
+    build_candidate_fold_metrics,
     run_candidate_uplift_validation,
     run_xgb_time_validation,
     summarize_candidate_uplift,
@@ -644,6 +646,104 @@ def test_output_columns_match_metric_and_summary_contracts(
 
     assert metrics.columns.tolist() == list(CandidateUpliftMetric.__dataclass_fields__)
     assert summary.columns.tolist() == list(CandidateUpliftSummary.__dataclass_fields__)
+
+
+def test_candidate_fold_metrics_reuse_model_results_and_actual_partition_indexes(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    splits = [
+        XGBTimeSplit(0, slice(0, 5), slice(6, 9), slice(10, 12), 1),
+        XGBTimeSplit(1, slice(0, 8), slice(9, 12), slice(13, 15), 1),
+        XGBTimeSplit(2, slice(0, 11), slice(12, 15), slice(16, 18), 1),
+    ]
+
+    metrics, summary = run_candidate_uplift_validation(
+        _feature_sets(1), splits, _pool(["c0"])
+    )
+    before_detail = len(calls)
+    assert before_detail == len(splits) * 2
+    index = _feature_sets(1).features.index
+    details = build_candidate_fold_metrics(
+        metrics,
+        {
+            split.fold: (
+                index[split.train_slice],
+                index[split.validation_slice],
+                index[split.test_slice],
+            )
+            for split in splits
+        },
+    )
+
+    assert len(calls) == before_detail
+    assert details.columns.tolist() == list(CANDIDATE_FOLD_METRICS_COLUMNS)
+    assert len(details) == 3
+    assert details[["variable", "fold"]].to_records(index=False).tolist() == [
+        ("c0", 0),
+        ("c0", 1),
+        ("c0", 2),
+    ]
+    first = details.iloc[0]
+    assert first["train_start"] == "t00"
+    assert first["train_end"] == "t04"
+    assert first["validation_start"] == "t06"
+    assert first["validation_end"] == "t08"
+    assert first["test_start"] == "t10"
+    assert first["test_end"] == "t11"
+    assert first["train_rows"] == 5
+    assert first["validation_rows"] == 3
+    assert first["test_rows"] == 2
+    assert first["baseline_rmse"] == 10.0
+    assert first["candidate_rmse"] == 8.0
+    assert first["rmse_improvement_pct"] == 20.0
+    assert first["baseline_mae"] == 10.0
+    assert first["candidate_mae"] == 6.0
+    assert first["mae_improvement_pct"] == 40.0
+    assert first["candidate_r2"] == 0.5
+    assert first["best_iteration"] == 4
+    assert summary.loc[0, "fold_count"] == 3
+    assert summary.loc[0, "positive_rmse_fold_count"] == 3
+    assert summary.loc[0, "positive_rmse_fold_ratio"] == 1.0
+    assert summary.loc[0, "median_rmse_improvement_pct"] == details[
+        "rmse_improvement_pct"
+    ].median()
+    assert summary.loc[0, "median_mae_improvement_pct"] == details[
+        "mae_improvement_pct"
+    ].median()
+    assert summary.loc[0, "worst_fold_rmse_improvement_pct"] == details[
+        "rmse_improvement_pct"
+    ].min()
+
+
+def test_candidate_fold_metrics_do_not_fabricate_rows_for_insufficient_candidates(
+    fake_dependency, monkeypatch: pytest.MonkeyPatch
+):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(xgb_module, "train_xgb_fold", _fake_trainer(calls))
+    feature_sets = replace(_feature_sets(1), candidate_feature_map={})
+
+    metrics, summary = run_candidate_uplift_validation(
+        feature_sets, _splits(), _pool(["c0"])
+    )
+    details = build_candidate_fold_metrics(
+        metrics,
+        {
+            split.fold: (
+                pd.Index(["train"]),
+                pd.Index(["validation"]),
+                pd.Index(["test"]),
+            )
+            for split in _splits()
+        },
+    )
+
+    assert metrics.empty
+    assert details.empty
+    assert details.columns.tolist() == list(CANDIDATE_FOLD_METRICS_COLUMNS)
+    assert summary.loc[0, "validation_status"] == "insufficient_features"
+    assert calls == []
 
 
 def test_validation_status_constant_and_dataclass_guard():

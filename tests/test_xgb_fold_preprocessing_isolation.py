@@ -358,6 +358,23 @@ def test_sufficient_fold_still_succeeds(tmp_path, monkeypatch):
 
     assert result.status == "success"
     assert captured
+    candidate_details = pd.read_csv(
+        tmp_path / "xgb_validation/xgb_candidate_fold_metrics.csv"
+    )
+    assert len(candidate_details) == 3
+    assert candidate_details.columns.tolist() == [
+        "variable", "fold", "train_start", "train_end", "validation_start",
+        "validation_end", "test_start", "test_end", "train_rows", "validation_rows",
+        "test_rows", "baseline_rmse", "candidate_rmse", "rmse_improvement_pct",
+        "baseline_mae", "candidate_mae", "mae_improvement_pct", "candidate_r2",
+        "best_iteration",
+    ]
+    for _, row in candidate_details.iterrows():
+        assert pd.Timestamp(row["train_end"]) < pd.Timestamp(row["validation_start"])
+        assert pd.Timestamp(row["validation_end"]) < pd.Timestamp(row["test_start"])
+        assert row["train_rows"] > 0
+        assert row["validation_rows"] > 0
+        assert row["test_rows"] > 0
 
 
 def test_effective_row_failure_preserves_existing_outputs(tmp_path, monkeypatch):

@@ -1665,13 +1665,21 @@ def run_xgb_for_active_branch(
     max_lag: int | None = None,
     progress_callback=None,
 ) -> dict[str, object]:
-    """Run the fold-safe XGB validation on the active formal screening branch.
+    """Run fourth-layer XGBoost temporal holdout validation on the active branch.
+
+    This stage produces candidate-variable prediction-increment evidence for
+    manual review. It is not causal proof, root-cause confirmation, or a new
+    ranking. The XGB result cannot modify ``final_score``, ``driver_rank``,
+    Top-K, ``ranked_features.csv``, second-layer ``validation_summary`` or
+    third-layer credibility-review outputs.
 
     The formal ``preprocessing_context.json`` is the only source of truth for
     the branch and its preprocessing parameters. XGB requires the promoted
     ``ranked_features.csv`` and the PR-11 ``final_review_summary.csv``; it
     never re-runs the third-layer confounder review and never reads branch directories or
-    preprocessing comparisons. The existing fold-safe backend keeps
+    preprocessing comparisons. Candidate uplift compares the same M1 baseline
+    (target history plus configured control-variable history) with M1 plus one
+    candidate's history. The existing fold-safe backend keeps
     lowpass/detrend/diff/forward-fill state isolated per fold.
     """
     run_dir = Path(run_dir)
@@ -1680,7 +1688,7 @@ def run_xgb_for_active_branch(
         base_config=base_config,
         required_formal_files=XGB_FORMAL_INPUT_FILES,
     )
-    _progress(progress_callback, "正在运行 XGB 四级验证（正式 branch）")
+    _progress(progress_callback, "正在运行 XGB 时间外预测验证（正式 branch）")
     from chem_ts_corr import web as web_module
     from chem_ts_corr.xgb_runner import run_xgb_validation_fold_safe
 
@@ -1735,7 +1743,7 @@ def run_xgb_for_active_branch(
         segment_max=config.segment_max,
     )
 
-    _progress(progress_callback, "XGB 四级验证完成")
+    _progress(progress_callback, "XGB 时间外预测验证完成")
     return {
         "run_dir": run_dir,
         "active_screening_branch": context["active_screening_branch"],

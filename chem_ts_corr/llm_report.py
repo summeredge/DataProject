@@ -156,10 +156,11 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - 实际操纵点必须由工程人员核对 .SV、.MV、远程设定值或 APC 可写入点；有同回路 SV/MV 时应说明 related_sv/related_mv，没有时也应提示核对 DCS 中是否存在写入点。
 - 不得机械排除 .PV 并写成“.PV 不能做 MV，所以只能作为监控变量”；也不得写成“.PV 点本身就是最终写入 MV”。
 - 如果 meta/overview 显示 model_status=skipped、skip_model_lift=True 或 skip_rolling_corr=True，不得把 model_explanation_support、model_lift_support、rolling_stability_supported 作为主要证据；只能提示“输入证据字段中出现，但需核对该模块是否实际启用”。
-- XGBoost 时间外增量验证仅代表时间外预测增量证据，不代表确定性因果，也不改变前三层排名；不得用它回写或重排前三层候选，单独证明变量可操纵、是根本原因或作为 APC 投用依据。
-- XGB 模型定义：M0 仅使用目标变量最短期历史作为简单基线；M1 使用目标变量历史滞后及配置的控制变量历史作为基线；M2 在 M1 基础上加入本次选中的全部候选变量滞后特征；逐候选增量验证比较“M1 + 单个候选变量”与 M1。不得将 M2_vs_M1 总体改善归因给某个单一候选，也不得将单候选改善解释为全体候选共同贡献。
+- XGBoost 时间外预测验证仅代表候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不代表确定性因果，也不改变前三层排名；不得用它回写或重排前三层候选，进入 ranking、scoring 或 candidate selection，或单独证明变量可操纵、是根本原因或作为 APC 投用依据。
+- XGB 模型定义：M0 仅使用目标变量最短期历史作为简单基线；M1 使用目标变量历史滞后及配置的控制变量历史作为基线；M2 在 M1 基础上加入本次选中的全部候选变量滞后特征；逐候选增量验证比较“M1 + 单个候选变量”与 M1。这里的 Candidate 基线是 M1（目标变量历史 + 配置的控制变量历史；无控制变量时即为目标变量历史），不是 M0。不得将 M2_vs_M1 总体改善归因给某个单一候选，也不得将单候选改善解释为全体候选共同贡献。
 - 改善率 = (基线误差 - 候选模型误差) / 基线误差 × 100%：大于 0 表示加入候选后误差下降，等于或接近 0 表示相对基线增量有限，小于 0 表示误差上升。
 - positive_rmse_fold_ratio 只能解释为 RMSE 改善大于 0 的时间折占比，不得称为稳定性分数或因果置信度；数值越高只表示正向改善出现在更多时间折，仍须结合改善幅度、最差折结果和 validation_status 判断跨时间一致性。
+- `importance`、`feature importance`、`max_importance`、`importance_rank` 等字段（如存在）仅表示模型输入重要性，不代表工艺因果贡献、可操纵性或初筛排名。
 - validation_status 的边界：validated_incremental_signal 表示多个时间折支持正向预测增量但仍不是因果结论；weak_incremental_value 表示存在一定预测增量但强度或跨折一致性不足；redundant_with_baseline 表示候选没有明显超过目标历史和控制变量基线，不等于工艺上无关；unstable_out_of_time 表示时间折方向不一致，应检查工况变化、漂移或数据分布变化但不得断言具体原因；insufficient_features 表示当前滞后或数据条件下特征不足，不能据此否定变量。
 - 当 xgb_out_of_time_validation.available=false 时，必须按其 status 明确说明 XGB 未运行、运行失败、摘要无效或输出不完整；未运行时不得编造结果，不得编造 RMSE、MAE、R² 或候选验证结论。
 
@@ -177,7 +178,7 @@ common_capacity_driver、high_collinearity_risk、target_leads_variable、lag_bo
 2. 与目标变量高度相关的过程变量
 3. 最需要关注的变量
 4. 相关性与因果复核证据靠前的变量
-5. XGBoost 时间外增量验证：先说明是否成功运行，分别解释 M0、M1、M2 总体比较和逐候选增量结果；与前三层证据交叉核对，遇到冲突时按跨层证据解释规则保守说明，不改变前三层排序、不生成新的综合分数，也不写成工艺因果结论或直接控制依据。
+5. XGBoost 时间外预测验证：先说明是否成功运行，分别解释 M0、M1、M2 总体比较和逐候选增量结果；与前三层证据交叉核对，遇到冲突时按跨层证据解释规则保守说明，仅作为候选变量预测增量证据和人工复核参考，不改变前三层排序、不生成新的综合分数，也不写成工艺因果结论或直接控制依据。
 6. 可能适合作为控制变量 / APC建模变量的候选：分别列出可能 MV 候选、可能 DV / 前馈候选（DV / FF = 扰动变量 / 前馈变量）、可能 CV（被控变量 / 约束变量）候选、监控变量候选、不建议直接用于控制的变量
 7. 主要风险与解释限制
 8. 下一步工程验证动作
@@ -221,7 +222,7 @@ def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
         "summary": {},
         "model_comparison": [],
         "candidate_uplift": [],
-        "evidence_scope": "时间外预测增量证据，不是工艺因果结论，也不改变前三层排名",
+        "evidence_scope": "时间外预测验证的候选变量预测增量证据，仅供人工复核参考；不参与 ranking、scoring 或 candidate selection，不是工艺因果结论，也不改变前三层排名",
     }
     xgb_dir = path / "xgb_validation"
     summary_path = xgb_dir / "xgb_validation_summary.json"

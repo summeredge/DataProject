@@ -274,11 +274,11 @@ def test_downstream_commands_call_formal_runners(
 @pytest.mark.parametrize(
     ("result", "expected", "unexpected"),
     [
-        ({"status": "success"}, "XGB 四级验证完成。", "XGB 四级验证失败。"),
+        ({"status": "success"}, "XGB 时间外预测验证完成：结果仅供人工复核参考，不改变前三层结果。", "XGB 时间外预测验证失败。"),
         (
             {"status": "invalid_input", "error_message": "bad input"},
-            "XGB 四级验证失败。\nstatus=invalid_input\nerror=bad input",
-            "XGB 四级验证完成。",
+            "XGB 时间外预测验证失败。\nstatus=invalid_input\nerror=bad input",
+            "XGB 时间外预测验证完成：结果仅供人工复核参考，不改变前三层结果。",
         ),
     ],
 )

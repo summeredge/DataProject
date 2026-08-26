@@ -47,6 +47,18 @@ Enhanced、普通 Granger 和 Model Explanation 从复核池读取变量，并�
 第三阶段是可信度审查层，不是综合评分层。它解释第二层预测价值是否可能由共同驱动、控制
 响应或统计限制造成；它不产生第一层的最终排名，也不回写第一层任何评分、排序或候选。
 
+## 第四层：时间外预测验证
+
+第四层（Temporal Holdout Validation）接收第三层候选，沿时间顺序隔离训练、验证和测试
+区间，输出候选变量预测增量证据与模型时间外表现。Baseline（M1）是目标变量历史信息加
+配置的控制变量历史；Candidate 是同一 M1 基线再加入单个候选变量历史信息。改善只说明
+候选变量提供额外预测信息，不表示候选变量决定目标变量。
+
+该层只供人工复核参考，不用于因果结论或工艺根因判断。XGBoost 输出不得回写或重排
+`final_score`、`ranked_features.csv`、`driver_rank`、Top-K、初筛推荐顺序、第二层
+`validation_summary` 或第三层可信度审查结果，也不得进入 ranking、scoring 或
+candidate selection。保持现有 XGBoost 模型、特征、滞后、训练、时间切分和指标计算流程不变。
+
 ## 排除窗口（PR-TR1 / PR-TR2 / PR-TR3）
 
 完整上传数据始终保留。`exclude_windows` 只是本次分析的数据选择条件：在重采样和

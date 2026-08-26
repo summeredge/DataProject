@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import chem_ts_corr.llm_report as llm_report
 import chem_ts_corr.service as service
 import chem_ts_corr.web as web
 from chem_ts_corr.config import AnalysisConfig
@@ -138,6 +139,9 @@ def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
     assert payload["xgbModelSummary"][0]["model_name"] == "M2"
     assert payload["xgbCandidateUplift"][0]["variable"] == "x"
     assert payload["xgbValidationSummary"]["candidate_count"] == 1
+    assert "候选变量预测增量证据" in payload["message"]
+    assert "人工复核参考" in payload["message"]
+    assert "不改变前三层结果" in payload["message"]
     download_names = {item["name"] for item in payload["downloads"]}
     assert "xgb_validation/xgb_model_summary.csv" in download_names
     assert "xgb_validation/xgb_candidate_uplift.csv" in download_names
@@ -415,8 +419,44 @@ def test_xgb_web_surface_and_architecture_guards():
     assert "run_xgb_for_active_branch" in source
     assert "run_xgb_analysis" not in source
     assert service.run_xgb_analysis is not None
-    assert "XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。" in web.INDEX_HTML
+    assert "XGBoost 时间外预测验证" in web.INDEX_HTML
+    assert "候选变量预测增量证据" in web.INDEX_HTML
+    assert "Baseline（M1）" in web.INDEX_HTML
+    assert "Candidate：同一 M1 基线 + 单个候选变量历史信息" in web.INDEX_HTML
+    assert "不参与 ranking、scoring 或 candidate selection" in web.INDEX_HTML
+    xgb_section = web.INDEX_HTML.split('<div id="xgbValidationTab"', 1)[1].split(
+        '<div id="llmReportTab"', 1
+    )[0]
+    for forbidden in ["因果证明", "根因确认", "最终驱动变量", "最终验证", "最终证明", "最佳变量", "因果验证", "驱动变量确认"]:
+        assert forbidden not in xgb_section
     assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML
+
+
+def test_xgb_product_copy_avoids_misleading_validation_claims():
+    sources = [
+        web.INDEX_HTML,
+        inspect.getsource(web._xgb_response_payload),
+        inspect.getsource(web._run_xgb_validation_response),
+        inspect.getsource(llm_report.build_llm_prompt),
+        Path("README.md").read_text(encoding="utf-8"),
+        Path("docs/product.md").read_text(encoding="utf-8"),
+        Path("docs/architecture.md").read_text(encoding="utf-8"),
+        Path("docs/contracts.md").read_text(encoding="utf-8"),
+        Path("docs/xgb_validation.md").read_text(encoding="utf-8"),
+    ]
+    copy = "\n".join(sources)
+
+    for forbidden in [
+        "因果证明",
+        "根因确认",
+        "最终驱动变量",
+        "最终验证",
+        "最终证明",
+        "最佳变量",
+        "因果验证",
+        "驱动变量确认",
+    ]:
+        assert forbidden not in copy
 
 
 def test_xgb_candidate_count_input_keeps_default_and_exposes_both_limits():
@@ -460,7 +500,7 @@ def test_xgb_run_uses_shared_global_status_timer_for_its_full_lifecycle():
     catch_body, finally_body = catch_and_finally.split("  } finally {", 1)
 
     assert "const startedAt = performance.now();" in function_body
-    assert 'startStatusTimer("正在运行 XGB 四级验证...", startedAt)' in function_body
+    assert 'startStatusTimer("正在运行 XGB 时间外预测验证...", startedAt)' in function_body
     assert function_body.index("startStatusTimer(") < function_body.index("await postForm(")
     assert "appendElapsed" in success_body
     assert "appendElapsed" in catch_body

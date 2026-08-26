@@ -27,6 +27,7 @@ FORMAL_ROOT_FILES = [
     "causal_review_report.csv",
     "causal_review_evidence.csv",
     "final_review_summary.csv",
+    "validation_summary.csv",
 ]
 
 
@@ -104,6 +105,15 @@ def _write_formal_root(run_dir: Path) -> None:
     pd.DataFrame({"variable": ["x"]}).to_csv(
         run_dir / "causal_review_evidence.csv", index=False, encoding="utf-8-sig"
     )
+    pd.DataFrame(
+        {
+            "variable": ["x"],
+            "validation_status": ["not_computed"],
+            "evidence_consistency": ["not_computed"],
+            "supporting_methods": [""],
+            "limiting_factors": [""],
+        }
+    ).to_csv(run_dir / "validation_summary.csv", index=False, encoding="utf-8-sig")
 
 
 def _write_context(run_dir: Path, **overrides) -> None:
@@ -417,6 +427,8 @@ def test_xgb_keeps_formal_root_byte_identical(tmp_path: Path, monkeypatch):
     config = _make_raw_run(tmp_path)
     _write_input_csv(config)
     before = _formal_root_bytes(tmp_path)
+    before_ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    before_top_k = before_ranked.head(config.top_k)[["variable", "final_score", "driver_rank"]]
     _install_fake_dependency(monkeypatch)
 
     result = run_xgb_for_active_branch(tmp_path, base_config=config)
@@ -424,6 +436,32 @@ def test_xgb_keeps_formal_root_byte_identical(tmp_path: Path, monkeypatch):
     assert result["status"] == "success"
     for name, content in before.items():
         assert (tmp_path / name).read_bytes() == content
+    after_ranked = pd.read_csv(tmp_path / "ranked_features.csv", encoding="utf-8-sig")
+    pd.testing.assert_frame_equal(
+        after_ranked[["variable", "final_score", "driver_rank"]],
+        before_ranked[["variable", "final_score", "driver_rank"]],
+    )
+    pd.testing.assert_frame_equal(
+        after_ranked.head(config.top_k)[["variable", "final_score", "driver_rank"]],
+        before_top_k,
+    )
+    forbidden_decision_fields = {
+        "final_score",
+        "driver_rank",
+        "final_rank",
+        "validation_score",
+        "validation_rank",
+        "candidate_priority_score",
+        "candidate_priority_rank",
+        "candidate_pool_rank",
+    }
+    for name in ("xgb_fold_metrics.csv", "xgb_model_summary.csv", "xgb_candidate_uplift.csv"):
+        columns = set(pd.read_csv(tmp_path / "xgb_validation" / name).columns)
+        assert columns.isdisjoint(forbidden_decision_fields)
+    summary = json.loads(
+        (tmp_path / "xgb_validation/xgb_validation_summary.json").read_text(encoding="utf-8")
+    )
+    assert set(summary).isdisjoint(forbidden_decision_fields)
 
 
 def test_xgb_writes_exactly_five_outputs(tmp_path: Path, monkeypatch):

@@ -77,7 +77,7 @@ def test_result_tab_buttons_have_required_order_and_no_candidate_tab():
 
     assert labels[:2] == ["初步分析", "趋势图"]
     assert targets[:2] == ["overviewTab", "trendTab"]
-    assert labels[2:] == ["二次验证", "可信度审查", "四级验证", "AI 综合解读", "下载", "术语与标签说明"]
+    assert labels[2:] == ["二次验证", "可信度审查", "时间外预测验证", "AI 综合解读", "下载", "术语与标签说明"]
     assert labels.count("初步分析") == 1
     assert "候选变量" not in labels
     assert "candidatesTab" not in targets

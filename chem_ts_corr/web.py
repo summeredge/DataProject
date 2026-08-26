@@ -1464,7 +1464,7 @@ def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, A
             "xgbCandidateUplift": [],
             "xgbValidationSummary": {},
             "downloads": [],
-            "message": "XGB 四级验证未启用。",
+            "message": "XGB 时间外预测验证未启用。",
         }
 
     run_id = _field(form, "run_id")
@@ -1553,10 +1553,10 @@ def _xgb_response_payload(
             else {}
         )
     messages = {
-        "success": "XGB 四级验证完成。",
-        "missing_dependency": "XGB 四级验证缺少可选依赖。",
-        "invalid_input": "XGB 四级验证输入无效。",
-        "failed": "XGB 四级验证失败。",
+        "success": "XGB 时间外预测验证完成：已生成候选变量预测增量证据，仅供人工复核参考，不改变前三层结果。",
+        "missing_dependency": "XGB 时间外预测验证缺少可选依赖。",
+        "invalid_input": "XGB 时间外预测验证输入无效。",
+        "failed": "XGB 时间外预测验证失败。",
     }
     return {
         "status": status,
@@ -1565,7 +1565,7 @@ def _xgb_response_payload(
         "xgbCandidateUplift": _records(candidate_uplift),
         "xgbValidationSummary": validation_summary,
         "downloads": downloads,
-        "message": messages.get(status, "XGB 四级验证未运行。"),
+        "message": messages.get(status, "XGB 时间外预测验证未运行。"),
         **_branch_context_payload(output_dir),
     }
 
@@ -3561,7 +3561,7 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="validationTab" id="tab-validationTab" data-tab="validationTab" tabindex="-1">二次验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="causalReviewTab" id="tab-causalReviewTab" data-tab="causalReviewTab" tabindex="-1">可信度审查</button>
-        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">四级验证</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">时间外预测验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
@@ -3669,7 +3669,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>二次验证</h2>
         <div class="help">
           <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
-          <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
+          <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林/SHAP 重要性表示模型输入重要性，不等于工艺因果贡献或可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
           <span>下游阶段只使用已确认正式分支的预处理口径与主筛查滞后参数，不再提供独立的二次重采样或补充白名单切换。</span>
           <span id="downstreamGateHint" class="help" hidden>请先确认正式初筛分支。</span>
         </div>
@@ -3709,14 +3709,14 @@ INDEX_HTML = r"""<!doctype html>
 
         <details id="modelExplanationDetails" class="validation-detail-section">
           <summary>Model Explanation 详细结果</summary>
-          <div class="help">随机森林重要性表示模型依赖，不等于可操作性或因果结论。</div>
-          <h3>随机森林模型解释变量排序</h3>
-          <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
-          <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示变量排序。</div>
+          <div class="help">随机森林/SHAP 重要性表示模型输入重要性（模型依赖），不代表工艺因果贡献、可操作性或候选排名。</div>
+          <h3>随机森林模型解释变量级输入重要性</h3>
+          <div class="help">该表按变量汇总随机森林/SHAP 模型输入重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表工艺因果贡献、可操作性或初筛排名。</div>
+          <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示模型输入重要性。</div>
           <h3>随机森林模型解释特征明细</h3>
           <div id="importanceTable" class="empty">未启用随机森林模型解释。</div>
           <h3>随机森林模型遗漏探索</h3>
-          <div class="help">该表仅检查初筛 Rank K+1~K+10 中的遗漏线索，最多显示 5 个并保持初筛顺序；不属于二级验证结论，不会自动加入推荐、候选池或任何排序。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
+          <div class="help">该表仅检查初筛 Rank K+1~K+10 中的遗漏线索，最多显示 5 个并保持初筛顺序；不属于二级验证结论，不会自动加入推荐、候选池或任何排序。结果仅表示模型输入重要性，不代表工艺因果贡献或可操作性。</div>
           <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示遗漏探索线索。</div>
         </details>
         <section id="verificationReviewPoolSection" aria-labelledby="verificationReviewPoolTitle">
@@ -3775,32 +3775,33 @@ INDEX_HTML = r"""<!doctype html>
 
 
       <div id="xgbValidationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-xgbValidationTab" hidden>
-        <h2>XGB 四级验证</h2>
-        <div class="help">XGB 结果表示时间外预测增量，不代表工艺因果成立，也不改变前三层排名。</div>
+        <h2>XGBoost 时间外预测验证</h2>
+        <div class="help">第四层回答：候选变量在时间顺序隔离的数据中，是否仍提供额外预测信息。结果是候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不用于因果结论、工艺根因判断或变量排名，不改变前三层结果。</div>
+        <div class="help">Baseline（M1）：目标变量历史信息 + 配置的控制变量历史；Candidate：同一 M1 基线 + 单个候选变量历史信息。预测改善只表示候选变量提供额外预测信息，不表示候选变量决定目标变量。</div>
         <div class="row">
-          <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 验证</label>
+          <label class="checkbox-row"><input id="enableXgbValidation" type="checkbox">启用 XGB 时间外预测验证</label>
           <label>候选数量<input id="xgbTopN" type="number" min="1" max="10" value="8"></label>
           <label>最大滞后<input id="xgbMaxLag" type="number" min="1" max="5000" placeholder="自动"></label>
           <label>白名单<input id="xgbWhitelist" placeholder="变量名以逗号分隔"></label>
         </div>
         <div class="help">自动候选默认 8 个、最多 10 个；加入白名单后，总候选数量最多 12 个。</div>
         <div class="actions">
-          <button id="runXgbValidation" disabled>运行 XGB 四级验证</button>
+          <button id="runXgbValidation" disabled>运行 XGB 时间外预测验证</button>
         </div>
-        <div id="xgbStatus" class="help" aria-live="polite">XGB 四级验证未启用。</div>
+        <div id="xgbStatus" class="help" aria-live="polite">XGB 时间外预测验证未启用。</div>
         <div id="xgbRunSummary" class="overview-grid"></div>
         <h2>模型时间外验证摘要</h2>
         <div class="download-buttons" id="xgbModelSummaryDownload"></div>
-        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 四级验证。</div>
+        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 时间外预测验证。</div>
         <h2>候选变量增量验证</h2>
         <div class="help">
           <span>RMSE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 RMSE 改善百分比中位数；改善率 = (baseline_error - candidate_error) / baseline_error × 100%。大于 0 表示加入该候选后预测误差下降，小于 0 表示预测误差上升。</span>
           <span>MAE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 MAE 改善百分比中位数。大于 0 表示平均绝对误差下降。</span>
           <span>RMSE 改善折占比：RMSE 改善百分比大于 0 的时间折数占全部验证折数的比例，范围为 0～1；例如 0.67 表示约 67% 的时间折得到改善。数值越高，跨时间段改善越稳定。</span>
-          <span>以上指标均为时间外预测增量证据，不代表工艺因果成立。</span>
+          <span>以上指标均为时间外预测增量证据，不代表工艺因果成立；不参与 ranking、scoring 或 candidate selection，也不修改 final_score、ranked_features.csv、Top-K、第二层 validation_summary 或第三层可信度审查结果。</span>
         </div>
         <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
-        <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 四级验证。</div>
+        <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 时间外预测验证。</div>
         <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
       </div>
 
@@ -4716,12 +4717,12 @@ async function runCausalReview() {
 function updateXgbRunAvailability() {
   const enabled = el("enableXgbValidation").checked;
   el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length);
-  if (!enabled) el("xgbStatus").textContent = "XGB 四级验证未启用。";
+  if (!enabled) el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
 }
 
 async function runXgbValidation() {
   if (!el("enableXgbValidation").checked) {
-    el("xgbStatus").textContent = "请先启用 XGB 四级验证。";
+    el("xgbStatus").textContent = "请先启用 XGB 时间外预测验证。";
     return;
   }
   if (!currentRunId || !lastFinalReviewSummaryRows.length) {
@@ -4729,9 +4730,9 @@ async function runXgbValidation() {
     return;
   }
   const startedAt = performance.now();
-  const timerId = startStatusTimer("正在运行 XGB 四级验证...", startedAt);
+  const timerId = startStatusTimer("正在运行 XGB 时间外预测验证...", startedAt);
   el("runXgbValidation").disabled = true;
-  el("xgbStatus").textContent = "正在运行 XGB 四级验证...";
+  el("xgbStatus").textContent = "正在运行 XGB 时间外预测验证...";
   try {
     const form = new FormData();
     form.append("run_id", currentRunId);
@@ -4750,7 +4751,7 @@ async function runXgbValidation() {
     renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
-    const message = data.error_message || data.message || "XGB 四级验证失败。";
+    const message = data.error_message || data.message || "XGB 时间外预测验证失败。";
     const success = data.status === "success";
     el("xgbStatus").textContent = appendElapsed(message, startedAt);
     setStatus(appendElapsed(message, startedAt), success ? "success" : "error");
@@ -7344,14 +7345,14 @@ function missingText(targetId) {
   if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
   if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
   if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
-  if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
+  if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量级模型输入重要性。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示遗漏探索线索。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
   if (targetId === "finalReviewSummaryTable") return "未运行 可信度审查摘要。";
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量可信度审查证据表。";
-  if (targetId === "xgbModelSummaryTable") return "未运行 XGB 四级验证。";
-  if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 四级验证。";
+  if (targetId === "xgbModelSummaryTable") return "未运行 XGB 时间外预测验证。";
+  if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
   return "无可展示结果。";
 }
@@ -8061,7 +8062,7 @@ function columnLabel(column) {
     r2: "R²",
     method: "主导相关方法",
     feature: "模型特征",
-    importance: "重要性",
+    importance: "模型输入重要性（不代表工艺因果贡献）",
     residual_p_value: "残差P值",
     residual_r2: "残差R²",
     regime: "工况",
@@ -8170,15 +8171,15 @@ function columnLabel(column) {
     control_relation_assessment: "控制关系审查",
     statistical_limitation: "统计限制审查",
     direction_assessment: "方向审查（带符号滞后）",
-    model_importance_rank: "模型重要性排名",
+    model_importance_rank: "模型输入重要性排名（不用于初筛排序）",
     model_explanation_support: "模型解释支持",
     causalReviewEvidence: "逐变量可信度审查证据表",
     best_model_feature: "最强模型特征",
     best_model_lag: "最强模型滞后",
-    max_importance: "最大重要性",
-    total_importance: "变量总重要性",
+    max_importance: "最大模型输入重要性",
+    total_importance: "变量总模型输入重要性",
     feature_count: "模型特征数",
-    importance_rank: "重要性排名",
+    importance_rank: "模型输入重要性排名（不用于初筛排序）",
     model_feature_count: "模型特征数量",
     nearby_lag_count: "滞后点数量",
     ranked_feature_rank: "主筛查排名",
@@ -8336,7 +8337,7 @@ function reset() {
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("modelVariableImportanceTable").className = "empty";
-  el("modelVariableImportanceTable").textContent = "运行随机森林模型解释后显示变量排序。";
+  el("modelVariableImportanceTable").textContent = "运行随机森林模型解释后显示变量级模型输入重要性。";
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";
@@ -8359,13 +8360,13 @@ function reset() {
   closeDetailModal();
   resetOptionalTable("causalReviewEvidenceTable", "未运行 逐变量可信度审查证据表。");
   resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
-  resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 四级验证。");
-  resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 四级验证。");
+  resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 时间外预测验证。");
+  resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 时间外预测验证。");
   clearOptionalElement("xgbRunSummary");
   clearOptionalElement("xgbModelSummaryDownload");
   clearOptionalElement("xgbCandidateUpliftDownload");
   clearOptionalElement("xgbValidationSummaryDownload");
-  el("xgbStatus").textContent = "XGB 四级验证未启用。";
+  el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
   el("xgbTopN").value = "8";
   el("xgbMaxLag").value = "";
   el("xgbWhitelist").value = "";

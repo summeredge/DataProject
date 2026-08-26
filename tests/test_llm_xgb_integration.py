@@ -105,8 +105,10 @@ def test_xgb_success_is_compactly_included_in_package_and_prompt(tmp_path: Path)
     assert "data_fingerprint" not in prompt
     assert "xgb_predictions" not in prompt
     for marker in [
-        "XGBoost 时间外增量验证", "不代表确定性因果", "不改变前三层排名",
-        "M1 + 单个候选变量", "改善率 = (基线误差 - 候选模型误差) / 基线误差 × 100%",
+        "XGBoost 时间外预测验证", "候选变量预测增量证据", "仅供人工复核参考",
+        "不参与 ranking、scoring 或 candidate selection", "不代表确定性因果", "不改变前三层排名",
+        "M1 + 单个候选变量", "这里的 Candidate 基线是 M1", "模型输入重要性",
+        "改善率 = (基线误差 - 候选模型误差) / 基线误差 × 100%",
         "positive_rmse_fold_ratio", "validated_incremental_signal", "weak_incremental_value",
         "redundant_with_baseline", "unstable_out_of_time", "insufficient_features",
         "未运行时不得编造结果", "跨层证据解释规则", "建议优先进行工程复核",
@@ -139,7 +141,7 @@ def test_xgb_not_run_invalid_and_incomplete_outputs_fail_closed(tmp_path: Path):
         "summary": {},
         "model_comparison": [],
         "candidate_uplift": [],
-        "evidence_scope": "时间外预测增量证据，不是工艺因果结论，也不改变前三层排名",
+        "evidence_scope": "时间外预测验证的候选变量预测增量证据，仅供人工复核参考；不参与 ranking、scoring 或 candidate selection，不是工艺因果结论，也不改变前三层排名",
     }
 
     invalid = tmp_path / "invalid"
@@ -199,7 +201,9 @@ def test_generate_llm_report_receives_xgb_package_without_api_changes(
         LLMCallConfig(base_url="https://api.example.com", model="test", api_key="sk-test"),
     )
 
-    assert "XGBoost 时间外增量验证" in captured["prompt"]
+    assert "XGBoost 时间外预测验证" in captured["prompt"]
+    assert "候选变量预测增量证据" in captured["prompt"]
+    assert "仅供人工复核参考" in captured["prompt"]
     assert "跨层证据解释规则" in captured["prompt"]
     assert "xgb_out_of_time_validation" in captured["prompt"]
     assert "FEED.PV" in captured["prompt"]

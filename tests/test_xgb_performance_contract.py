@@ -336,4 +336,4 @@ def test_xgb_documentation_has_required_sections_and_readme_link():
     ]:
         assert heading in documentation
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "[XGB 四级验证说明](docs/xgb_validation.md)" in readme
+    assert "[XGBoost 时间外预测验证说明](docs/xgb_validation.md)" in readme

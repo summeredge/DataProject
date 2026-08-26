@@ -64,9 +64,13 @@
 
 为控制计算量，条件 Granger 默认围绕主筛查最佳滞后附近验证，也可按需要选择仅最佳滞后或全量扫描。
 
-### 5. 第四层：XGBoost 时间外验证
+### 5. 第四层：时间外预测验证（XGBoost）
 
-XGBoost 验证默认关闭，只建议对第三层保留下来的少量候选运行。
+XGBoost 时间外预测验证默认关闭，只建议对第三层保留下来的少量候选运行。
+
+这一层回答的是：候选变量在时间顺序隔离的数据中，是否仍提供额外预测信息。Baseline（M1）
+包含目标变量历史信息和配置的控制变量历史；Candidate 在同一 M1 基线上加入单个候选变量
+历史信息。改善表示候选变量的额外预测信息，不表示候选变量决定目标变量。
 
 主要功能：
 
@@ -77,9 +81,12 @@ XGBoost 验证默认关闭，只建议对第三层保留下来的少量候选运
 - 检查正向改善是否在多个时间折中重复出现；
 - 区分增量信号、弱增量、基线冗余和跨时间不稳定等状态。
 
-XGBoost 结果只表示时间外预测增量，不会回写前三层得分和排名，也不等同于因果关系或可操作性。
+XGBoost 结果只表示候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不会回写或
+重排 `final_score`、`ranked_features.csv`、Top-K、第二层 `validation_summary` 或第三层
+可信度审查结果，也不进入 ranking、scoring 或 candidate selection。不用于因果结论、工艺
+根因判断或变量排名。
 
-[XGB 四级验证说明](docs/xgb_validation.md)
+[XGBoost 时间外预测验证说明](docs/xgb_validation.md)
 
 ### 6. 趋势、散点和结果复核
 
@@ -191,7 +198,7 @@ Granger、随机森林/SHAP 和完整统计功能：
 python -m pip install -e ".[full]"
 ```
 
-XGBoost 四级验证：
+XGBoost 时间外预测验证：
 
 ```powershell
 python -m pip install -e ".[xgb]"

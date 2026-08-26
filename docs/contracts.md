@@ -743,6 +743,25 @@ generalization_status
   覆盖第一个 fold 的 train M1；不得包含文件路径、`run_dir`、`created_at` 或
   随机值，相同输入重复执行必须稳定。
 
+### 第四层定位与结果语义
+
+第四层是时间外预测验证（Temporal Holdout Validation），用于判断候选变量在时间顺序
+隔离的数据中是否仍提供额外预测信息。它输出候选变量预测增量证据和模型时间外表现，
+仅供人工复核参考，不用于因果结论、工艺根因判断或变量排名。
+
+- M0 是目标变量自身历史的简单模型；M1 是目标变量历史信息加配置的控制变量历史，
+  也是逐候选比较使用的 baseline；M2 在 M1 上加入全部候选变量特征。
+- `xgb_candidate_uplift.csv` 的每一行比较同一时间折的 `M1 + 单个候选变量` 与 M1。
+  Baseline 和 Candidate 的差异只表示候选变量的额外预测信息，不表示候选变量决定目标变量。
+- `xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、`xgb_predictions.csv` 和
+  `xgb_validation_summary.json` 中的 XGBoost 字段仅用于 prediction evidence；不得进入
+  ranking、scoring 或 candidate selection。
+- XGBoost 运行前后必须保持 `final_score`、`ranked_features.csv`、`driver_rank`、Top-K、
+  初筛推荐顺序、第二层 `validation_summary` 和第三层可信度审查结果不变。XGBoost 不得
+  回写任何上述文件，也不得通过结果触发其它阶段的候选扩展。
+- 兼容字段 `importance`、`feature importance`、`max_importance`、`importance_rank` 等
+  若由其它模型输出，展示语义为模型输入重要性，不代表工艺因果贡献、可操纵性或初筛排名。
+
 ## Web / API / CLI 正式接入契约（PR-13）
 
 ### 正式入口

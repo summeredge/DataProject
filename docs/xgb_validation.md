@@ -1,12 +1,15 @@
-# XGB 四级验证说明
+# XGBoost 时间外预测验证说明
 
 ## 1. 目的
 
-XGB 四级验证用于检查候选变量能否在严格时间外测试中，为基线模型提供非线性增量预测价值。它是第四级预测验证，不是因果识别，也不参与前三层正式评分与排序。
+XGBoost 时间外预测验证是第四层 Temporal Holdout Validation，用于检查候选变量在时间顺序
+隔离的数据中是否仍为基线模型提供额外预测信息。结果属于候选变量预测增量证据和模型
+时间外表现，仅供人工复核参考；不用于因果结论、工艺根因判断或变量排名，也不参与前三层
+正式评分与排序。
 
 ## 2. 前置条件
 
-必须先完成第三层可信度审查并生成 `final_review_summary.csv`。Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入 `xgb_validation/`。
+必须先完成第三层可信度审查并生成 `final_review_summary.csv`。Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入 `xgb_validation/`。第四层不修改第三层结果。
 
 运行环境需要可选依赖：
 
@@ -16,12 +19,14 @@ pip install -e ".[xgb]"
 
 ## 3. 模型定义
 
-- `M0`：目标变量自身的正滞后历史。
-- `M1`：`M0` 加控制变量的正滞后历史。
-- `M2`：`M1` 加全部候选变量的有效正滞后特征。
-- `Candidate_i`：`M1` 加单个候选变量 `i` 的有效正滞后特征。
+- `M0`：目标变量自身的正滞后历史，是整体模型比较中的简单目标历史模型。
+- `M1`：目标变量历史信息加配置的控制变量历史，是逐候选比较使用的 baseline。
+- `M2`：`M1` 加全部候选变量的有效正滞后特征，用于整体模型比较。
+- `Candidate_i`：同一 `M1` baseline 加单个候选变量 `i` 的有效正滞后特征。
 
-整体模型比较使用 M0/M1/M2；逐候选 uplift 使用 `Candidate_i` 与同一时间折的 M1 比较。M1 结果从整体模型验证复用，不重复训练。
+整体模型比较使用 M0/M1/M2；逐候选 uplift 使用 `Candidate_i` 与同一时间折的 M1 比较。
+M1 结果从整体模型验证复用，不重复训练。改善只表示候选变量提供额外预测信息，不表示
+候选变量决定目标变量。
 
 ## 4. 数据口径
 
@@ -41,7 +46,7 @@ XGB 不执行标准化。`screening_lag` 的点数单位因此与重采样后的
 
 - train 用于拟合；
 - validation 仅用于 early stopping；
-- test 仅用于最终 RMSE、MAE 和 R2 指标，不参与模型选择。
+- test 仅用于报告 RMSE、MAE 和 R2 指标，不参与模型选择。
 
 所有特征只使用正滞后，不读取未来值。
 
@@ -58,9 +63,9 @@ XGB 不执行标准化。`screening_lag` 的点数单位因此与重采样后的
 输出位于运行目录的 `xgb_validation/`：
 
 - `xgb_fold_metrics.csv`：M0/M1/M2 各时间折指标。
-- `xgb_model_summary.csv`：整体模型跨折摘要及 M2 相对 M1 的改善。
-- `xgb_candidate_uplift.csv`：逐候选增量验证摘要和状态。
-- `xgb_predictions.csv`：各测试折真实值与 M0/M1/M2 预测。
+- `xgb_model_summary.csv`：整体模型跨折摘要及 M2 相对 M1 的改善（时间外表现证据）。
+- `xgb_candidate_uplift.csv`：逐候选相对 M1 baseline 的预测增量证据和状态。
+- `xgb_predictions.csv`：各测试折真实值与 M0/M1/M2 预测，供时间外表现复核。
 - `xgb_validation_summary.json`：数据规模、特征规模、配置、provenance fingerprint、阶段耗时和文件清单。
 
 JSON 不包含原始数据值、用户文件路径或前三层排名字段。
@@ -95,7 +100,7 @@ python scripts/benchmark_xgb_validation.py --rows 50000 --variables 50 --candida
 
 ## 10. 解释边界
 
-预测增量不等于因果成立，不代表变量可操纵，也不代表变量适合进入 APC。XGB 不会消除共线性、共同负荷、公式泄漏或数据质量风险。结果只用于独立工程解释，不会修改 `final_score`、`driver_rank`、`final_rank`、候选等级或风险标签，也不会自动删除候选。
+预测增量不等于因果成立，不代表变量可操纵，也不代表变量适合进入 APC。XGB 不会消除共线性、共同负荷、公式泄漏或数据质量风险。结果只用于人工复核参考，不会修改 `final_score`、`driver_rank`、`final_rank`、候选等级或风险标签，也不会自动删除候选。XGB 字段不得进入 ranking、scoring 或 candidate selection。
 
 ## 11. 正式 branch/context 与 fold preprocessing isolation
 

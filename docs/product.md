@@ -33,3 +33,18 @@ DataProject
 它不回答哪个变量“最终得分最高”，不证明确定性因果，也不确认根因或控制变量。第三层输出
 只能作为工程师的可信度审查证据，绝不回写第一层 `final_score`、`driver_rank`、Top-K 或
 `ranked_features.csv`。
+
+## 第四层：时间外预测验证（Temporal Holdout Validation）
+
+第四层用于回答：
+
+> 候选变量在时间顺序隔离的数据中，是否仍提供额外预测信息？
+
+输入是第三层保留下来的候选变量。输出是候选变量预测增量证据和模型时间外表现，
+仅供人工复核参考。Baseline（M1）使用目标变量历史信息及配置的控制变量历史；Candidate
+在同一 M1 基线上加入单个候选变量历史信息。预测改善只表示候选变量提供额外预测信息，
+不表示候选变量决定目标变量。
+
+第四层不修改 `final_score`、`ranked_features.csv`、`driver_rank`、Top-K、初筛推荐顺序、
+第二层 `validation_summary` 或第三层可信度审查结果，也不参与 ranking、scoring 或
+candidate selection。它不用于因果结论、工艺根因判断或变量排名，结果仅作为人工复核参考。

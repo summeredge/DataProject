@@ -1,3 +1,12 @@
+"""XGBoost time-ordered holdout validation for downstream manual review.
+
+This module implements the fourth-layer temporal holdout validation. Its
+outputs are prediction-increment evidence only: they do not prove causality,
+confirm a process root cause, or define a variable ranking. The runner keeps
+the formal screening artefacts isolated, so XGBoost results cannot change
+``final_score``, ``ranked_features.csv``, Top-K, or any earlier-layer result.
+"""
+
 from __future__ import annotations
 
 import json
@@ -85,6 +94,13 @@ def run_xgb_validation(
     max_lag: int | None = None,
     target_mask: pd.Series | None = None,
 ) -> XGBRunResult:
+    """Run legacy time-ordered XGBoost validation for manual review evidence.
+
+    Candidate uplift compares each candidate model with the same M1 baseline:
+    target history plus configured control-variable history. A positive uplift
+    means the candidate supplied additional out-of-time predictive information;
+    it is not a causal contribution or a ranking/scoring signal.
+    """
     total_started_at = time.perf_counter()
     timings = {
         name: 0.0
@@ -271,7 +287,13 @@ def run_xgb_validation_fold_safe(
     segment_min: float | None = None,
     segment_max: float | None = None,
 ) -> XGBRunResult:
-    """Run XGB time validation with preprocessing state isolated per fold.
+    """Run fourth-layer temporal holdout validation with fold isolation.
+
+    The result is candidate-variable prediction-increment evidence for manual
+    review only. It cannot change ``final_score``, ``ranked_features.csv``,
+    Top-K, second-layer ``validation_summary``, or third-layer review results.
+    Candidate uplift compares each candidate model with the same M1 baseline:
+    target history plus configured control-variable history.
 
     Unlike the legacy ``run_xgb_validation``, this formal path establishes a
     single split-base time axis first (resampling and target-missing handling

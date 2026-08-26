@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_causal.add_argument("--top-n", type=int, default=None)
 
     run_xgb = subparsers.add_parser(
-        "run-xgb", help="run fold-safe XGB validation on the active formal branch"
+        "run-xgb", help="run XGBoost temporal holdout validation on the active formal branch"
     )
     run_xgb.add_argument("--output", required=True, type=Path, help="run directory")
     run_xgb.add_argument("--control-columns", default="", help="comma-separated control columns")
@@ -250,9 +250,9 @@ def main() -> None:
             max_lag=args.max_lag,
         )
         if result.get("status") == "success":
-            print("XGB 四级验证完成。")
+            print("XGB 时间外预测验证完成：结果仅供人工复核参考，不改变前三层结果。")
         else:
-            print("XGB 四级验证失败。")
+            print("XGB 时间外预测验证失败。")
             print(f"status={result.get('status')}")
             print(f"error={result.get('error_message')}")
     elif args.command == "serve":

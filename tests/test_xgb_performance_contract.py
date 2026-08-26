@@ -320,6 +320,27 @@ def test_xgb_documentation_describes_all_candidate_limits_and_failure_behavior()
     assert "默认最多选择 8 个自动候选，白名单候选可在自动候选之外强制加入" not in documentation
 
 
+def test_xgb_documentation_describes_candidate_sources_and_formal_preprocessing():
+    documents = [
+        Path("README.md"),
+        Path("docs/product.md"),
+        Path("docs/architecture.md"),
+        Path("docs/xgb_validation.md"),
+    ]
+    for path in documents:
+        text = path.read_text(encoding="utf-8")
+        assert "自动候选来自第三层可信度审查结果" in text
+        assert "白名单变量可按现有 XGBoost 契约额外强制加入" in text
+        assert "build_xgb_candidate_pool()" in text
+        assert "不修改自动候选数量、白名单数量和总候选上限" in text
+
+    documentation = Path("docs/xgb_validation.md").read_text(encoding="utf-8")
+    assert "raw\nlowpass\nlowpass_detrend\nlowpass_diff" in documentation
+    assert "`detrend`、`diff`、`detrend_diff` 仅属于 legacy/backend compatibility" in documentation
+    assert "不属于当前 Web/CLI 正式预处理选择" in documentation
+    assert "不得修改现有预处理实现和兼容逻辑" in documentation
+
+
 def test_xgb_documentation_has_required_sections_and_readme_link():
     documentation = Path("docs/xgb_validation.md").read_text(encoding="utf-8")
     for heading in [

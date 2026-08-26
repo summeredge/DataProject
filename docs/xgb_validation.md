@@ -9,7 +9,11 @@ XGBoost 时间外预测验证是第四层 Temporal Holdout Validation，用于�
 
 ## 2. 前置条件
 
-必须先完成第三层可信度审查并生成 `final_review_summary.csv`。Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入 `xgb_validation/`。第四层不修改第三层结果。
+必须先完成第三层可信度审查并生成 `final_review_summary.csv`。自动候选来自第三层可信度审查结果；
+白名单变量可按现有 XGBoost 契约额外强制加入。候选池继续使用
+`build_xgb_candidate_pool()` 现有逻辑；本次不修改该逻辑，也不修改自动候选数量、白名单数量和总候选上限。
+Web 默认不启用 XGB；只有用户显式勾选并运行后才会训练模型和写入
+`xgb_validation/`。第四层不修改第三层结果。
 
 运行环境需要可选依赖：
 
@@ -36,7 +40,17 @@ XGB 继承前三层分析配置中的：
 - 工况分段；
 - 重采样；
 - 缺失插值与完整样本处理；
-- `raw`、`detrend`、`diff`、`detrend_diff` 变换。
+- 正式预处理模式：
+
+```text
+raw
+lowpass
+lowpass_detrend
+lowpass_diff
+```
+
+`detrend`、`diff`、`detrend_diff` 仅属于 legacy/backend compatibility；不属于当前 Web/CLI 正式预处理选择，
+不得修改现有预处理实现和兼容逻辑。
 
 XGB 不执行标准化。`screening_lag` 的点数单位因此与重采样后的数据间隔一致。所有模型使用同一份完整样本，输入 DataFrame、`ranked_features` 和 `final_review_summary` 不会被原地修改。
 

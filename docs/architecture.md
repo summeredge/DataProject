@@ -49,8 +49,11 @@ Enhanced、普通 Granger 和 Model Explanation 从复核池读取变量，并�
 
 ## 第四层：时间外预测验证
 
-第四层（Temporal Holdout Validation）接收第三层候选，沿时间顺序隔离训练、验证和测试
-区间，输出候选变量预测增量证据与模型时间外表现。Baseline（M1）是目标变量历史信息加
+第四层（Temporal Holdout Validation）的自动候选来自第三层可信度审查结果
+（`final_review_summary.csv`）；白名单变量可按现有 XGBoost 契约额外强制加入。候选池继续使用
+`build_xgb_candidate_pool()` 现有逻辑；本次不修改该逻辑，也不修改自动候选数量、白名单数量和总候选上限。
+第四层沿时间顺序隔离训练、验证和测试区间，输出候选变量预测增量证据与模型时间外表现。
+Baseline（M1）是目标变量历史信息加
 配置的控制变量历史；Candidate 是同一 M1 基线再加入单个候选变量历史信息。改善只说明
 候选变量提供额外预测信息，不表示候选变量决定目标变量。
 

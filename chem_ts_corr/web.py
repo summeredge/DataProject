@@ -3669,7 +3669,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>二次验证</h2>
         <div class="help">
           <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
-          <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林/SHAP 重要性表示模型输入重要性，不等于工艺因果贡献或可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
+          <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
           <span>下游阶段只使用已确认正式分支的预处理口径与主筛查滞后参数，不再提供独立的二次重采样或补充白名单切换。</span>
           <span id="downstreamGateHint" class="help" hidden>请先确认正式初筛分支。</span>
         </div>
@@ -3709,14 +3709,14 @@ INDEX_HTML = r"""<!doctype html>
 
         <details id="modelExplanationDetails" class="validation-detail-section">
           <summary>Model Explanation 详细结果</summary>
-          <div class="help">随机森林/SHAP 重要性表示模型输入重要性（模型依赖），不代表工艺因果贡献、可操作性或候选排名。</div>
-          <h3>随机森林模型解释变量级输入重要性</h3>
-          <div class="help">该表按变量汇总随机森林/SHAP 模型输入重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表工艺因果贡献、可操作性或初筛排名。</div>
-          <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示模型输入重要性。</div>
+          <div class="help">随机森林重要性表示模型依赖，不等于可操作性或因果结论。</div>
+          <h3>随机森林模型解释变量排序</h3>
+          <div class="help">该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。</div>
+          <div id="modelVariableImportanceTable" class="empty">运行随机森林模型解释后显示变量排序。</div>
           <h3>随机森林模型解释特征明细</h3>
           <div id="importanceTable" class="empty">未启用随机森林模型解释。</div>
           <h3>随机森林模型遗漏探索</h3>
-          <div class="help">该表仅检查初筛 Rank K+1~K+10 中的遗漏线索，最多显示 5 个并保持初筛顺序；不属于二级验证结论，不会自动加入推荐、候选池或任何排序。结果仅表示模型输入重要性，不代表工艺因果贡献或可操作性。</div>
+          <div class="help">该表仅检查初筛 Rank K+1~K+10 中的遗漏线索，最多显示 5 个并保持初筛顺序；不属于二级验证结论，不会自动加入推荐、候选池或任何排序。结果仅表示预测模型依赖，不代表因果关系或可操作性。</div>
           <div id="modelDiscoveredTable" class="empty">运行随机森林模型解释后显示遗漏探索线索。</div>
         </details>
         <section id="verificationReviewPoolSection" aria-labelledby="verificationReviewPoolTitle">
@@ -7345,7 +7345,7 @@ function missingText(targetId) {
   if (targetId === "enhancedSummaryTable") return "点击“运行增强筛选”后显示增强筛选摘要。";
   if (targetId === "enhancedLiftTable") return "点击“运行增强筛选”后显示模型提升评分。";
   if (targetId === "enhancedRollingTable") return "点击“运行增强筛选”后显示滚动稳定性评分。";
-  if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量级模型输入重要性。";
+  if (targetId === "modelVariableImportanceTable") return "运行随机森林模型解释后显示变量排序。";
   if (targetId === "importanceTable") return "未启用随机森林模型解释，或没有可展示结果。";
   if (targetId === "modelDiscoveredTable") return "运行随机森林模型解释后显示遗漏探索线索。";
   if (targetId === "conditionalGrangerTable") return "未运行 条件 Granger 预测验证。";
@@ -8062,7 +8062,7 @@ function columnLabel(column) {
     r2: "R²",
     method: "主导相关方法",
     feature: "模型特征",
-    importance: "模型输入重要性（不代表工艺因果贡献）",
+    importance: "重要性",
     residual_p_value: "残差P值",
     residual_r2: "残差R²",
     regime: "工况",
@@ -8171,15 +8171,15 @@ function columnLabel(column) {
     control_relation_assessment: "控制关系审查",
     statistical_limitation: "统计限制审查",
     direction_assessment: "方向审查（带符号滞后）",
-    model_importance_rank: "模型输入重要性排名（不用于初筛排序）",
+    model_importance_rank: "模型重要性排名",
     model_explanation_support: "模型解释支持",
     causalReviewEvidence: "逐变量可信度审查证据表",
     best_model_feature: "最强模型特征",
     best_model_lag: "最强模型滞后",
-    max_importance: "最大模型输入重要性",
-    total_importance: "变量总模型输入重要性",
+    max_importance: "最大重要性",
+    total_importance: "变量总重要性",
     feature_count: "模型特征数",
-    importance_rank: "模型输入重要性排名（不用于初筛排序）",
+    importance_rank: "重要性排名",
     model_feature_count: "模型特征数量",
     nearby_lag_count: "滞后点数量",
     ranked_feature_rank: "主筛查排名",
@@ -8337,7 +8337,7 @@ function reset() {
   el("grangerTable").className = "empty";
   el("grangerTable").textContent = "启用 Granger 检验后显示结果。";
   el("modelVariableImportanceTable").className = "empty";
-  el("modelVariableImportanceTable").textContent = "运行随机森林模型解释后显示变量级模型输入重要性。";
+  el("modelVariableImportanceTable").textContent = "运行随机森林模型解释后显示变量排序。";
   el("importanceTable").className = "empty";
   el("importanceTable").textContent = "启用随机森林模型解释后显示结果。";
   el("modelDiscoveredTable").className = "empty";

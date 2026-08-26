@@ -459,6 +459,26 @@ def test_xgb_product_copy_avoids_misleading_validation_claims():
         assert forbidden not in copy
 
 
+def test_second_layer_model_explanation_copy_remains_legacy():
+    source = web.INDEX_HTML
+    model_section = source.split('<details id="modelExplanationDetails"', 1)[1].split(
+        "</details>", 1
+    )[0]
+
+    for marker in [
+        "随机森林重要性表示模型依赖，不等于可操作性或因果结论。",
+        "随机森林模型解释变量排序",
+        "该表按变量汇总随机森林/SHAP 重要性，每个变量仅显示最强 lag。结果表示预测模型依赖，不代表因果关系或可操作性。",
+        "运行随机森林模型解释后显示变量排序。",
+        "结果仅表示预测模型依赖，不代表因果关系或可操作性。",
+    ]:
+        assert marker in model_section
+    for marker in ["模型重要性排名", "最大重要性", "变量总重要性", "重要性排名"]:
+        assert marker in source
+    assert "模型输入重要性（不代表工艺因果贡献）" not in model_section
+    assert "随机森林模型解释变量级输入重要性" not in model_section
+
+
 def test_xgb_candidate_count_input_keeps_default_and_exposes_both_limits():
     source = web.INDEX_HTML
 

@@ -81,6 +81,13 @@ train / validation / test 时间覆盖。当前使用连续时间块的 expandin
 `validation_summary` 或第三层可信度审查结果，也不得进入 ranking、scoring 或
 candidate selection。保持现有 XGBoost 模型、特征、滞后、训练、时间切分和指标计算流程不变。
 
+第四层 Web 的“工程复核摘要”属于结果呈现层整合。页面复用已有的
+`xgb_candidate_uplift.csv`、`xgb_candidate_fold_metrics.csv` 和 `xgb_fold_context.csv` 返回数据，
+按候选增量文件顺序展示跨折证据、候选实际测试覆盖和 Fold Context 时间尺度；不新增模型结果、
+综合评分、候选排名或验证状态，不落盘第八份摘要 CSV，也不影响 API 既有字段。
+没有候选逐折结果时测试覆盖保持缺失；Fold Context 的采样间隔或滞后时间尺度跨折不一致时，
+页面明确显示“各折不一致”。
+
 ## 排除窗口（PR-TR1 / PR-TR2 / PR-TR3）
 
 完整上传数据始终保留。`exclude_windows` 只是本次分析的数据选择条件：在重采样和

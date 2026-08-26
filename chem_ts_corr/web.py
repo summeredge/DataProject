@@ -3808,30 +3808,39 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <div id="xgbStatus" class="help" aria-live="polite">XGB 时间外预测验证未启用。</div>
         <div id="xgbRunSummary" class="overview-grid"></div>
-        <details id="xgbFoldContextDetails">
-          <summary>时间折覆盖信息</summary>
-          <div class="help">以下时间范围、样本数、采样间隔、gap 和最大使用滞后均来自实际送入各 fold 模型的时间索引；行数代表模型使用的数据点数量，不等于统计意义上的独立样本数。</div>
-          <div id="xgbFoldContextTable" class="empty">未运行 XGB 时间外预测验证。</div>
-        </details>
-        <div class="download-buttons" id="xgbFoldContextDownload"></div>
-        <h2>模型时间外验证摘要</h2>
-        <div class="download-buttons" id="xgbModelSummaryDownload"></div>
-        <div class="download-buttons" id="xgbFoldMetricsDownload"></div>
-        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        <h2>第四层工程复核摘要</h2>
+        <div class="help">
+          <span>本摘要只组合已有 XGBoost 时间外预测验证证据，不重新训练模型、不重新计算 candidate uplift、不重新执行时间切分，也不产生新的评分、排名或 validation_status。</span>
+          <span>状态解释：validated_incremental_signal → 多时间折预测增量得到支持；weak_incremental_value → 存在预测增量，但支持较弱；redundant_with_baseline → 未显示相对 M1 的明确增量；unstable_out_of_time → 不同时间折表现存在明显不一致；insufficient_features → 缺少可用特征，未完成候选模型验证。</span>
+          <span>第四层状态仅描述候选变量相对 M1 基线的时间外预测增量表现。多个时间折改善表示当前数据范围内具有更好的跨时间一致性，但不代表长期稳定性、工艺因果关系或根因判断。</span>
+          <span><code>worst_fold_rmse_improvement_pct &lt; 0</code> 表示至少存在一个时间外测试折加入该候选后 RMSE 变差，应结合逐折明细人工复核；该字段不会自动改变任何状态。</span>
+        </div>
+        <div id="xgbReviewSummaryTable" class="empty">未运行 XGB 时间外预测验证。</div>
         <h2>候选变量增量验证</h2>
         <div class="help">
           <span>RMSE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 RMSE 改善百分比中位数；改善率 = (baseline_error - candidate_error) / baseline_error × 100%。大于 0 表示加入该候选后预测误差下降，小于 0 表示预测误差上升。</span>
           <span>MAE 改善中位数（%）：各时间外测试折中，相对 M1 基线模型的 MAE 改善百分比中位数。大于 0 表示平均绝对误差下降。</span>
           <span>RMSE 改善折占比：RMSE 改善百分比大于 0 的时间折数占全部验证折数的比例，范围为 0～1；例如 0.67 表示约 67% 的时间折得到改善。数值越高，跨时间段改善越稳定。</span>
+          <span>测试时间覆盖是该候选实际可计算测试折的最早开始到最晚结束，仅表示当前上传数据中的测试覆盖起止范围，不表示中间时间连续存在测试数据。</span>
           <span>以上指标均为时间外预测增量证据，不代表工艺因果成立；不参与 ranking、scoring 或 candidate selection，也不修改 final_score、ranked_features.csv、Top-K、第二层 validation_summary 或第三层可信度审查结果。</span>
         </div>
-        <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
         <div id="xgbCandidateUpliftTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        <details id="xgbFoldContextDetails">
+          <summary>时间折覆盖信息</summary>
+          <div class="help">以下时间范围、样本数、采样间隔、gap 和最大使用滞后均来自实际送入各 fold 模型的时间索引；行数代表模型使用的数据点数量，不等于统计意义上的独立样本数。</div>
+          <div id="xgbFoldContextTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        </details>
         <details id="xgbCandidateFoldDetails">
           <summary>逐时间折验证明细</summary>
-          <div class="help">每一折模拟“使用更早时间段训练，在后续未参与训练的时间段验证”。多个时间折出现正向改善，表示预测增量在当前数据范围内具有更好的跨时间一致性，但不代表长期稳定性或工艺因果关系。</div>
+          <div class="help">每一折模拟“使用更早时间段训练，在后续未参与训练的时间段验证”。明细复用现有候选逐折结果，不重新计算 worst/best；多个时间折出现正向改善，表示预测增量在当前数据范围内具有更好的跨时间一致性，但不代表长期稳定性或工艺因果关系。</div>
           <div id="xgbCandidateFoldMetricsTable" class="empty">点击候选变量汇总行后查看该变量的逐时间折明细。</div>
         </details>
+        <h2>模型时间外验证摘要</h2>
+        <div id="xgbModelSummaryTable" class="empty">未运行 XGB 时间外预测验证。</div>
+        <div class="download-buttons" id="xgbModelSummaryDownload"></div>
+        <div class="download-buttons" id="xgbFoldMetricsDownload"></div>
+        <div class="download-buttons" id="xgbFoldContextDownload"></div>
+        <div class="download-buttons" id="xgbCandidateUpliftDownload"></div>
         <div class="download-buttons" id="xgbCandidateFoldMetricsDownload"></div>
         <div class="download-buttons" id="xgbValidationSummaryDownload"></div>
         <div class="download-buttons" id="xgbPredictionsDownload"></div>
@@ -4439,7 +4448,16 @@ function renderAnalysisResult(data) {
   renderFinalReviewSummaryTable(lastFinalReviewSummaryRows);
   renderCausalReviewEvidenceTable(lastCausalEvidenceRows);
   renderEvidenceMatrixTable(lastEvidenceMatrixRows);
+  delete tableSortStates["xgbReviewSummaryTable"];
+  delete tableSortStates["xgbCandidateUpliftTable"];
   renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+  renderXgbReviewSummaryTable(
+    buildXgbReviewSummaryRows(
+      lastXgbCandidateUpliftRows,
+      lastXgbCandidateFoldMetricRows,
+      lastXgbFoldContextRows
+    )
+  );
   renderXgbFoldContextTable(lastXgbFoldContextRows);
   renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
   clearXgbCandidateFoldDetails();
@@ -4789,7 +4807,16 @@ async function runXgbValidation() {
     lastXgbCandidateFoldMetricRows = data.xgbCandidateFoldMetrics || [];
     lastXgbFoldContextRows = data.xgbFoldContext || [];
     lastXgbValidationSummary = data.xgbValidationSummary || {};
+    delete tableSortStates["xgbReviewSummaryTable"];
+    delete tableSortStates["xgbCandidateUpliftTable"];
     renderGenericTable("xgbModelSummaryTable", lastXgbModelSummaryRows, xgbModelSummaryColumns());
+    renderXgbReviewSummaryTable(
+      buildXgbReviewSummaryRows(
+        lastXgbCandidateUpliftRows,
+        lastXgbCandidateFoldMetricRows,
+        lastXgbFoldContextRows
+      )
+    );
     renderXgbFoldContextTable(lastXgbFoldContextRows);
     renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
     clearXgbCandidateFoldDetails();
@@ -6247,7 +6274,7 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
-  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable" || targetId === "evidenceMatrixTable";
+  const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable" || targetId === "evidenceMatrixTable" || targetId === "xgbReviewSummaryTable" || targetId === "xgbCandidateUpliftTable";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
@@ -6889,8 +6916,9 @@ const GENERIC_TABLE_CORE_COLUMNS = {
   conditionalGrangerTable: ["variable", "status", "best_lag", "min_p_value", "fdr_q_value", "predictive_contribution"],
   xgbModelSummaryTable: ["model_name", "mean_rmse", "mean_mae", "mean_r2", "M2_vs_M1_rmse_improvement_pct"],
   xgbFoldContextTable: ["fold", "train_time_range", "train_rows", "train_duration_minutes", "validation_time_range", "validation_rows", "validation_duration_minutes", "test_time_range", "test_rows", "test_duration_minutes", "sampling_interval_minutes", "gap_rows", "gap_duration_minutes", "max_used_lag", "max_used_lag_duration_minutes"],
-  xgbCandidateUpliftTable: ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"],
-  xgbCandidateFoldMetricsTable: ["variable", "fold", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"]
+  xgbReviewSummaryTable: ["variable", "validation_status", "fold_count", "positive_rmse_fold_count", "positive_rmse_fold_ratio", "median_rmse_improvement_pct", "median_mae_improvement_pct", "worst_fold_rmse_improvement_pct", "test_time_coverage", "sampling_interval_minutes", "max_used_lag", "max_used_lag_duration_minutes"],
+  xgbCandidateUpliftTable: ["variable", "validation_status", "fold_count", "positive_rmse_fold_count", "positive_rmse_fold_ratio", "median_rmse_improvement_pct", "median_mae_improvement_pct", "worst_fold_rmse_improvement_pct", "test_time_coverage"],
+  xgbCandidateFoldMetricsTable: ["variable", "fold", "train_time_range", "validation_time_range", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"]
 };
 
 function genericTableCoreColumns(targetId, row = {}, preferredColumns = null) {
@@ -7306,6 +7334,9 @@ function validationSummarySupportingMethods(value) {
 }
 
 function displayCellValue(column, value) {
+  if (column === "test_time_coverage" && (value === undefined || value === null || String(value).trim() === "")) {
+    return "缺失";
+  }
   const matrixLabels = evidenceMatrixStatusLabels[column];
   if (matrixLabels && Object.prototype.hasOwnProperty.call(matrixLabels, String(value ?? ""))) {
     return matrixLabels[String(value ?? "")];
@@ -7401,6 +7432,7 @@ function missingText(targetId) {
   if (targetId === "causalReviewEvidenceTable") return "未运行 逐变量可信度审查证据表。";
   if (targetId === "xgbModelSummaryTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbFoldContextTable") return "未运行 XGB 时间外预测验证。";
+  if (targetId === "xgbReviewSummaryTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbCandidateUpliftTable") return "未运行 XGB 时间外预测验证。";
   if (targetId === "xgbCandidateFoldMetricsTable") return "当前候选没有可展示的逐时间折明细。";
   if (targetId === "overviewTop") return "暂无初步分析 Top 10。";
@@ -7480,25 +7512,145 @@ function clearXgbFoldContext() {
   resetOptionalTable("xgbFoldContextTable", "未运行 XGB 时间外预测验证。");
 }
 
+function xgbHasValue(value) {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function xgbValueOrMissing(row, column) {
+  return xgbHasValue(row?.[column]) ? row[column] : null;
+}
+
+function xgbContextValueKey(value) {
+  const text = String(value).trim();
+  const number = Number(value);
+  return text !== "" && Number.isFinite(number) ? `number:${number}` : `text:${text}`;
+}
+
+function xgbConsistentContextValue(rows, column) {
+  const contexts = rows || [];
+  if (!contexts.length) return null;
+  const present = contexts.map((row) => row?.[column]).filter(xgbHasValue);
+  if (!present.length) return null;
+  if (present.length !== contexts.length || new Set(present.map(xgbContextValueKey)).size > 1) {
+    return "各折不一致";
+  }
+  return present[0];
+}
+
+function xgbTimestampOrderValue(value) {
+  const text = String(value ?? "").trim();
+  const parsed = Date.parse(text.includes(" ") && !text.includes("T")
+    ? text.replace(" ", "T")
+    : text);
+  return Number.isFinite(parsed) ? parsed : text;
+}
+
+function xgbCompareTimestamps(left, right) {
+  const leftValue = xgbTimestampOrderValue(left);
+  const rightValue = xgbTimestampOrderValue(right);
+  if (typeof leftValue === "number" && typeof rightValue === "number") return leftValue - rightValue;
+  return String(leftValue).localeCompare(String(rightValue), "zh-CN", { numeric: true });
+}
+
+function xgbDisplayTimestamp(value) {
+  return String(value ?? "").trim().replace("T", " ").replace(/\.000Z$/, "");
+}
+
+function xgbCandidateTestTimeCoverage(rows) {
+  const ranges = (rows || []).filter((row) => xgbHasValue(row?.test_start) && xgbHasValue(row?.test_end));
+  if (!ranges.length) return null;
+  let earliest = ranges[0];
+  let latest = ranges[0];
+  for (const row of ranges.slice(1)) {
+    if (xgbCompareTimestamps(row.test_start, earliest.test_start) < 0) earliest = row;
+    if (xgbCompareTimestamps(row.test_end, latest.test_end) > 0) latest = row;
+  }
+  return `${xgbDisplayTimestamp(earliest.test_start)} ~ ${xgbDisplayTimestamp(latest.test_end)}`;
+}
+
+function buildXgbReviewSummaryRows(candidateRows, candidateFoldRows, foldContextRows) {
+  const foldsByVariable = new Map();
+  for (const row of candidateFoldRows || []) {
+    const key = String(row?.variable ?? "");
+    if (!foldsByVariable.has(key)) foldsByVariable.set(key, []);
+    foldsByVariable.get(key).push(row);
+  }
+  return (candidateRows || []).map((candidate) => {
+    const variableKey = String(candidate?.variable ?? "");
+    const foldRows = foldsByVariable.get(variableKey) || [];
+    return {
+      ...candidate,
+      variable: xgbValueOrMissing(candidate, "variable"),
+      validation_status: xgbValueOrMissing(candidate, "validation_status"),
+      fold_count: xgbValueOrMissing(candidate, "fold_count"),
+      positive_rmse_fold_count: xgbValueOrMissing(candidate, "positive_rmse_fold_count"),
+      positive_rmse_fold_ratio: xgbValueOrMissing(candidate, "positive_rmse_fold_ratio"),
+      median_rmse_improvement_pct: xgbValueOrMissing(candidate, "median_rmse_improvement_pct"),
+      median_mae_improvement_pct: xgbValueOrMissing(candidate, "median_mae_improvement_pct"),
+      worst_fold_rmse_improvement_pct: xgbValueOrMissing(candidate, "worst_fold_rmse_improvement_pct"),
+      test_time_coverage: xgbCandidateTestTimeCoverage(foldRows),
+      sampling_interval_minutes: xgbConsistentContextValue(foldContextRows, "sampling_interval_minutes"),
+      max_used_lag: xgbConsistentContextValue(foldContextRows, "max_used_lag"),
+      max_used_lag_duration_minutes: xgbConsistentContextValue(
+        foldContextRows,
+        "max_used_lag_duration_minutes"
+      ),
+    };
+  });
+}
+
+function xgbReviewSummaryColumns() {
+  return [
+    "variable", "validation_status", "fold_count", "positive_rmse_fold_count",
+    "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
+    "median_mae_improvement_pct", "worst_fold_rmse_improvement_pct",
+    "test_time_coverage", "sampling_interval_minutes", "max_used_lag",
+    "max_used_lag_duration_minutes",
+  ];
+}
+
 function xgbCandidateUpliftColumns() {
-  return ["variable", "median_rmse_improvement_pct", "median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];
+  return [
+    "variable", "validation_status", "fold_count", "positive_rmse_fold_count",
+    "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
+    "median_mae_improvement_pct", "worst_fold_rmse_improvement_pct",
+    "test_time_coverage",
+  ];
 }
 
 function xgbCandidateFoldMetricColumns() {
-  return ["variable", "fold", "test_time_range", "rmse_improvement_pct", "mae_improvement_pct", "test_rows"];
+  return [
+    "variable", "fold", "train_time_range", "validation_time_range", "test_time_range",
+    "rmse_improvement_pct", "mae_improvement_pct", "test_rows",
+  ];
 }
 
-function renderXgbCandidateUpliftTable(rows) {
-  renderGenericTable("xgbCandidateUpliftTable", rows || [], xgbCandidateUpliftColumns());
-  const container = el("xgbCandidateUpliftTable");
+function bindXgbCandidateFoldDetailClick(targetId, rows) {
+  const container = el(targetId);
   if (!container) return;
   container.onclick = (event) => {
     const rowElement = event.target.closest?.("tbody tr");
     if (!rowElement || !shouldOpenRowDetail(event)) return;
-    const displayRows = sortedRowsForTable("xgbCandidateUpliftTable", rows || []);
+    const displayRows = sortedRowsForTable(targetId, rows || []);
     const row = displayRows[Number(rowElement.dataset.rowIndex)];
     if (row) renderXgbCandidateFoldDetails(row.variable);
   };
+}
+
+function renderXgbReviewSummaryTable(rows) {
+  const displayRows = rows || [];
+  renderGenericTable("xgbReviewSummaryTable", displayRows, xgbReviewSummaryColumns());
+  bindXgbCandidateFoldDetailClick("xgbReviewSummaryTable", displayRows);
+}
+
+function renderXgbCandidateUpliftTable(rows) {
+  const displayRows = buildXgbReviewSummaryRows(
+    rows || [],
+    lastXgbCandidateFoldMetricRows,
+    lastXgbFoldContextRows
+  );
+  renderGenericTable("xgbCandidateUpliftTable", displayRows, xgbCandidateUpliftColumns());
+  bindXgbCandidateFoldDetailClick("xgbCandidateUpliftTable", displayRows);
 }
 
 function renderXgbCandidateFoldDetails(variable) {
@@ -7521,6 +7673,8 @@ function renderXgbCandidateFoldDetails(variable) {
   const displayRows = rows.map((row) => ({
     variable: row.variable,
     fold: row.fold,
+    train_time_range: `${row.train_start ?? ""} ~ ${row.train_end ?? ""}`,
+    validation_time_range: `${row.validation_start ?? ""} ~ ${row.validation_end ?? ""}`,
     test_time_range: `${row.test_start ?? ""} ~ ${row.test_end ?? ""}`,
     rmse_improvement_pct: row.rmse_improvement_pct,
     mae_improvement_pct: row.mae_improvement_pct,
@@ -8272,6 +8426,8 @@ function columnLabel(column) {
     interpretation: "解释边界",
     model_name: "模型",
     fold: "时间折",
+    fold_count: "可计算折数",
+    positive_rmse_fold_count: "RMSE改善折数",
     train_start: "训练开始",
     train_end: "训练结束",
     validation_start: "验证开始",
@@ -8279,6 +8435,7 @@ function columnLabel(column) {
     test_start: "测试开始",
     test_end: "测试结束",
     test_time_range: "测试时间范围",
+    test_time_coverage: "测试时间覆盖",
     train_time_range: "训练时间范围",
     validation_time_range: "验证时间范围",
     train_rows: "训练样本数",
@@ -8302,6 +8459,7 @@ function columnLabel(column) {
     best_iteration: "最佳迭代轮数",
     median_rmse_improvement_pct: "RMSE改善中位数(%)",
     median_mae_improvement_pct: "MAE改善中位数(%)",
+    worst_fold_rmse_improvement_pct: "最差折RMSE改善(%)",
     positive_rmse_fold_ratio: "RMSE改善折占比",
     validation_status: "验证状态",
     evidence_consistency: "证据一致性",
@@ -8551,6 +8709,7 @@ function reset() {
   resetOptionalTable("evidenceMatrixTable", "未运行 可信度审查，暂无人工复核证据矩阵。");
   resetOptionalTable("xgbModelSummaryTable", "未运行 XGB 时间外预测验证。");
   clearXgbFoldContext();
+  resetOptionalTable("xgbReviewSummaryTable", "未运行 XGB 时间外预测验证。");
   resetOptionalTable("xgbCandidateUpliftTable", "未运行 XGB 时间外预测验证。");
   clearXgbCandidateFoldDetails();
   clearOptionalElement("xgbRunSummary");

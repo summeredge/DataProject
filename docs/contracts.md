@@ -776,6 +776,15 @@ generalization_status
   不新增可靠性评分或新的 validation status。
 - `positive_rmse_fold_ratio` 只表示 RMSE 改善大于 0 的时间折占比，不是稳定性评分、可信度评分
   或因果置信度。逐折明细不得改变 `xgb_candidate_uplift.csv` 的既有字段、汇总结果、状态或顺序。
+- Web 的“第四层工程复核摘要”只在展示层组合上述三份已有结果，至少展示
+  `variable`、`validation_status`、`fold_count`、`positive_rmse_fold_count`、
+  `positive_rmse_fold_ratio`、`median_rmse_improvement_pct`、
+  `median_mae_improvement_pct`、`worst_fold_rmse_improvement_pct`、候选实际
+  `test_time_coverage` 以及来自 `xgb_fold_context.csv` 的采样间隔和最大使用滞后时间尺度。
+  `test_time_coverage` 取候选实际可计算折中最早 `test_start` 到最晚 `test_end`；没有逐折结果时
+  保持缺失。时间尺度字段跨 Fold 不一致时必须显示缺失或“各折不一致”，不得平均或静默选择某折。
+  页面默认顺序继续使用 `xgb_candidate_uplift.csv` 返回顺序，临时表头排序不得写回文件或形成新的
+  ranking 字段；摘要不得新增综合评分、状态、正式 CSV 或 API 必需字段。
 - `xgb_fold_metrics.csv`、`xgb_fold_context.csv`、`xgb_model_summary.csv`、`xgb_candidate_uplift.csv`、
   `xgb_candidate_fold_metrics.csv`、`xgb_predictions.csv` 和
   `xgb_validation_summary.json` 中的 XGBoost 字段仅用于 prediction evidence；不得进入

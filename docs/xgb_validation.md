@@ -108,6 +108,25 @@ test 仅用于报告指标。整体语义是当前分析数据范围内的多时
 
 JSON 不包含原始数据值、用户文件路径或前三层排名字段。
 
+### Web 工程复核摘要（PR-X4）
+
+XGB 时间外预测页面中的“第四层工程复核摘要”是展示层整合：前端按
+`xgb_candidate_uplift.csv` 的返回顺序，组合已有 `xgbCandidateUplift`、
+`xgbCandidateFoldMetrics` 和 `xgbFoldContext` 数据，展示候选状态、可计算折数、正向 RMSE
+折数及比例、median / worst-fold improvement、候选实际测试时间覆盖，以及统一的采样间隔和
+最大使用滞后时间尺度。它不重新训练模型、不重新计算 candidate uplift、不重新执行时间切分，
+也不产生新的 API 必需字段或正式输出文件。
+
+`test_time_coverage` 只取该候选实际逐折结果中最早的 `test_start` 与最晚的 `test_end`；
+没有逐折结果（例如 `insufficient_features`）时保持缺失，不用 `0`、`0.0` 或“无改善”替代。
+`sampling_interval_minutes`、`max_used_lag` 和 `max_used_lag_duration_minutes` 只取
+`xgb_fold_context.csv`；各折不一致时页面显示“各折不一致”，不平均、不静默选择某一折。
+页面默认保持 `xgb_candidate_uplift.csv` 的候选顺序，点击表头后的临时排序只影响当前查看。
+摘要与候选汇总行均可点击打开已有逐时间折明细，明细同时展示 train / validation / test 时间范围。
+
+页面状态解释严格一一对应现有五种 `validation_status`，不新增二次分类；摘要不计算综合分数，
+不改变状态、排名、前三层结果或七个正式 XGB 输出文件。
+
 ### 时间覆盖与可靠性审计
 
 `xgb_fold_context.csv` 的 `*_duration_minutes` 均由该 partition 实际送入模型的时间索引计算，

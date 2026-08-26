@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,11 @@ import chem_ts_corr.service as service
 import chem_ts_corr.web as web
 from chem_ts_corr.config import AnalysisConfig
 from chem_ts_corr.xgb_validation import build_xgb_feature_sets
+
+
+def _javascript_function(name: str) -> str:
+    source = web.INDEX_HTML.split(f"function {name}", 1)[1]
+    return f"function {name}" + source.split("\n}\n", 1)[0] + "\n}"
 
 
 def _write_run(tmp_path: Path) -> tuple[Path, AnalysisConfig, pd.DataFrame, pd.DataFrame]:
@@ -446,7 +452,7 @@ def test_xgb_web_surface_and_architecture_guards():
     for marker in [
         'id="enableXgbValidation"', 'id="xgbTopN"', 'id="xgbMaxLag"',
         'id="xgbWhitelist"', 'id="runXgbValidation"', 'id="xgbModelSummaryTable"',
-        'id="xgbCandidateUpliftTable"', 'id="xgbCandidateFoldDetails"',
+        'id="xgbReviewSummaryTable"', 'id="xgbCandidateUpliftTable"', 'id="xgbCandidateFoldDetails"',
         'id="xgbCandidateFoldMetricsTable"', "xgb_validation/xgb_model_summary.csv",
         'id="xgbFoldContextDetails"', 'id="xgbFoldContextTable"',
         "xgb_validation/xgb_fold_context.csv",
@@ -455,6 +461,8 @@ def test_xgb_web_surface_and_architecture_guards():
         'id="xgbRunSummary"', 'max="5000"', "renderXgbRunSummary",
         "row_count", "candidate_count", "fold_count", "m0_feature_count",
         "m1_feature_count", "m2_feature_count", "max_used_lag", "timings.total",
+        "positive_rmse_fold_count", "worst_fold_rmse_improvement_pct", "test_time_coverage",
+        "buildXgbReviewSummaryRows", "各折不一致",
     ]:
         assert marker in web.INDEX_HTML or marker in web.DOWNLOAD_FILES
     for forbidden in [
@@ -548,23 +556,135 @@ def _xgb_run_function_body() -> str:
 def test_xgb_candidate_uplift_help_and_columns_remain_explicit():
     source = web.INDEX_HTML
     uplift_section = source.split("<h2>候选变量增量验证</h2>", 1)[1].split(
-        'id="xgbCandidateUpliftDownload"', 1
+        '<details id="xgbFoldContextDetails"', 1
+    )[0]
+    review_section = source.split("<h2>第四层工程复核摘要</h2>", 1)[1].split(
+        "<h2>候选变量增量验证</h2>", 1
     )[0]
 
     for marker in [
         "RMSE 改善中位数", "MAE 改善中位数", "RMSE 改善折占比", "M1 基线模型",
         "大于 0 表示加入该候选后预测误差下降", "0.67 表示约 67%", "不代表工艺因果成立",
+        "测试时间覆盖",
     ]:
         assert marker in uplift_section
+    for marker in ["worst_fold_rmse_improvement_pct", "不重新训练模型", "insufficient_features →"]:
+        assert marker in review_section
+    assert "各折不一致" in source
     assert "<div class=\"help\">" in uplift_section
     assert (
-        'return ["variable", "median_rmse_improvement_pct", '
-        '"median_mae_improvement_pct", "positive_rmse_fold_ratio", "validation_status"];'
+        'return [\n    "variable", "validation_status", "fold_count", "positive_rmse_fold_count",'
     ) in source
     assert (
-        'return ["variable", "fold", "test_time_range", "rmse_improvement_pct", '
-        '"mae_improvement_pct", "test_rows"];'
+        '"variable", "fold", "train_time_range", "validation_time_range", "test_time_range",'
     ) in source
+
+
+def test_xgb_page_prioritizes_engineering_review_before_technical_details_and_downloads():
+    source = web.INDEX_HTML
+    section = source.split('<div id="xgbValidationTab"', 1)[1].split(
+        '<div id="llmReportTab"', 1
+    )[0]
+    markers = [
+        'id="xgbRunSummary"',
+        "<h2>第四层工程复核摘要</h2>",
+        'id="xgbReviewSummaryTable"',
+        "<h2>候选变量增量验证</h2>",
+        'id="xgbCandidateUpliftTable"',
+        'id="xgbFoldContextDetails"',
+        'id="xgbCandidateFoldDetails"',
+        "<h2>模型时间外验证摘要</h2>",
+        'id="xgbModelSummaryDownload"',
+    ]
+    positions = [section.index(marker) for marker in markers]
+    assert positions == sorted(positions)
+    assert '<details id="xgbFoldContextDetails">' in section
+    assert '<details id="xgbCandidateFoldDetails">' in section
+
+
+def test_xgb_review_summary_combines_existing_evidence_without_reordering():
+    functions = [
+        "xgbHasValue",
+        "xgbValueOrMissing",
+        "xgbContextValueKey",
+        "xgbConsistentContextValue",
+        "xgbTimestampOrderValue",
+        "xgbCompareTimestamps",
+        "xgbDisplayTimestamp",
+        "xgbCandidateTestTimeCoverage",
+        "buildXgbReviewSummaryRows",
+    ]
+    candidates = [
+        {
+            "variable": "A",
+            "validation_status": "validated_incremental_signal",
+            "fold_count": 3,
+            "positive_rmse_fold_count": 2,
+            "positive_rmse_fold_ratio": 2 / 3,
+            "median_rmse_improvement_pct": 4.0,
+            "median_mae_improvement_pct": 2.0,
+            "worst_fold_rmse_improvement_pct": -1.0,
+        },
+        {
+            "variable": "B",
+            "validation_status": "unstable_out_of_time",
+            "fold_count": 1,
+            "positive_rmse_fold_count": 1,
+            "positive_rmse_fold_ratio": 1.0,
+            "median_rmse_improvement_pct": 1.0,
+            "median_mae_improvement_pct": 0.5,
+            "worst_fold_rmse_improvement_pct": 1.0,
+        },
+        {
+            "variable": "C",
+            "validation_status": "insufficient_features",
+            "fold_count": 0,
+            "positive_rmse_fold_count": 0,
+            "positive_rmse_fold_ratio": 0.0,
+            "median_rmse_improvement_pct": None,
+            "median_mae_improvement_pct": None,
+            "worst_fold_rmse_improvement_pct": None,
+        },
+    ]
+    candidate_folds = [
+        {"variable": "A", "test_start": "2026-07-11T12:00:00", "test_end": "2026-07-15T23:59:00"},
+        {"variable": "A", "test_start": "2026-07-01T12:00:00", "test_end": "2026-07-05T23:59:00"},
+        {"variable": "A", "test_start": "2026-07-06T12:00:00", "test_end": "2026-07-10T23:59:00"},
+        {"variable": "B", "test_start": "2026-08-01T00:00:00", "test_end": "2026-08-02T00:00:00"},
+    ]
+    context = [
+        {
+            "sampling_interval_minutes": 5,
+            "max_used_lag": 12,
+            "max_used_lag_duration_minutes": 60,
+        },
+        {
+            "sampling_interval_minutes": 10,
+            "max_used_lag": 12,
+            "max_used_lag_duration_minutes": 120,
+        },
+    ]
+    script = "\n".join(
+        [
+            *(_javascript_function(name) for name in functions),
+            f"const result = buildXgbReviewSummaryRows({json.dumps(candidates)}, {json.dumps(candidate_folds)}, {json.dumps(context)});",
+            "console.log(JSON.stringify(result));",
+        ]
+    )
+    result = subprocess.run(
+        ["node", "-e", script], check=True, capture_output=True, text=True, encoding="utf-8"
+    )
+    rows = json.loads(result.stdout)
+
+    assert [row["variable"] for row in rows] == ["A", "B", "C"]
+    assert rows[0]["test_time_coverage"] == "2026-07-01 12:00:00 ~ 2026-07-15 23:59:00"
+    assert rows[1]["test_time_coverage"] == "2026-08-01 00:00:00 ~ 2026-08-02 00:00:00"
+    assert rows[2]["test_time_coverage"] is None
+    assert rows[2]["test_time_coverage"] not in {"0", "0.0", "无改善"}
+    assert rows[0]["sampling_interval_minutes"] == "各折不一致"
+    assert rows[0]["max_used_lag"] == 12
+    assert rows[0]["max_used_lag_duration_minutes"] == "各折不一致"
+    assert rows[0]["validation_status"] == "validated_incremental_signal"
 
 
 def test_xgb_run_uses_shared_global_status_timer_for_its_full_lifecycle():

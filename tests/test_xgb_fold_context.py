@@ -106,6 +106,8 @@ def test_candidate_fold_metrics_reuses_fold_context_coverage():
         "gap_duration_minutes",
     ):
         assert details.loc[0, field] == context.loc[0, field]
+    assert context.loc[0, "max_used_lag"] == 4
+    assert context.loc[0, "max_used_lag_duration_minutes"] == 4 * context.loc[0, "sampling_interval_minutes"]
 
 
 def test_fold_context_preserves_missing_time_semantics():

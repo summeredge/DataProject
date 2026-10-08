@@ -37,6 +37,15 @@ def _ranked(**extra):
     return pd.DataFrame([row])
 
 
+def test_xgb_missing_evidence_does_not_change_initial_references():
+    ranked = _ranked(driver_rank=7)
+    evidence = build_causal_review_evidence(ranked_features=ranked, conditional_granger_scores=pd.DataFrame())
+    matrix = build_evidence_matrix(ranked, None, evidence, xgb_candidate_uplift=pd.DataFrame())
+    assert matrix.iloc[0]["xgb_status"] == "missing"
+    assert matrix.iloc[0]["initial_rank"] == 7
+    assert matrix.iloc[0]["final_score"] == 0.9
+
+
 def test_only_ranked_features_outputs_fixed_columns():
     out = build_causal_review_evidence(
         ranked_features=_ranked(candidate_grade="C"),

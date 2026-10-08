@@ -50,6 +50,34 @@ def test_xgb_output_contract_has_exactly_seven_files():
     )
 
 
+@pytest.mark.parametrize("entry", [runner.run_xgb_validation, runner.run_xgb_validation_fold_safe])
+def test_both_runner_entries_persist_invalid_input(tmp_path, entry):
+    data, final, ranked = _inputs()
+    result = entry(run_dir=tmp_path, target="missing", data=data, final_review_summary=final, ranked_features=ranked)
+    assert result.status == "invalid_input"
+    assert runner.read_xgb_execution_state(tmp_path)["status"] == "invalid_input"
+    assert not (tmp_path / "xgb_validation").exists()
+
+
+@pytest.mark.parametrize("fold_count,status,ratio,valid", [
+    (3, "redundant_with_baseline", 0.0, True),
+    (3, "redundant_with_baseline", None, False),
+    (3, "redundant_with_baseline", float("nan"), False),
+    (3, "redundant_with_baseline", float("inf"), False),
+    (3, "redundant_with_baseline", -0.1, False),
+    (3, "redundant_with_baseline", 1.1, False),
+    (0, "insufficient_features", float("nan"), True),
+    (0, "redundant_with_baseline", float("nan"), False),
+])
+def test_candidate_ratio_requires_computed_folds_or_insufficient_features(fold_count, status, ratio, valid):
+    from dataclasses import asdict
+    from chem_ts_corr.xgb_validation import _insufficient_uplift_summary
+
+    row = asdict(_insufficient_uplift_summary("x"))
+    row.update(fold_count=fold_count, validation_status=status, positive_rmse_fold_ratio=ratio)
+    assert runner._validate_xgb_candidate_uplift(pd.DataFrame([row]), {"candidate_count": 1}) is valid
+
+
 def _inputs(rows: int = 20):
     data = pd.DataFrame(
         {

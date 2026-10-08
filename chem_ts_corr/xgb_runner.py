@@ -10,12 +10,16 @@ the formal screening artefacts isolated, so XGBoost results cannot change
 from __future__ import annotations
 
 import json
+import math
+from decimal import Decimal, InvalidOperation
 import shutil
 import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -26,6 +30,9 @@ from chem_ts_corr.preprocess import (
     transform_frame_causal,
 )
 from chem_ts_corr.xgb_validation import (
+    CANDIDATE_FOLD_METRICS_COLUMNS,
+    XGB_FOLD_CONTEXT_COLUMNS,
+    XGB_PREDICTION_COLUMNS,
     DEFAULT_CANDIDATE_LAG_RADIUS,
     DEFAULT_EARLY_STOPPING_ROUNDS,
     DEFAULT_XGB_MIN_TEST_ROWS,
@@ -71,6 +78,184 @@ _MISSING_DEPENDENCY_MESSAGE = (
 )
 
 
+def read_xgb_execution_state(run_dir: str | Path) -> dict:
+    """Separate the latest attempt from the retained seven-file success bundle."""
+    directory = Path(run_dir)
+    state_path = directory / "xgb_execution_state.json"
+    try:
+        summary = json.loads((directory / "xgb_validation/xgb_validation_summary.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        summary = {}
+    if not isinstance(summary, dict):
+        summary = {}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
+            "status": summary.get("status", "not_run"), "error_message": None,
+        }
+        if (not isinstance(state, dict) or not isinstance(state.get("status"), str)
+                or state["status"] not in XGB_RUN_STATUSES | {"not_run"}):
+            raise ValueError("invalid execution state")
+    except (OSError, ValueError):
+        state = {"status": "failed", "error_message": "XGB execution state is unreadable"}
+    valid = summary.get("status") == "success"
+    valid = valid and all((directory / "xgb_validation" / name).is_file() for name in XGB_OUTPUT_FILES)
+    try:
+        model = pd.read_csv(directory / "xgb_validation/xgb_model_summary.csv", encoding="utf-8-sig")
+        uplift = pd.read_csv(directory / "xgb_validation/xgb_candidate_uplift.csv", encoding="utf-8-sig", dtype={"variable": str})
+        valid = valid and _validate_xgb_model_summary(model) and _validate_xgb_candidate_uplift(uplift, summary)
+        valid = valid and _validate_xgb_fold_outputs(directory / "xgb_validation", model, uplift, summary)
+    except (OSError, ValueError):
+        valid = False
+    state = dict(state)
+    state["historical_result_available"] = bool(valid and state["status"] != "success")
+    state["current_result_available"] = bool(valid and state["status"] == "success")
+    if state["status"] == "success" and not valid:
+        state["status"] = "incomplete_outputs"
+    return state
+
+
+def _validate_xgb_fold_outputs(
+    directory: Path, model: pd.DataFrame, uplift: pd.DataFrame, summary: dict,
+) -> bool:
+    context = pd.read_csv(directory / "xgb_fold_context.csv", encoding="utf-8-sig")
+    metrics = pd.read_csv(directory / "xgb_fold_metrics.csv", encoding="utf-8-sig")
+    details = pd.read_csv(directory / "xgb_candidate_fold_metrics.csv", encoding="utf-8-sig", dtype={"variable": str})
+    for frame, columns in (
+        (context, XGB_FOLD_CONTEXT_COLUMNS),
+        (metrics, XGBFoldMetric.__dataclass_fields__),
+        (details, CANDIDATE_FOLD_METRICS_COLUMNS),
+    ):
+        if not set(columns).issubset(frame.columns):
+            return False
+        frame["fold"] = frame["fold"].map(_validated_nonnegative_integer)
+        if frame["fold"].isna().any():
+            return False
+    fold_count = _validated_nonnegative_integer(summary.get("fold_count"))
+    if not fold_count or len(context) != fold_count or context["fold"].duplicated().any():
+        return False
+    folds = set(context["fold"])
+    if (len(metrics) != fold_count * 3 or metrics.duplicated(["fold", "model_name"]).any()
+            or set(metrics["fold"]) != folds or set(metrics["model_name"]) != {"M0", "M1", "M2"}
+            or not pd.to_numeric(model["fold_count"], errors="coerce").eq(fold_count).all()):
+        return False
+    for frame, columns in (
+        (metrics, ("rmse", "mae", "r2", "best_iteration")),
+        (details, ("baseline_rmse", "candidate_rmse", "rmse_improvement_pct", "baseline_mae",
+                   "candidate_mae", "mae_improvement_pct", "candidate_r2", "best_iteration")),
+    ):
+        values = frame[list(columns)].apply(pd.to_numeric, errors="coerce")
+        if ((frame[list(columns)].notna() & values.isna()).any().any()
+                or np.isinf(values.to_numpy(dtype=float)).any()):
+            return False
+    errors = metrics[["rmse", "mae"]].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(errors.to_numpy()).all() or errors.lt(0).any().any():
+        return False
+    errors = details[["candidate_rmse", "candidate_mae"]].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(errors.to_numpy(dtype=float)).all() or errors.lt(0).any().any():
+        return False
+    for column in ("train_rows", "validation_rows", "test_rows"):
+        context[column] = context[column].map(_validated_nonnegative_integer)
+        if context[column].isna().any() or not context[column].gt(0).all():
+            return False
+        expected = metrics["fold"].map(context.set_index("fold")[column])
+        if not pd.to_numeric(metrics[column], errors="coerce").eq(expected).all():
+            return False
+    for partition in ("train", "validation", "test"):
+        start = pd.to_datetime(context[f"{partition}_start"], format="mixed", errors="coerce", utc=True)
+        end = pd.to_datetime(context[f"{partition}_end"], format="mixed", errors="coerce", utc=True)
+        if ((context[f"{partition}_start"].notna() & start.isna()).any()
+                or (context[f"{partition}_end"].notna() & end.isna()).any()
+                or (end < start).any()):
+            return False
+    if (details.duplicated(["variable", "fold"]).any()
+            or not set(details["fold"]).issubset(folds)
+            or not set(details["variable"]).issubset(set(uplift["variable"]))):
+        return False
+    for column in set(CANDIDATE_FOLD_METRICS_COLUMNS).intersection(XGB_FOLD_CONTEXT_COLUMNS) - {"fold"}:
+        expected = details["fold"].map(context.set_index("fold")[column])
+        if not (details[column].eq(expected) | (details[column].isna() & expected.isna())).all():
+            return False
+    baseline = metrics[metrics["model_name"].eq("M1")].set_index("fold")
+    for column, metric in (("baseline_rmse", "rmse"), ("baseline_mae", "mae")):
+        if not np.allclose(pd.to_numeric(details[column], errors="coerce"),
+                           pd.to_numeric(details["fold"].map(baseline[metric]), errors="coerce"),
+                           equal_nan=False):
+            return False
+    computed = summarize_candidate_uplift(details).set_index("variable")
+    for row in uplift.to_dict("records"):
+        variable = row["variable"]
+        if row["validation_status"] == "insufficient_features":
+            if variable in computed.index:
+                return False
+            continue
+        if variable not in computed.index:
+            return False
+        if row["validation_status"] != computed.loc[variable, "validation_status"]:
+            return False
+        for column in CandidateUpliftSummary.__dataclass_fields__:
+            if column in {"variable", "validation_status"}:
+                continue
+            actual, expected = row[column], computed.loc[variable, column]
+            if _is_missing_value(actual) and _is_missing_value(expected):
+                continue
+            value = _finite_number(actual)
+            if value is None or not np.isclose(value, expected, rtol=1e-7, atol=1e-10):
+                return False
+    prediction_counts = pd.Series(0, index=context["fold"], dtype="int64")
+    for chunk in pd.read_csv(directory / "xgb_predictions.csv", encoding="utf-8-sig", chunksize=100_000):
+        if not set(XGB_PREDICTION_COLUMNS).issubset(chunk.columns):
+            return False
+        prediction_folds = pd.to_numeric(chunk["fold"], errors="coerce")
+        if not prediction_folds.isin(folds).all() or chunk["timestamp_index"].isna().any():
+            return False
+        values = chunk[list(XGB_PREDICTION_COLUMNS[2:])].apply(pd.to_numeric, errors="coerce")
+        if not np.isfinite(values.to_numpy()).all():
+            return False
+        prediction_counts += prediction_folds.value_counts().reindex(prediction_counts.index, fill_value=0)
+    if not prediction_counts.eq(context.set_index("fold")["test_rows"]).all():
+        return False
+    if summary.get("fold_preprocessing_isolated") is True:
+        return _validated_nonnegative_integer(summary.get("row_count")) == int(prediction_counts.sum())
+    return True
+
+
+def record_xgb_execution(run_dir: str | Path, status: str, error_message: str | None = None) -> None:
+    directory = Path(run_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = {"status": status, "error_message": error_message,
+               "updated_at": datetime.now(timezone.utc).isoformat()}
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                     prefix=".xgb-state-", delete=False) as stream:
+        temp_path = Path(stream.name)
+        json.dump(payload, stream, ensure_ascii=False)
+    try:
+        temp_path.replace(directory / "xgb_execution_state.json")
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def persist_xgb_execution(function):
+    @wraps(function)
+    def run(*args, **kwargs):
+        run_dir = kwargs.get("run_dir", args[0] if args else None)
+        try:
+            result = function(*args, **kwargs)
+        except Exception as exc:
+            if run_dir is not None and str(run_dir).strip():
+                record_xgb_execution(run_dir, "invalid_input" if isinstance(exc, ValueError) else "failed", str(exc))
+            raise
+        status = result["status"] if isinstance(result, dict) else result.status
+        message = result.get("error_message") if isinstance(result, dict) else result.error_message
+        if run_dir is not None and str(run_dir).strip():
+            try:
+                record_xgb_execution(run_dir, status, message)
+            except OSError:
+                if status == "success":
+                    raise
+        return result
+    return run
+
+
 @dataclass(frozen=True)
 class XGBRunResult:
     status: str
@@ -85,6 +270,7 @@ class XGBRunResult:
             raise ValueError("unknown XGB run status")
 
 
+@persist_xgb_execution
 def run_xgb_validation(
     *,
     run_dir: str | Path,
@@ -290,6 +476,7 @@ def run_xgb_validation(
     )
 
 
+@persist_xgb_execution
 def run_xgb_validation_fold_safe(
     *,
     run_dir: str | Path,
@@ -487,7 +674,7 @@ def run_xgb_validation_fold_safe(
 
         summary = _summarize_xgb_metrics(fold_metrics)
         predictions = pd.concat(prediction_rows, ignore_index=True).loc[
-            :, ["fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction"]
+            :, list(XGB_PREDICTION_COLUMNS)
         ]
 
         candidate_columns = list(CandidateUpliftMetric.__dataclass_fields__)
@@ -1049,3 +1236,118 @@ def _error_result(status: str, message: str) -> XGBRunResult:
         candidate_uplift_path=None,
         error_message=message,
     )
+
+
+def _validate_xgb_model_summary(frame: pd.DataFrame) -> bool:
+    required = {
+        "model_name", "mean_rmse", "median_rmse", "mean_mae", "median_mae",
+        "mean_r2", "fold_count",
+    }
+    if frame.empty or not required.issubset(frame.columns):
+        return False
+    names = frame["model_name"]
+    if names.isna().any() or names.astype(str).str.strip().eq("").any():
+        return False
+    normalized_names = names.astype(str).str.strip()
+    if normalized_names.duplicated().any() or not {"M0", "M1", "M2"}.issubset(
+        set(normalized_names)
+    ):
+        return False
+    error_columns = ["mean_rmse", "median_rmse", "mean_mae", "median_mae"]
+    for model_name in ("M0", "M1", "M2"):
+        row = frame.loc[normalized_names.eq(model_name)].iloc[0]
+        fold_count = _validated_nonnegative_integer(row["fold_count"])
+        if fold_count is None or fold_count == 0:
+            return False
+        for column in error_columns:
+            value = _finite_number(row[column])
+            if value is None or value < 0:
+                return False
+        mean_r2 = row["mean_r2"]
+        if not _is_missing_value(mean_r2) and _finite_number(mean_r2) is None:
+            return False
+    return True
+
+
+def _validate_xgb_candidate_uplift(
+    frame: pd.DataFrame, summary: dict[str, Any]
+) -> bool:
+    required = {
+        "variable", "fold_count", "positive_rmse_fold_count", "positive_mae_fold_count",
+        "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
+        "median_mae_improvement_pct", "mean_rmse_improvement_pct",
+        "mean_mae_improvement_pct", "worst_fold_rmse_improvement_pct", "validation_status",
+    }
+    if not required.issubset(frame.columns):
+        return False
+    if "candidate_count" not in summary:
+        return False
+    candidate_count = _validated_nonnegative_integer(summary["candidate_count"])
+    if candidate_count is None or len(frame) != candidate_count:
+        return False
+    if candidate_count == 0:
+        return True
+    variables = frame["variable"]
+    statuses = frame["validation_status"]
+    if (
+        variables.isna().any()
+        or variables.astype(str).str.strip().eq("").any()
+        or statuses.isna().any()
+        or statuses.astype(str).str.strip().eq("").any()
+    ):
+        return False
+    allowed_statuses = {
+        "validated_incremental_signal", "weak_incremental_value", "redundant_with_baseline",
+        "unstable_out_of_time", "insufficient_features",
+    }
+    if not set(statuses.astype(str).str.strip()).issubset(allowed_statuses):
+        return False
+    if variables.duplicated().any():
+        return False
+    for row in frame.to_dict("records"):
+        fold_count = _validated_nonnegative_integer(row["fold_count"])
+        insufficient = row["validation_status"] == "insufficient_features"
+        if fold_count is None or insufficient != (fold_count == 0):
+            return False
+        for column in ("positive_rmse_fold_count", "positive_mae_fold_count"):
+            count = _validated_nonnegative_integer(row[column])
+            if count is None or count > fold_count:
+                return False
+        ratio = row["positive_rmse_fold_ratio"]
+        if insufficient and _is_missing_value(ratio):
+            continue
+        value = _finite_number(ratio)
+        if value is None or not 0 <= value <= 1:
+            return False
+    return True
+
+
+def _validated_nonnegative_integer(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite() or number < 0 or number != number.to_integral_value():
+        return None
+    return int(number)
+
+
+def _finite_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False

@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
+from chem_ts_corr.xgb_runner import persist_xgb_execution
 from chem_ts_corr.data import (
     apply_exclude_windows,
     drop_excluded_columns,
@@ -1655,6 +1656,7 @@ def run_causal_review_for_active_branch(
     }
 
 
+@persist_xgb_execution
 def run_xgb_for_active_branch(
     run_dir: Path,
     *,

@@ -45,6 +45,7 @@ from chem_ts_corr.pipeline import (
 )
 from chem_ts_corr.screening import CONTROL_REFERENCE_COLUMNS, order_initial_candidates
 from chem_ts_corr.xgb_validation import validate_xgb_top_n
+from chem_ts_corr.service import read_xgb_execution_state, record_xgb_execution
 from chem_ts_corr.llm_api import LLMCallConfig, call_openai_compatible_chat, generate_llm_report, redact_secret
 from chem_ts_corr.llm_report import build_llm_analysis_package, build_llm_prompt
 from chem_ts_corr.validation_summary import (
@@ -239,7 +240,12 @@ class _Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/result":
             try:
                 params = parse_qs(parsed.query)
-                self._send_json(_task_result_response(_single(params, "task_id")))
+                run_id = _single(params, "run_id")
+                if run_id:
+                    directory = _resolve_run_dir(run_id)
+                    self._send_json(_build_result_payload(run_id, directory, _read_run_config(directory)))
+                else:
+                    self._send_json(_task_result_response(_single(params, "task_id")))
             except Exception as exc:
                 if _is_client_disconnect(exc):
                     return
@@ -942,6 +948,10 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "validationSummary": _records(validation.head(500)),
         "validationFields": _records(_validation_fields_for_payload(output_dir)),
         "evidenceMatrix": _records(evidence_matrix.head(500)),
+        "conditionalGrangerScores": _records(_safe_read_result_csv(output_dir / "conditional_granger_scores.csv").head(500)),
+        "causalReviewEvidence": _records(_safe_read_result_csv(output_dir / "causal_review_evidence.csv").head(500)),
+        "finalReviewSummary": _records(_safe_read_result_csv(output_dir / "final_review_summary.csv").head(500)),
+        "xgbResult": _xgb_response_payload(run_id, output_dir, status=None, error_message=None),
         "evidenceMatrixStatusLabels": evidence_matrix_status_labels(),
         "finalReviewSummaryFieldNotes": dict(FINAL_REVIEW_SUMMARY_FIELD_NOTES),
         "grangerTests": _records(granger.head(200)),
@@ -1150,7 +1160,12 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
         raise RuntimeError(str(task.get("error") or task.get("message") or "分析失败"))
     if task.get("status") != "done":
         return {"task_id": task_id, "status": task.get("status", "running")}
-    return task["result"]
+    previous = task["result"]
+    run_id = previous.get("run_id")
+    if not run_id:
+        return previous
+    directory = _resolve_run_dir(run_id)
+    return {**previous, **_build_result_payload(run_id, directory, _read_run_config(directory))}
 
 
 def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -1538,16 +1553,21 @@ def _xgb_response_payload(
     run_id: str,
     output_dir: Path,
     *,
-    status: str,
+    status: str | None,
     error_message: str | None,
 ) -> dict[str, Any]:
+    if status is not None:
+        record_xgb_execution(output_dir, status, error_message)
+    execution = read_xgb_execution_state(output_dir)
+    status = execution["status"]
+    error_message = execution.get("error_message")
     model_summary = pd.DataFrame()
     fold_context = pd.DataFrame()
     candidate_uplift = pd.DataFrame()
     candidate_fold_metrics = pd.DataFrame()
     validation_summary: dict[str, Any] = {}
     downloads = _download_links(run_id, output_dir)
-    if status == "success":
+    if execution["current_result_available"] or execution["historical_result_available"]:
         model_summary = _safe_read_result_csv(
             output_dir / "xgb_validation" / "xgb_model_summary.csv"
         )
@@ -1567,6 +1587,8 @@ def _xgb_response_payload(
             else {}
         )
     messages = {
+        "not_run": "XGB 时间外预测验证未运行。",
+        "incomplete_outputs": "XGB 时间外预测验证输出不完整，暂无有效结果。",
         "success": "XGB 时间外预测验证完成：已生成候选变量预测增量证据，仅供人工复核参考，不改变前三层结果。",
         "missing_dependency": "XGB 时间外预测验证缺少可选依赖。",
         "invalid_input": "XGB 时间外预测验证输入无效。",
@@ -1580,8 +1602,12 @@ def _xgb_response_payload(
         "xgbCandidateUplift": _records(candidate_uplift),
         "xgbCandidateFoldMetrics": _records(candidate_fold_metrics),
         "xgbValidationSummary": validation_summary,
+        "xgbExecutionState": execution,
+        "historicalResult": execution["historical_result_available"],
         "downloads": downloads,
-        "message": messages.get(status, "XGB 时间外预测验证未运行。"),
+        "message": messages.get(status, "XGB 时间外预测验证未运行或输出不完整。") + (
+            " 以下展示历史成功结果，不代表本次验证成功。" if execution["historical_result_available"] else ""
+        ),
         **_branch_context_payload(output_dir),
     }
 
@@ -2629,10 +2655,14 @@ def _read_run_config(output_dir: Path) -> AnalysisConfig:
 
 
 def _download_links(run_id: str, output_dir: Path) -> list[dict[str, str]]:
+    execution = read_xgb_execution_state(output_dir)
+    xgb_available = execution["current_result_available"] or execution["historical_result_available"]
     return [
-        {"name": file_name, "url": f"/download?run_id={run_id}&file={file_name}"}
+        {"name": file_name, "url": f"/download?run_id={run_id}&file={file_name}",
+         **({"label": "历史成功结果：" + file_name}
+            if file_name.startswith("xgb_validation/") and execution["historical_result_available"] else {})}
         for file_name in DOWNLOAD_FILES
-        if (output_dir / file_name).exists()
+        if (output_dir / file_name).exists() and (not file_name.startswith("xgb_validation/") or xgb_available)
     ]
 
 
@@ -3786,6 +3816,7 @@ INDEX_HTML = r"""<!doctype html>
         <h2>人工复核证据矩阵</h2>
         <div class="help">按“变量 → 初筛结果 → 预测价值证据 → 独立性审查 → 混杂风险 → 控制关系 → 统计限制”组织展示。矩阵只引用已有初筛、二级验证、可信度审查和（如已执行）XGB字段，不产生新的评分或排序；人工复核优先级仅用于展示，不改变初筛顺序。</div>
         <div class="download-buttons" id="evidenceMatrixDownload"></div>
+        <div class="help">第三层矩阵为生成时证据快照；第四层展示最近执行状态和当前结果，重跑第四层不会更新此快照。</div>
         <div id="evidenceMatrixTable" class="empty">未运行 可信度审查，暂无人工复核证据矩阵。</div>
       </div>
 
@@ -3950,6 +3981,7 @@ let lastXgbFoldContextRows = [];
 let lastXgbCandidateUpliftRows = [];
 let lastXgbCandidateFoldMetricRows = [];
 let lastXgbValidationSummary = {};
+let lastXgbMessage = "";
 let llmPromptText = "";
 let llmReportMarkdown = "";
 let lastModalTrigger = null;
@@ -4390,6 +4422,9 @@ function formatCompletedAnalysisStatus(result) {
 
 function renderAnalysisResult(data) {
   currentRunId = data.run_id || "";
+  const resultUrl = new URL(window.location.href);
+  if (currentRunId) resultUrl.searchParams.set("run_id", currentRunId);
+  window.history.replaceState(null, "", resultUrl);
   currentAnalysisContext = data.analysisContext || {};
   if (data.branchSelectionStatus === "awaiting_confirmation") {
     renderPendingBranchResult(data);
@@ -4408,16 +4443,18 @@ function renderAnalysisResult(data) {
   lastValidationSummaryRows = data.validationSummary || [];
   lastValidationFieldsRows = data.validationFields || [];
   lastVerificationReviewPoolRows = data.verificationReviewPool || [];
-  lastConditionalRows = [];
-  lastCausalEvidenceRows = [];
+  lastConditionalRows = data.conditionalGrangerScores || [];
+  lastCausalEvidenceRows = data.causalReviewEvidence || [];
   lastEvidenceMatrixRows = data.evidenceMatrix || [];
   evidenceMatrixStatusLabels = data.evidenceMatrixStatusLabels || evidenceMatrixStatusLabels;
-  lastFinalReviewSummaryRows = [];
-  lastXgbModelSummaryRows = [];
-  lastXgbFoldContextRows = [];
-  lastXgbCandidateUpliftRows = [];
-  lastXgbCandidateFoldMetricRows = [];
-  lastXgbValidationSummary = {};
+  lastFinalReviewSummaryRows = data.finalReviewSummary || [];
+  const xgb = data.xgbResult || {};
+  lastXgbMessage = [xgb.message, xgb.error_message].filter(Boolean).join(" ");
+  lastXgbModelSummaryRows = xgb.xgbModelSummary || [];
+  lastXgbFoldContextRows = xgb.xgbFoldContext || [];
+  lastXgbCandidateUpliftRows = xgb.xgbCandidateUplift || [];
+  lastXgbCandidateFoldMetricRows = xgb.xgbCandidateFoldMetrics || [];
+  lastXgbValidationSummary = xgb.xgbValidationSummary || {};
   closeDetailModal();
   renderOverview(data.overview || {});
   renderAnalysisTimingBreakdown(data.analysis_timings || {});
@@ -4474,9 +4511,12 @@ function renderAnalysisResult(data) {
   setDownstreamGate(false);
   el("generateLlmReport").disabled = !currentRunId;
   updateXgbRunAvailability();
+  renderXgbDownloads(xgb.downloads || []);
+  el("xgbStatus").textContent = lastXgbMessage || "XGB 时间外预测验证未运行。";
 }
 
 function renderPendingBranchResult(data) {
+  lastXgbMessage = "";
   lastRows = [];
   lastRecommendedRows = [];
   lastGrangerRows = [];
@@ -4777,7 +4817,7 @@ async function runCausalReview() {
 function updateXgbRunAvailability() {
   const enabled = el("enableXgbValidation").checked;
   el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length);
-  if (!enabled) el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
+  if (!enabled && !lastXgbMessage) el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
 }
 
 async function runXgbValidation() {
@@ -4821,10 +4861,11 @@ async function runXgbValidation() {
     renderXgbCandidateUpliftTable(lastXgbCandidateUpliftRows);
     clearXgbCandidateFoldDetails();
     renderXgbRunSummary(lastXgbValidationSummary);
-    renderXgbDownloads(data.status === "success" ? (data.downloads || []) : []);
+    renderXgbDownloads(data.downloads || []);
     renderDownloads(data.downloads || []);
     updateBranchSelectionUi(data);
-    const message = data.error_message || data.message || "XGB 时间外预测验证失败。";
+    const message = [data.message, data.error_message].filter(Boolean).join(" ") || "XGB 时间外预测验证失败。";
+    lastXgbMessage = message;
     const success = data.status === "success";
     el("xgbStatus").textContent = appendElapsed(message, startedAt);
     setStatus(appendElapsed(message, startedAt), success ? "success" : "error");
@@ -7971,7 +8012,7 @@ function renderDownloadTarget(targetId, downloads, fileName) {
   const container = el(targetId);
   if (!container) return;
   const item = (downloads || []).find((entry) => entry.name === fileName);
-  container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(fileName)}</a>` : "";
+  container.innerHTML = item ? `<a href="${escapeHtml(item.url)}">下载 ${escapeHtml(item.label || fileName)}</a>` : "";
 }
 
 function renderDownloads(downloads) {
@@ -7980,7 +8021,7 @@ function renderDownloads(downloads) {
   for (const item of downloads) {
     const link = document.createElement("a");
     link.href = item.url;
-    link.textContent = item.name;
+    link.textContent = item.label || item.name;
     container.appendChild(link);
   }
 }
@@ -8567,6 +8608,9 @@ function clearOptionalElement(targetId) {
 }
 
 function reset() {
+  const resetUrl = new URL(window.location.href);
+  resetUrl.searchParams.delete("run_id");
+  window.history.replaceState(null, "", resetUrl);
   clearVariableFilters();
   clearLagProfileCache();
   fileId = "";
@@ -8596,6 +8640,7 @@ function reset() {
   lastXgbCandidateFoldMetricRows = [];
   lastXgbValidationSummary = {};
   lastTrendSeries = [];
+  lastXgbMessage = "";
   lastTrendAxisMode = "shared";
   trendTimeRangeMode = "auto";
   trendSamplingIntervalMs = null;
@@ -8736,6 +8781,20 @@ function reset() {
   el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
+async function restoreRunFromUrl() {
+  const runId = new URLSearchParams(window.location.search).get("run_id");
+  if (!runId) return;
+  try {
+    const response = await fetch(`/api/result?run_id=${encodeURIComponent(runId)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "运行记录读取失败");
+    renderAnalysisResult(data);
+    setStatus("已恢复运行记录。", "success");
+  } catch (error) {
+    setStatus(error.message || String(error), "error");
+  }
+}
+restoreRunFromUrl();
 </script>
 </body>
 </html>

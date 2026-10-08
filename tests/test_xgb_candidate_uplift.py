@@ -459,6 +459,9 @@ def test_all_invalid_candidates_ignore_unused_stale_baseline(
     assert metrics.empty
     assert calls == []
     assert summary.loc[0, "validation_status"] == "insufficient_features"
+    assert summary.loc[0, "positive_rmse_fold_count"] == 0
+    assert summary.loc[0, "positive_mae_fold_count"] == 0
+    assert pd.isna(summary.loc[0, "positive_rmse_fold_ratio"])
 
 
 def test_improvement_formulas_use_baseline_minus_candidate_direction(

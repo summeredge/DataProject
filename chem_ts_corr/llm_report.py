@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import math
 import re
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from chem_ts_corr.xgb_runner import _validate_xgb_model_summary, _validate_xgb_candidate_uplift
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RUNS_DIR = PROJECT_ROOT / "reports" / "web_runs"
@@ -163,6 +162,8 @@ def build_llm_prompt(package: dict[str, Any], report_type: str = "general") -> s
 - `importance`、`feature importance`、`max_importance`、`importance_rank` 等字段（如存在）仅表示模型输入重要性，不代表工艺因果贡献、可操纵性或初筛排名。
 - validation_status 的边界：validated_incremental_signal 表示多个时间折支持正向预测增量但仍不是因果结论；weak_incremental_value 表示存在一定预测增量但强度或跨折一致性不足；redundant_with_baseline 表示候选没有明显超过目标历史和控制变量基线，不等于工艺上无关；unstable_out_of_time 表示时间折方向不一致，应检查工况变化、漂移或数据分布变化但不得断言具体原因；insufficient_features 表示当前滞后或数据条件下特征不足，不能据此否定变量。
 - 当 xgb_out_of_time_validation.available=false 时，必须按其 status 明确说明 XGB 未运行、运行失败、摘要无效或输出不完整；未运行时不得编造结果，不得编造 RMSE、MAE、R² 或候选验证结论。
+- execution_state 表示最近一次执行；历史成功文件不代表本次验证成功。第三层 evidence_matrix 是生成时快照，与第四层当前状态分开解释。
+- 按 fold_context 和 candidate_fold_metrics 的实际 train / validation / test 时间范围、有效样本数、采样间隔、gap 与最大滞后时间尺度解释改善稳定性。三个 expanding folds 不自动证明跨月、跨季节或长期稳定性；时间缺失时不得推测。
 
 ### 跨层证据解释规则
 - 当前三层证据较强且 XGB 为 validated_incremental_signal 时，只能表述为“统计筛查、因果复核和时间外预测增量方向一致，建议优先进行工程复核。”不得据此声称变量导致目标变化、是根本原因、可直接作为 APC 操纵变量或可直接投用控制。
@@ -217,14 +218,22 @@ def _read_required_csv(path: Path) -> pd.DataFrame | None:
 
 
 def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
+    from chem_ts_corr.xgb_runner import read_xgb_execution_state
+
+    execution = read_xgb_execution_state(path)
     empty = {
         "available": False,
         "summary": {},
         "model_comparison": [],
         "candidate_uplift": [],
+        "fold_context": [],
+        "candidate_fold_metrics": [],
+        "execution_state": execution,
         "evidence_scope": "时间外预测验证的候选变量预测增量证据，仅供人工复核参考；不参与 ranking、scoring 或 candidate selection，不是工艺因果结论，也不改变前三层排名",
     }
     xgb_dir = path / "xgb_validation"
+    if (path / "xgb_execution_state.json").exists() and not execution["current_result_available"]:
+        return {"status": execution["status"], **empty}
     summary_path = xgb_dir / "xgb_validation_summary.json"
     if not summary_path.exists():
         return {"status": "not_run", **empty}
@@ -252,6 +261,7 @@ def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
         or candidate_uplift is None
         or not _validate_xgb_model_summary(model_summary)
         or not _validate_xgb_candidate_uplift(candidate_uplift, summary)
+        or not execution["current_result_available"]
     ):
         return {"status": "incomplete_outputs", **empty, "summary": compact_summary}
 
@@ -284,123 +294,29 @@ def _xgb_out_of_time_validation(path: Path, top_n: int) -> dict[str, Any]:
             for row in _rows(candidate_uplift, top_n)
         ],
         "evidence_scope": empty["evidence_scope"],
+        "execution_state": execution,
+        "fold_context": [{key: _clean_value(value) for key, value in row.items()}
+                         for row in _rows(_read_csv(xgb_dir / "xgb_fold_context.csv"), 3)],
+        "candidate_fold_metrics": [{key: _clean_value(value) for key, value in row.items()}
+                                   for row in _rows(
+            _read_csv(xgb_dir / "xgb_candidate_fold_metrics.csv").loc[
+                lambda frame: frame["variable"].isin(candidate_uplift.head(top_n)["variable"])
+                if "variable" in frame else pd.Series(False, index=frame.index)
+            ], max(0, top_n) * 3
+        )],
     }
-
-
-def _validate_xgb_model_summary(frame: pd.DataFrame) -> bool:
-    required = {
-        "model_name", "mean_rmse", "median_rmse", "mean_mae", "median_mae",
-        "mean_r2", "fold_count",
-    }
-    if frame.empty or not required.issubset(frame.columns):
-        return False
-    names = frame["model_name"]
-    if names.isna().any() or names.astype(str).str.strip().eq("").any():
-        return False
-    normalized_names = names.astype(str).str.strip()
-    if normalized_names.duplicated().any() or not {"M0", "M1", "M2"}.issubset(
-        set(normalized_names)
-    ):
-        return False
-    error_columns = ["mean_rmse", "median_rmse", "mean_mae", "median_mae"]
-    for model_name in ("M0", "M1", "M2"):
-        row = frame.loc[normalized_names.eq(model_name)].iloc[0]
-        fold_count = _validated_nonnegative_integer(row["fold_count"])
-        if fold_count is None or fold_count == 0:
-            return False
-        for column in error_columns:
-            value = _finite_number(row[column])
-            if value is None or value < 0:
-                return False
-        mean_r2 = row["mean_r2"]
-        if not _is_missing_value(mean_r2) and _finite_number(mean_r2) is None:
-            return False
-    return True
-
-
-def _validate_xgb_candidate_uplift(
-    frame: pd.DataFrame, summary: dict[str, Any]
-) -> bool:
-    required = {
-        "variable", "fold_count", "positive_rmse_fold_count", "positive_mae_fold_count",
-        "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
-        "median_mae_improvement_pct", "mean_rmse_improvement_pct",
-        "mean_mae_improvement_pct", "worst_fold_rmse_improvement_pct", "validation_status",
-    }
-    if not required.issubset(frame.columns):
-        return False
-    if "candidate_count" not in summary:
-        return False
-    candidate_count = _validated_nonnegative_integer(summary["candidate_count"])
-    if candidate_count is None or len(frame) != candidate_count:
-        return False
-    if candidate_count == 0:
-        return True
-    variables = frame["variable"]
-    statuses = frame["validation_status"]
-    if (
-        variables.isna().any()
-        or variables.astype(str).str.strip().eq("").any()
-        or statuses.isna().any()
-        or statuses.astype(str).str.strip().eq("").any()
-    ):
-        return False
-    allowed_statuses = {
-        "validated_incremental_signal", "weak_incremental_value", "redundant_with_baseline",
-        "unstable_out_of_time", "insufficient_features",
-    }
-    if not set(statuses.astype(str).str.strip()).issubset(allowed_statuses):
-        return False
-    ratios = pd.to_numeric(frame["positive_rmse_fold_ratio"], errors="coerce")
-    present_ratios = frame["positive_rmse_fold_ratio"].notna()
-    if ratios[present_ratios].isna().any() or ((ratios.dropna() < 0) | (ratios.dropna() > 1)).any():
-        return False
-    return True
-
-
-def _validated_nonnegative_integer(value: Any) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = Decimal(str(value).strip())
-    except (InvalidOperation, ValueError):
-        return None
-    if not number.is_finite() or number < 0 or number != number.to_integral_value():
-        return None
-    return int(number)
-
-
-def _finite_number(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _is_missing_value(value: Any) -> bool:
-    if value is None or (isinstance(value, str) and not value.strip()):
-        return True
-    try:
-        return bool(pd.isna(value))
-    except (TypeError, ValueError):
-        return False
 
 
 def _xgb_available_files(xgb_validation: dict[str, Any]) -> list[str]:
-    if xgb_validation["status"] == "invalid_summary" or xgb_validation["status"] == "not_run":
+    if not xgb_validation["available"]:
         return []
-    files = ["xgb_validation/xgb_validation_summary.json"]
-    if xgb_validation["available"]:
-        files.extend(
-            [
-                "xgb_validation/xgb_model_summary.csv",
-                "xgb_validation/xgb_candidate_uplift.csv",
-            ]
-        )
-    return files
+    return [
+        "xgb_validation/xgb_validation_summary.json",
+        "xgb_validation/xgb_model_summary.csv",
+        "xgb_validation/xgb_candidate_uplift.csv",
+        "xgb_validation/xgb_fold_context.csv",
+        "xgb_validation/xgb_candidate_fold_metrics.csv",
+    ]
 
 
 def _read_summary(path: Path) -> dict[str, Any]:

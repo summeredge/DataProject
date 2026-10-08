@@ -222,6 +222,10 @@ XGB_FOLD_CONTEXT_COLUMNS = (
     "max_used_lag_duration_minutes",
 )
 
+XGB_PREDICTION_COLUMNS = (
+    "fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction",
+)
+
 
 @dataclass(frozen=True)
 class CandidateUpliftSummary:
@@ -882,7 +886,7 @@ def run_xgb_time_validation(
     summary = _summarize_xgb_metrics(fold_metrics)
     predictions = pd.concat(prediction_frames, ignore_index=True)
     predictions = predictions.loc[
-        :, ["fold", "timestamp_index", "y_true", "M0_prediction", "M1_prediction", "M2_prediction"]
+        :, list(XGB_PREDICTION_COLUMNS)
     ]
     provenance = _xgb_validation_provenance(
         feature_sets, splits, params, early_stopping_rounds
@@ -1362,7 +1366,7 @@ def _insufficient_uplift_summary(variable: str) -> CandidateUpliftSummary:
         fold_count=0,
         positive_rmse_fold_count=0,
         positive_mae_fold_count=0,
-        positive_rmse_fold_ratio=0.0,
+        positive_rmse_fold_ratio=float("nan"),
         median_rmse_improvement_pct=float("nan"),
         median_mae_improvement_pct=float("nan"),
         mean_rmse_improvement_pct=float("nan"),

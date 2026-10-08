@@ -583,19 +583,27 @@ def test_xgb_endpoint_uses_fold_safe_formal_runner(tmp_path, monkeypatch):
         captured["output_dir"] = output_dir
         captured.update(kwargs)
         (output_dir / "xgb_validation").mkdir(exist_ok=True)
-        pd.DataFrame([{"model_name": "M2"}]).to_csv(
+        pd.DataFrame([{"model_name": name, "fold_count": 3, "mean_rmse": 1, "median_rmse": 1,
+                       "mean_mae": 1, "median_mae": 1, "mean_r2": 0}
+                      for name in ("M0", "M1", "M2")]).to_csv(
             output_dir / "xgb_validation" / "xgb_model_summary.csv",
             index=False,
             encoding="utf-8-sig",
         )
-        pd.DataFrame([{"variable": "x"}]).to_csv(
+        pd.DataFrame([{"variable": "x", "fold_count": 3, "positive_rmse_fold_count": 0,
+                       "positive_mae_fold_count": 0, "positive_rmse_fold_ratio": 0,
+                       "median_rmse_improvement_pct": 0, "median_mae_improvement_pct": 0,
+                       "mean_rmse_improvement_pct": 0, "mean_mae_improvement_pct": 0,
+                       "worst_fold_rmse_improvement_pct": 0, "validation_status": "redundant_with_baseline"}]).to_csv(
             output_dir / "xgb_validation" / "xgb_candidate_uplift.csv",
             index=False,
             encoding="utf-8-sig",
         )
         (output_dir / "xgb_validation" / "xgb_validation_summary.json").write_text(
-            json.dumps({"status": "success"}), encoding="utf-8"
+            json.dumps({"status": "success", "candidate_count": 1}), encoding="utf-8"
         )
+        from xgb_output_helpers import write_fold_outputs
+        write_fold_outputs(output_dir / "xgb_validation")
         return {"status": "success", "error_message": None}
 
     monkeypatch.setattr(web, "run_xgb_for_active_branch", fake_runner)

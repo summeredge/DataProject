@@ -18,6 +18,45 @@ def _frame_with_lagged_signal(n: int = 160) -> pd.DataFrame:
     return pd.DataFrame({"target": y, "x": x, "x1": x, "x2": rng.normal(size=n)}, index=idx)
 
 
+def test_third_layer_snapshot_uses_only_current_valid_xgb(tmp_path):
+    import json
+    from chem_ts_corr.xgb_runner import record_xgb_execution
+
+    frame = _frame_with_lagged_signal()
+    ranked = pd.DataFrame([{"variable": "x", "candidate_grade": "A", "final_score": 0.9, "lag": 1}])
+    candidates = pd.DataFrame([{"variable": "x"}])
+    def review():
+        return run_causal_review_stage(frame=frame, target="target", ranked_features=ranked,
+                                      causal_review_candidates=candidates, maxlag=3, min_rows=80,
+                                      output_dir=tmp_path)["evidence_matrix"]
+    assert review().iloc[0]["xgb_status"] == "not_computed"
+    directory = tmp_path / "xgb_validation"
+    directory.mkdir()
+    pd.DataFrame([{"model_name": name, "fold_count": 3, "mean_rmse": 1, "mean_mae": 1,
+                  "median_rmse": 1, "median_mae": 1, "mean_r2": 0}
+                  for name in ("M0", "M1", "M2")]).to_csv(directory / "xgb_model_summary.csv", index=False)
+    pd.DataFrame([{"variable": "x", "fold_count": 3, "validation_status": "validated_incremental_signal",
+                  "positive_rmse_fold_count": 3, "positive_mae_fold_count": 3, "positive_rmse_fold_ratio": 1,
+                  "median_rmse_improvement_pct": 5, "median_mae_improvement_pct": 5,
+                  "mean_rmse_improvement_pct": 5, "mean_mae_improvement_pct": 5,
+                  "worst_fold_rmse_improvement_pct": 5}]).to_csv(
+        directory / "xgb_candidate_uplift.csv", index=False)
+    (directory / "xgb_validation_summary.json").write_text(json.dumps({"status": "success", "candidate_count": 1}))
+    from xgb_output_helpers import write_fold_outputs
+    write_fold_outputs(directory)
+    record_xgb_execution(tmp_path, "success")
+    snapshot = review()
+    assert snapshot.iloc[0]["xgb_status"] == "validated_incremental_signal"
+    snapshot.to_csv(tmp_path / "evidence_matrix.csv", index=False)
+    before = (tmp_path / "evidence_matrix.csv").read_bytes()
+    record_xgb_execution(tmp_path, "failed", "training failed")
+    assert (tmp_path / "evidence_matrix.csv").read_bytes() == before
+    assert review().iloc[0]["xgb_status"] == "missing"
+    record_xgb_execution(tmp_path, "success")
+    (directory / "xgb_fold_context.csv").unlink()
+    assert review().iloc[0]["xgb_status"] == "missing"
+
+
 def test_causal_review_runner_returns_expected_tables():
     frame = _frame_with_lagged_signal()
     candidates = pd.DataFrame([{"variable": "x", "review_priority": 1, "review_tier": "tier_1"}])

@@ -16,7 +16,11 @@ from chem_ts_corr.preprocess import (
     standardize_frame,
     transform_frame,
 )
-from chem_ts_corr.xgb_runner import XGBRunResult, run_xgb_validation
+from chem_ts_corr.xgb_runner import (
+    XGBRunResult, run_xgb_validation,
+    read_xgb_execution_state as read_xgb_execution_state,
+    record_xgb_execution as record_xgb_execution,
+)
 
 
 INNOVATION_LAG_RADIUS = 2

@@ -476,6 +476,185 @@ def test_xgb_writes_exactly_seven_outputs(tmp_path: Path, monkeypatch):
     assert set(path.name for path in output_dir.iterdir()) == set(XGB_OUTPUT_FILES)
 
 
+def test_success_failure_reload_and_recovery_preserve_snapshots(tmp_path, monkeypatch):
+    from chem_ts_corr.causal_review_runner import _load_optional_evidence_tables
+    from chem_ts_corr.llm_report import build_llm_analysis_package
+    from chem_ts_corr import web
+
+    config = _make_raw_run(tmp_path)
+    _write_input_csv(config)
+    _install_fake_dependency(monkeypatch)
+    before = _formal_root_bytes(tmp_path)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "success"
+    outputs = {name: (tmp_path / "xgb_validation" / name).read_bytes() for name in XGB_OUTPUT_FILES}
+    evidence = lambda: _load_optional_evidence_tables(
+        tmp_path, enhanced_validation_summary=None, granger_tests=None, model_variable_importance=None
+    )["xgb_candidate_uplift"]
+    assert not evidence().empty
+    assert build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]["available"]
+
+    monkeypatch.setattr(xgb_runner, "XGBRegressor", None)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "missing_dependency"
+    assert _formal_root_bytes(tmp_path) == before
+    assert outputs == {name: (tmp_path / "xgb_validation" / name).read_bytes() for name in XGB_OUTPUT_FILES}
+    state = xgb_runner.read_xgb_execution_state(tmp_path)
+    assert state["historical_result_available"] and not state["current_result_available"]
+    assert evidence().empty
+    package = build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]
+    assert package["status"] == "missing_dependency" and package["candidate_uplift"] == []
+    payload = web._xgb_response_payload("run", tmp_path, status=None, error_message=None)
+    assert payload["historicalResult"] and payload["xgbFoldContext"]
+    assert "历史成功结果" in payload["message"]
+
+    _install_fake_dependency(monkeypatch)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "success"
+    assert xgb_runner.read_xgb_execution_state(tmp_path)["current_result_available"]
+    assert not evidence().empty
+    assert _formal_root_bytes(tmp_path) == before
+
+
+def test_formal_entry_validation_failure_is_persisted(tmp_path):
+    config = _make_raw_run(tmp_path)
+    (tmp_path / "final_review_summary.csv").unlink()
+    with pytest.raises(ValueError):
+        run_xgb_for_active_branch(tmp_path, base_config=config)
+    assert xgb_runner.read_xgb_execution_state(tmp_path)["status"] == "invalid_input"
+
+
+@pytest.mark.parametrize("file_name,column", [
+    ("xgb_fold_context.csv", "train_start"),
+    ("xgb_fold_context.csv", "test_rows"),
+    ("xgb_fold_context.csv", "gap_duration_minutes"),
+    ("xgb_candidate_fold_metrics.csv", "validation_end"),
+    ("xgb_candidate_fold_metrics.csv", "train_rows"),
+    ("xgb_candidate_fold_metrics.csv", "baseline_mae"),
+    ("xgb_fold_metrics.csv", "validation_rows"),
+    ("xgb_predictions.csv", "M2_prediction"),
+    ("xgb_predictions.csv", "timestamp_index"),
+])
+def test_incomplete_fold_schema_blocks_all_evidence_consumers(tmp_path, monkeypatch, file_name, column):
+    from chem_ts_corr.causal_review_runner import _load_optional_evidence_tables
+    from chem_ts_corr.llm_report import build_llm_analysis_package
+    from chem_ts_corr import web
+
+    config = _make_raw_run(tmp_path)
+    _write_input_csv(config)
+    _install_fake_dependency(monkeypatch)
+    before = _formal_root_bytes(tmp_path)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "success"
+    assert xgb_runner.read_xgb_execution_state(tmp_path)["current_result_available"]
+    path = tmp_path / "xgb_validation" / file_name
+    pd.read_csv(path).drop(columns=[column]).to_csv(path, index=False)
+    state = xgb_runner.read_xgb_execution_state(tmp_path)
+    assert state["status"] == "incomplete_outputs"
+    assert not state["current_result_available"] and not state["historical_result_available"]
+    payload = web._xgb_response_payload("run", tmp_path, status=None, error_message=None)
+    assert payload["status"] == "incomplete_outputs" and payload["xgbModelSummary"] == []
+    report = build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]
+    assert report["status"] == "incomplete_outputs" and not report["available"]
+    tables = _load_optional_evidence_tables(tmp_path, enhanced_validation_summary=None,
+                                          granger_tests=None, model_variable_importance=None)
+    assert tables["xgb_candidate_uplift"].empty
+    assert _formal_root_bytes(tmp_path) == before
+
+
+@pytest.mark.parametrize("corruption", [
+    "context_duplicate_fold", "metric_duplicate", "candidate_missing_fold", "candidate_duplicate",
+    "candidate_unknown", "candidate_time_mismatch", "candidate_samples_mismatch",
+    "candidate_summary_count", "candidate_summary_improvement", "candidate_summary_status", "missing_ratio",
+    "candidate_metric_corrupt",
+    "prediction_missing_row", "prediction_unknown_fold", "summary_fold_count", "model_fold_count",
+    "prediction_damaged_csv",
+])
+def test_inconsistent_fold_bundle_is_invalid(tmp_path, monkeypatch, corruption):
+    config = _make_raw_run(tmp_path)
+    _write_input_csv(config)
+    _install_fake_dependency(monkeypatch)
+    before = _formal_root_bytes(tmp_path)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "success"
+    directory = tmp_path / "xgb_validation"
+    if corruption == "summary_fold_count":
+        path = directory / "xgb_validation_summary.json"
+        summary = json.loads(path.read_text(encoding="utf-8"))
+        summary["fold_count"] = 2
+        path.write_text(json.dumps(summary), encoding="utf-8")
+    elif corruption == "prediction_damaged_csv":
+        path = directory / "xgb_predictions.csv"
+        path.write_bytes(path.read_bytes() + b'\n0,"unterminated')
+    else:
+        name = ("xgb_fold_context.csv" if corruption.startswith("context") else
+                "xgb_fold_metrics.csv" if corruption.startswith("metric") else
+                "xgb_model_summary.csv" if corruption == "model_fold_count" else
+                "xgb_candidate_uplift.csv" if corruption in {"candidate_summary_count", "candidate_summary_improvement", "candidate_summary_status", "missing_ratio"} else
+                "xgb_predictions.csv" if corruption.startswith("prediction") else "xgb_candidate_fold_metrics.csv")
+        path = directory / name
+        frame = pd.read_csv(path)
+        if corruption in {"context_duplicate_fold", "metric_duplicate", "candidate_duplicate"}:
+            frame = pd.concat([frame, frame.head(1)], ignore_index=True)
+        elif corruption in {"candidate_missing_fold", "prediction_missing_row"}:
+            frame = frame.iloc[:-1]
+        elif corruption == "candidate_unknown":
+            frame.loc[0, "variable"] = "unknown"
+        elif corruption == "candidate_time_mismatch":
+            frame.loc[0, "test_start"] = "1900-01-01"
+        elif corruption == "candidate_samples_mismatch":
+            frame.loc[0, "test_rows"] += 1
+        elif corruption in {"candidate_summary_count", "model_fold_count"}:
+            frame.loc[0, "fold_count"] = 2
+        elif corruption == "candidate_summary_improvement":
+            frame.loc[0, "median_rmse_improvement_pct"] = 50
+        elif corruption == "candidate_summary_status":
+            frame.loc[0, "validation_status"] = "validated_incremental_signal"
+        elif corruption == "missing_ratio":
+            frame.loc[0, "positive_rmse_fold_ratio"] = float("nan")
+        elif corruption == "candidate_metric_corrupt":
+            frame["candidate_rmse"] = frame["candidate_rmse"].astype(object)
+            frame.loc[0, "candidate_rmse"] = "bad"
+        else:
+            frame.loc[0, "fold"] = 99
+        frame.to_csv(path, index=False)
+    state = xgb_runner.read_xgb_execution_state(tmp_path)
+    assert state["status"] == "incomplete_outputs" and not state["current_result_available"]
+    if corruption == "candidate_summary_status":
+        from chem_ts_corr import web
+        from chem_ts_corr.llm_report import build_llm_analysis_package
+        from chem_ts_corr.causal_review_runner import _load_optional_evidence_tables
+
+        payload = web._xgb_response_payload("run", tmp_path, status=None, error_message=None)
+        assert payload["status"] == "incomplete_outputs" and payload["xgbCandidateUplift"] == []
+        report = build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]
+        assert report["status"] == "incomplete_outputs" and not report["available"]
+        tables = _load_optional_evidence_tables(tmp_path, enhanced_validation_summary=None,
+                                              granger_tests=None, model_variable_importance=None)
+        assert tables["xgb_candidate_uplift"].empty
+    assert _formal_root_bytes(tmp_path) == before
+
+
+def test_all_insufficient_candidates_allow_header_only_folds(tmp_path, monkeypatch):
+    from chem_ts_corr.llm_report import build_llm_analysis_package
+    from chem_ts_corr.xgb_validation import CANDIDATE_FOLD_METRICS_COLUMNS
+
+    config = _make_raw_run(tmp_path)
+    _write_input_csv(config)
+    for name in ("ranked_features.csv", "final_review_summary.csv"):
+        path = tmp_path / name
+        frame = pd.read_csv(path)
+        frame["variable"] = "not_in_data"
+        frame.to_csv(path, index=False)
+    before = _formal_root_bytes(tmp_path)
+    _install_fake_dependency(monkeypatch)
+    assert run_xgb_for_active_branch(tmp_path, base_config=config)["status"] == "success"
+    directory = tmp_path / "xgb_validation"
+    details = pd.read_csv(directory / "xgb_candidate_fold_metrics.csv")
+    assert details.empty and list(details.columns) == list(CANDIDATE_FOLD_METRICS_COLUMNS)
+    uplift = pd.read_csv(directory / "xgb_candidate_uplift.csv")
+    assert uplift.iloc[0]["validation_status"] == "insufficient_features"
+    assert uplift.iloc[0]["fold_count"] == 0 and pd.isna(uplift.iloc[0]["positive_rmse_fold_ratio"])
+    assert xgb_runner.read_xgb_execution_state(tmp_path)["current_result_available"]
+    assert build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]["available"]
+    assert _formal_root_bytes(tmp_path) == before
+
+
 def test_xgb_creates_lock_as_first_stage(tmp_path: Path, monkeypatch):
     config = _make_raw_run(tmp_path)
     _install_fake_dependency(monkeypatch)

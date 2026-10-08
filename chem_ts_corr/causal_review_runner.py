@@ -256,6 +256,13 @@ def _load_optional_evidence_tables(
         if tables[key] is None:
             path = directory / file_name
             tables[key] = _safe_read_csv(path) if path.exists() else None
+    from chem_ts_corr.xgb_runner import read_xgb_execution_state
+
+    state = read_xgb_execution_state(directory)
+    if not state["current_result_available"]:
+        tables["xgb_candidate_uplift"] = (
+            None if state["status"] == "not_run" else pd.DataFrame()
+        )
     # The overall JSON is intentionally not interpreted here: a stage-level
     # status is not a per-variable generalization result.  A caller may still
     # pass an explicit per-variable sidecar through ``xgb_summary``.

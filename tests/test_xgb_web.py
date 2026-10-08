@@ -58,6 +58,50 @@ def test_xgb_config_defaults_are_disabled_and_isolated(tmp_path: Path):
     assert first.xgb_whitelist is not second.xgb_whitelist
 
 
+def test_reloaded_payload_restores_third_layer_and_xgb_gate(tmp_path):
+    run_dir, config, final, _ = _write_run(tmp_path)
+    (run_dir / "summary.md").write_text("test", encoding="utf-8")
+    for name in ("conditional_granger_scores.csv", "causal_review_evidence.csv"):
+        pd.DataFrame([{"variable": "x", "status": "ok"}]).to_csv(run_dir / name, index=False)
+    matrix = pd.DataFrame([{column: None for column in web.EVIDENCE_MATRIX_COLUMNS}])
+    matrix.loc[0, "variable"] = "x"
+    matrix.loc[0, "xgb_status"] = "not_computed"
+    matrix.to_csv(run_dir / "evidence_matrix.csv", index=False)
+    payload = web._build_result_payload(run_dir.name, run_dir, config)
+    assert payload["finalReviewSummary"] == web._records(final)
+    assert payload["conditionalGrangerScores"][0]["variable"] == "x"
+    assert payload["causalReviewEvidence"][0]["variable"] == "x"
+    assert payload["evidenceMatrix"][0]["xgb_status"] == "not_computed"
+    assert payload["xgbResult"]["status"] == "not_run"
+    assert payload["xgbResult"]["message"] == "XGB 时间外预测验证未运行。"
+    body = _javascript_function("renderAnalysisResult")
+    assert "lastFinalReviewSummaryRows = data.finalReviewSummary || [];" in body
+    assert "lastXgbFoldContextRows = xgb.xgbFoldContext || [];" in body
+    assert "renderXgbDownloads(xgb.downloads || []);" in body
+
+
+def test_web_input_failure_survives_reload(tmp_path, monkeypatch):
+    run_dir, _, _, _ = _write_run(tmp_path)
+    monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
+    _handler_form(monkeypatch, {"run_id": run_dir.name, "enable_xgb_validation": "true", "top_n": "bad"})
+    assert web._run_xgb_validation_response(object())["status"] == "invalid_input"
+    payload = web._xgb_response_payload(run_dir.name, run_dir, status=None, error_message=None)
+    assert payload["status"] == "invalid_input"
+    assert payload["xgbModelSummary"] == []
+
+
+def test_completed_task_reloads_disk_instead_of_cached_stage_results(tmp_path, monkeypatch):
+    run_dir, config, final, _ = _write_run(tmp_path)
+    (run_dir / "summary.md").write_text("test", encoding="utf-8")
+    monkeypatch.setattr(web, "RUNS_DIR", tmp_path)
+    monkeypatch.setattr(web, "TASKS", {"task": {"status": "done", "updated_at": __import__("time").time(),
+                                             "result": {"run_id": run_dir.name, "finalReviewSummary": []}}})
+    assert web._task_result_response("task")["finalReviewSummary"] == web._records(final)
+    source = inspect.getsource(web._Handler.do_GET)
+    assert 'run_id = _single(params, "run_id")' in source
+    assert "restoreRunFromUrl();" in web.INDEX_HTML
+
+
 def test_disabled_xgb_request_is_skipped_without_calling_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -103,53 +147,22 @@ def test_xgb_web_forwards_inputs_through_formal_runner_and_returns_outputs(
         output_dir = run_dir / "xgb_validation"
         output_dir.mkdir()
         pd.DataFrame(
-            [{"model_name": "M2", "mean_rmse": 1.0, "mean_mae": 0.8, "mean_r2": 0.4}]
+            [{"model_name": name, "mean_rmse": 1.0, "median_rmse": 1.0,
+              "mean_mae": 0.8, "median_mae": 0.8, "mean_r2": 0.4, "fold_count": 3}
+             for name in ("M2", "M0", "M1")]
         ).to_csv(output_dir / "xgb_model_summary.csv", index=False)
         pd.DataFrame(
-            [{
-                "fold": 0,
-                "train_start": "2025-01-01T00:00:00",
-                "train_end": "2025-01-01T00:09:00",
-                "validation_start": "2025-01-01T00:11:00",
-                "validation_end": "2025-01-01T00:14:00",
-                "test_start": "2025-01-01T00:16:00",
-                "test_end": "2025-01-01T00:19:00",
-                "train_rows": 10,
-                "validation_rows": 4,
-                "test_rows": 4,
-                "train_duration_minutes": 9.0,
-                "validation_duration_minutes": 3.0,
-                "test_duration_minutes": 3.0,
-                "sampling_interval_minutes": 1.0,
-                "gap_rows": 1,
-                "gap_duration_minutes": 1.0,
-                "max_used_lag": 2,
-                "max_used_lag_duration_minutes": 2.0,
-            }]
-        ).to_csv(output_dir / "xgb_fold_context.csv", index=False)
-        pd.DataFrame(
-            [{"variable": "x", "median_rmse_improvement_pct": 5.0, "validation_status": "validated_incremental_signal"}]
+            [{"variable": "x", "fold_count": 3, "median_rmse_improvement_pct": 5.0,
+              "positive_rmse_fold_count": 3, "positive_mae_fold_count": 3, "positive_rmse_fold_ratio": 1.0,
+              "median_mae_improvement_pct": 5.0, "mean_rmse_improvement_pct": 5.0,
+              "mean_mae_improvement_pct": 5.0, "worst_fold_rmse_improvement_pct": 5.0,
+              "validation_status": "validated_incremental_signal"}]
         ).to_csv(output_dir / "xgb_candidate_uplift.csv", index=False)
-        pd.DataFrame(
-            [{
-                "variable": "x", "fold": 0,
-                "train_start": "2025-01-01T00:00:00",
-                "train_end": "2025-01-01T00:09:00",
-                "validation_start": "2025-01-01T00:11:00",
-                "validation_end": "2025-01-01T00:14:00",
-                "test_start": "2025-01-01T00:16:00",
-                "test_end": "2025-01-01T00:19:00",
-                "train_rows": 10, "validation_rows": 4, "test_rows": 4,
-                "baseline_rmse": 1.0, "candidate_rmse": 0.9,
-                "rmse_improvement_pct": 10.0,
-                "baseline_mae": 0.8, "candidate_mae": 0.7,
-                "mae_improvement_pct": 12.5, "candidate_r2": 0.5,
-                "best_iteration": 4,
-            }]
-        ).to_csv(output_dir / "xgb_candidate_fold_metrics.csv", index=False)
         (output_dir / "xgb_validation_summary.json").write_text(
             json.dumps({"status": "success", "candidate_count": 1}), encoding="utf-8"
         )
+        from xgb_output_helpers import write_fold_outputs
+        write_fold_outputs(output_dir)
         return {
             "status": "success",
             "error_message": None,
@@ -486,7 +499,8 @@ def test_xgb_web_surface_and_architecture_guards():
     )[0]
     for forbidden in ["因果证明", "根因确认", "最终驱动变量", "最终验证", "最终证明", "最佳变量", "因果验证", "驱动变量确认"]:
         assert forbidden not in xgb_section
-    assert 'renderXgbDownloads(data.status === "success" ?' in web.INDEX_HTML
+    assert 'renderXgbDownloads(data.downloads || []);' in web.INDEX_HTML
+    assert '历史成功结果：' in inspect.getsource(web._download_links)
 
 
 def test_xgb_product_copy_avoids_misleading_validation_claims():

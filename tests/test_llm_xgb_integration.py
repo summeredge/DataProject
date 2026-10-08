@@ -26,6 +26,91 @@ def _set_candidate_count(xgb_dir: Path, value: object, *, remove: bool = False) 
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
 
 
+def test_report_fold_context_is_bounded_and_preserves_missing_and_zero(tmp_path):
+    xgb_dir = _write_xgb_outputs(tmp_path)
+    uplift = pd.read_csv(xgb_dir / "xgb_candidate_uplift.csv")
+    uplift.loc[0, ["positive_rmse_fold_count", "positive_mae_fold_count", "positive_rmse_fold_ratio",
+                   "median_rmse_improvement_pct", "mean_rmse_improvement_pct", "worst_fold_rmse_improvement_pct"]] = 0
+    uplift.loc[0, ["median_mae_improvement_pct", "mean_mae_improvement_pct"]] = float("nan")
+    uplift.loc[0, "validation_status"] = "redundant_with_baseline"
+    uplift.to_csv(xgb_dir / "xgb_candidate_uplift.csv", index=False)
+    context = pd.read_csv(xgb_dir / "xgb_fold_context.csv")
+    context["validation_start"] = None
+    context.to_csv(xgb_dir / "xgb_fold_context.csv", index=False)
+    details = pd.read_csv(xgb_dir / "xgb_candidate_fold_metrics.csv")
+    details["validation_start"] = None
+    details.loc[details["variable"].eq("FEED.PV"), "rmse_improvement_pct"] = 0
+    details.loc[details["variable"].eq("FEED.PV"), "mae_improvement_pct"] = float("nan")
+    details.to_csv(xgb_dir / "xgb_candidate_fold_metrics.csv", index=False)
+    xgb = build_llm_analysis_package(tmp_path, top_n=1)["xgb_out_of_time_validation"]
+    assert len(xgb["fold_context"]) == len(xgb["candidate_fold_metrics"]) == 3
+    assert {row["variable"] for row in xgb["candidate_fold_metrics"]} == {"FEED.PV"}
+    assert xgb["fold_context"][0]["gap_duration_minutes"] == 12
+    assert xgb["candidate_fold_metrics"][0]["rmse_improvement_pct"] == 0.0
+    assert xgb["candidate_fold_metrics"][0]["mae_improvement_pct"] is None
+    assert xgb["fold_context"][0]["validation_start"] is None
+    json.dumps(xgb, allow_nan=False)
+
+
+def test_insufficient_features_missing_ratio_matches_csv_api_and_report(tmp_path):
+    from chem_ts_corr.xgb_validation import _insufficient_uplift_summary
+    from chem_ts_corr.web import _records
+    from dataclasses import asdict
+
+    directory = _write_xgb_outputs(tmp_path)
+    frame = pd.read_csv(directory / "xgb_candidate_uplift.csv")
+    frame.loc[2] = asdict(_insufficient_uplift_summary("TEMP.PV"))
+    frame.to_csv(directory / "xgb_candidate_uplift.csv", index=False)
+    details_path = directory / "xgb_candidate_fold_metrics.csv"
+    details = pd.read_csv(details_path)
+    details[details["variable"].ne("TEMP.PV")].to_csv(details_path, index=False)
+    restored = pd.read_csv(directory / "xgb_candidate_uplift.csv")
+    assert pd.isna(restored.iloc[2]["positive_rmse_fold_ratio"])
+    api = _records(restored)[2]
+    assert api["positive_rmse_fold_count"] == api["positive_mae_fold_count"] == 0
+    assert api["positive_rmse_fold_ratio"] is None
+    report = build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]
+    assert report["available"]
+    row = report["candidate_uplift"][2]
+    assert row["fold_count"] == 0 and row["positive_rmse_fold_count"] == 0
+    assert row.get("positive_rmse_fold_ratio") is None
+    assert row.get("median_rmse_improvement_pct") is None
+
+
+def test_missing_formal_file_and_failed_state_cannot_be_reported_as_current(tmp_path):
+    from chem_ts_corr.xgb_runner import XGB_OUTPUT_FILES, record_xgb_execution, read_xgb_execution_state
+
+    directory = _write_xgb_outputs(tmp_path)
+    record_xgb_execution(tmp_path, "success")
+    for name in XGB_OUTPUT_FILES:
+        path = directory / name
+        contents = path.read_bytes()
+        path.unlink()
+        assert not read_xgb_execution_state(tmp_path)["current_result_available"]
+        assert not build_llm_analysis_package(tmp_path)["xgb_out_of_time_validation"]["available"]
+        path.write_bytes(contents)
+    record_xgb_execution(tmp_path, "failed", "training failed")
+    package = build_llm_analysis_package(tmp_path)
+    report = package["xgb_out_of_time_validation"]
+    assert report["status"] == "failed" and not report["available"]
+    assert package["overview"]["xgb_available_files"] == []
+    assert report["execution_state"]["historical_result_available"]
+    assert report["candidate_uplift"] == report["model_comparison"] == []
+
+
+def test_numeric_variable_names_keep_their_identity_in_fold_validation(tmp_path):
+    from chem_ts_corr.xgb_runner import read_xgb_execution_state
+
+    directory = _write_xgb_outputs(tmp_path)
+    mapping = {"FEED.PV": "001", "FLOW.PV": "002", "TEMP.PV": "003"}
+    for name in ("xgb_candidate_uplift.csv", "xgb_candidate_fold_metrics.csv"):
+        path = directory / name
+        frame = pd.read_csv(path)
+        frame["variable"] = frame["variable"].map(mapping)
+        frame.to_csv(path, index=False)
+    assert read_xgb_execution_state(tmp_path)["current_result_available"]
+
+
 def _write_xgb_outputs(run_dir: Path, *, status: str = "success") -> Path:
     xgb_dir = run_dir / "xgb_validation"
     xgb_dir.mkdir()
@@ -64,10 +149,16 @@ def _write_xgb_outputs(run_dir: Path, *, status: str = "success") -> Path:
         xgb_dir / "xgb_candidate_uplift.csv",
         [
             {"variable": "FEED.PV", "fold_count": 3, "positive_rmse_fold_count": 3, "positive_mae_fold_count": 2, "positive_rmse_fold_ratio": 1.0, "median_rmse_improvement_pct": 12.5, "median_mae_improvement_pct": 8.0, "mean_rmse_improvement_pct": 10.0, "mean_mae_improvement_pct": 7.0, "worst_fold_rmse_improvement_pct": 4.0, "validation_status": "validated_incremental_signal"},
-            {"variable": "FLOW.PV", "fold_count": 3, "positive_rmse_fold_count": 2, "positive_mae_fold_count": 2, "positive_rmse_fold_ratio": 0.67, "median_rmse_improvement_pct": 3.0, "median_mae_improvement_pct": 1.0, "mean_rmse_improvement_pct": 2.0, "mean_mae_improvement_pct": 1.0, "worst_fold_rmse_improvement_pct": -1.0, "validation_status": "unstable_out_of_time"},
+            {"variable": "FLOW.PV", "fold_count": 3, "positive_rmse_fold_count": 2, "positive_mae_fold_count": 2, "positive_rmse_fold_ratio": 2 / 3, "median_rmse_improvement_pct": 3.0, "median_mae_improvement_pct": 1.0, "mean_rmse_improvement_pct": 2.0, "mean_mae_improvement_pct": 1.0, "worst_fold_rmse_improvement_pct": -1.0, "validation_status": "unstable_out_of_time"},
             {"variable": "TEMP.PV", "fold_count": 3, "positive_rmse_fold_count": 0, "positive_mae_fold_count": 0, "positive_rmse_fold_ratio": 0.0, "median_rmse_improvement_pct": -2.0, "median_mae_improvement_pct": -1.0, "mean_rmse_improvement_pct": -2.0, "mean_mae_improvement_pct": -1.0, "worst_fold_rmse_improvement_pct": -3.0, "validation_status": "redundant_with_baseline"},
         ],
     )
+    from xgb_output_helpers import write_fold_outputs
+    write_fold_outputs(xgb_dir, {
+        "FEED.PV": [(4, -1), (12.5, 8), (13.5, 14)],
+        "FLOW.PV": [(-1, -1), (3, 1), (4, 3)],
+        "TEMP.PV": [(-3, -2), (-2, -1), (-1, 0)],
+    })
     return xgb_dir
 
 
@@ -95,6 +186,8 @@ def test_xgb_success_is_compactly_included_in_package_and_prompt(tmp_path: Path)
         "xgb_validation/xgb_validation_summary.json",
         "xgb_validation/xgb_model_summary.csv",
         "xgb_validation/xgb_candidate_uplift.csv",
+        "xgb_validation/xgb_fold_context.csv",
+        "xgb_validation/xgb_candidate_fold_metrics.csv",
     ]
     json.dumps(package, ensure_ascii=False)
 
@@ -118,12 +211,14 @@ def test_xgb_success_is_compactly_included_in_package_and_prompt(tmp_path: Path)
         assert marker in prompt
 
 
-def test_xgb_package_excludes_fold_and_prediction_details(tmp_path: Path):
+def test_xgb_package_excludes_raw_model_fold_and_prediction_details(tmp_path: Path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     xgb_dir = _write_xgb_outputs(run_dir)
-    _write_csv(xgb_dir / "xgb_predictions.csv", [{"secret_prediction": "must-not-enter"}])
-    _write_csv(xgb_dir / "xgb_fold_metrics.csv", [{"secret_fold": "must-not-enter"}])
+    for name, column in (("xgb_predictions.csv", "secret_prediction"), ("xgb_fold_metrics.csv", "secret_fold")):
+        frame = pd.read_csv(xgb_dir / name)
+        frame[column] = "must-not-enter"
+        frame.to_csv(xgb_dir / name, index=False)
 
     package = build_llm_analysis_package(run_dir, top_n=2)
 
@@ -141,6 +236,10 @@ def test_xgb_not_run_invalid_and_incomplete_outputs_fail_closed(tmp_path: Path):
         "summary": {},
         "model_comparison": [],
         "candidate_uplift": [],
+        "fold_context": [],
+        "candidate_fold_metrics": [],
+        "execution_state": {"status": "not_run", "error_message": None,
+                            "current_result_available": False, "historical_result_available": False},
         "evidence_scope": "时间外预测验证的候选变量预测增量证据，仅供人工复核参考；不参与 ranking、scoring 或 candidate selection，不是工艺因果结论，也不改变前三层排名",
     }
 
@@ -276,6 +375,8 @@ def test_empty_candidate_uplift_is_valid_when_summary_has_no_candidates(tmp_path
     candidate_path = xgb_dir / "xgb_candidate_uplift.csv"
     pd.read_csv(candidate_path).head(0).to_csv(candidate_path, index=False, encoding="utf-8-sig")
 
+    details_path = xgb_dir / "xgb_candidate_fold_metrics.csv"
+    pd.read_csv(details_path).iloc[:0].to_csv(details_path, index=False)
     xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
 
     assert xgb["status"] == "success"
@@ -331,6 +432,7 @@ def test_insufficient_features_allows_missing_improvement_values(tmp_path: Path)
     candidates = pd.read_csv(candidate_path).head(1)
     candidates.loc[0, "validation_status"] = "insufficient_features"
     candidates.loc[0, "fold_count"] = 0
+    candidates.loc[0, ["positive_rmse_fold_count", "positive_mae_fold_count"]] = 0
     for column in [
         "positive_rmse_fold_ratio", "median_rmse_improvement_pct",
         "median_mae_improvement_pct", "mean_rmse_improvement_pct",
@@ -339,6 +441,8 @@ def test_insufficient_features_allows_missing_improvement_values(tmp_path: Path)
         candidates.loc[0, column] = None
     candidates.to_csv(candidate_path, index=False, encoding="utf-8-sig")
 
+    details_path = xgb_dir / "xgb_candidate_fold_metrics.csv"
+    pd.read_csv(details_path).iloc[:0].to_csv(details_path, index=False)
     xgb = build_llm_analysis_package(run_dir)["xgb_out_of_time_validation"]
 
     assert xgb["status"] == "success"

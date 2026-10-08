@@ -1,5 +1,23 @@
 # Contracts
 
+## 只读历史记录（PR-1）
+
+`GET /api/history` 每次扫描 `reports/uploads/` 与 `reports/web_runs/`，返回
+`storage`、`uploads` 和 `analyses`。`storage` 的 `upload_count` 是支持格式的上传文件数，
+`analysis_count` 是实际运行目录数；`upload_size`、`analysis_size`、`total_size` 单位为字节，
+递归包含目录内的元数据及其他普通文件，不跟随符号链接。
+
+新上传使用 `<file_id>.json` 保存 `file_id`、`original_filename`、`uploaded_at`、`file_size`；
+上传 API 响应和 UUID 数据路径不变。展示的 `file_size` 读取实际文件大小。
+新 Web 运行的 `run_config.json` 增加 UTC ISO 时间 `created_at`，配置读取器忽略该展示字段。
+
+上传记录含 `file_id`、`original_filename`、`uploaded_at`、`time_source`、`file_size`、
+`analysis_count`、`run_ids`；分析记录含 `run_id`、`file_id`、`target`、
+`original_filename`、`upload_exists`、`created_at`、`time_source`、`result_size`。
+两个列表按各自时间倒序。`time_source` 为 `metadata` 或 `filesystem`，后者表示文件系统
+修改时间近似值；无法恢复的名称、目标或关联保持 `null`。缺失或损坏配置的目录仍展示，
+不推断分析成功或已执行后续阶段。查询不写入磁盘、不触发分析、不删除文件。
+
 ## 契约等级
 
 ### 稳定契约

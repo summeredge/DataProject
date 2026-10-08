@@ -1826,6 +1826,7 @@ def _load_run_config(run_dir: Path) -> AnalysisConfig:
         Path(data["roles_path"]) if data.get("roles_path") else None
     )
     data.pop("file_id", None)
+    data.pop("created_at", None)
     return AnalysisConfig(**data)
 
 

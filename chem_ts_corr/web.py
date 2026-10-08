@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 import json
 import math
 from numbers import Integral
@@ -19,6 +20,7 @@ from email.policy import default as email_default_policy
 from types import SimpleNamespace
 
 import pandas as pd
+from chem_ts_corr.history import query_history
 
 from chem_ts_corr.config import AnalysisConfig as _AnalysisConfig
 from chem_ts_corr.data import (
@@ -189,6 +191,12 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
             self._send_text(INDEX_HTML, "text/html; charset=utf-8")
+            return
+        if parsed.path == "/api/history":
+            try:
+                self._send_json(query_history(UPLOADS_DIR, RUNS_DIR))
+            except OSError as exc:
+                self._send_json({"error": str(exc)}, status=500)
             return
         if parsed.path == "/api/columns":
             try:
@@ -396,6 +404,10 @@ def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     if len(raw) > max_bytes:
         raise ValueError("上传文件过大")
     upload_path.write_bytes(raw)
+    upload_path.with_suffix(".json").write_text(json.dumps({
+        "file_id": file_id, "original_filename": filename,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(), "file_size": len(raw),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {"file_id": file_id, "filename": filename}
 
@@ -2642,6 +2654,7 @@ def _write_run_config(output_dir: Path, config: AnalysisConfig, file_id: str) ->
     data["output_dir"] = str(config.output_dir)
     data["roles_path"] = str(config.roles_path) if config.roles_path else None
     data["file_id"] = file_id
+    data["created_at"] = datetime.now(timezone.utc).isoformat()
     (output_dir / "run_config.json").write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -2651,6 +2664,7 @@ def _read_run_config(output_dir: Path) -> AnalysisConfig:
     data["output_dir"] = output_dir
     data["roles_path"] = Path(data["roles_path"]) if data.get("roles_path") else None
     data.pop("file_id", None)
+    data.pop("created_at", None)
     return AnalysisConfig(**data)
 
 
@@ -2883,6 +2897,9 @@ INDEX_HTML = r"""<!doctype html>
     .tab-button.active { background:var(--accent); color:#fff; }
     .tab-panel { display:none; gap:14px; }
     .tab-panel.active { display:grid; }
+    #historyTab, #historyTab > div { min-width:0; }
+    #historyStorage table { min-width:0; width:100%; }
+    #historyStorage th:nth-child(n+2), #historyStorage td:nth-child(n+2) { text-align:right; font-variant-numeric:tabular-nums; }
     .overview-grid {
       display:flex;
       gap:10px;
@@ -3610,7 +3627,21 @@ INDEX_HTML = r"""<!doctype html>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="xgbValidationTab" id="tab-xgbValidationTab" data-tab="xgbValidationTab" tabindex="-1">时间外预测验证</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="llmReportTab" id="tab-llmReportTab" data-tab="llmReportTab" tabindex="-1">AI 综合解读</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="downloadsTab" id="tab-downloadsTab" data-tab="downloadsTab" tabindex="-1">下载</button>
+        <button class="tab-button" role="tab" aria-selected="false" aria-controls="historyTab" id="tab-historyTab" data-tab="historyTab" tabindex="-1">历史管理</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="termsHelpTab" id="tab-termsHelpTab" data-tab="termsHelpTab" tabindex="-1">术语与标签说明</button>
+      </div>
+
+      <div id="historyTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-historyTab" hidden>
+        <h2>历史管理</h2>
+        <div class="actions"><button id="refreshHistory">刷新历史记录</button></div>
+        <div id="historyStatus" class="help" role="status"></div>
+        <h2>存储概览</h2>
+        <div id="historyStorage"></div>
+        <p class="help">按当前磁盘记录统计；上传目录占用包含元数据。缺少时间元数据时显示文件系统近似时间，无法恢复的原始文件名保持未知。</p>
+        <h2>已上传数据</h2>
+        <div id="historyUploads" class="empty">进入历史管理后读取上传记录。</div>
+        <h2>历史分析</h2>
+        <div id="historyAnalyses" class="empty">进入历史管理后读取分析记录。</div>
       </div>
 
       <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
@@ -4064,6 +4095,7 @@ el("generateLlmReport").addEventListener("click", generateLlmReport);
 el("copyLlmReport").addEventListener("click", copyLlmReport);
 
 el("upload").addEventListener("click", uploadFile);
+el("refreshHistory").addEventListener("click", refreshHistory);
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
@@ -5152,7 +5184,58 @@ function isElementVisible(node) {
   );
 }
 
+function historySize(bytes) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value.toFixed(unit ? 2 : 0)} ${units[unit]}`;
+}
+
+function historyTime(value, source) {
+  return `${new Date(value).toLocaleString("zh-CN")}${source === "filesystem" ? "（近似：文件系统时间）" : ""}`;
+}
+
+function renderHistoryTable(id, headings, rows, emptyText) {
+  const box = el(id);
+  box.classList.toggle("empty", !rows.length);
+  box.innerHTML = rows.length
+    ? `<div class="table-wrap"><table><thead><tr>${headings.map(value => `<th scope="col">${escapeHtml(value)}</th>`).join("")}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escapeHtml(value)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
+    : escapeHtml(emptyText);
+}
+
+async function refreshHistory() {
+  const button = el("refreshHistory");
+  if (button.disabled) return;
+  button.disabled = true;
+  el("historyStatus").textContent = "正在读取历史记录…";
+  try {
+    const response = await fetch("/api/history", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "读取失败");
+    const storage = data.storage;
+    renderHistoryTable("historyStorage", ["类别", "数量", "磁盘占用"], [
+      ["上传数据", `${storage.upload_count} 个文件`, historySize(storage.upload_size)],
+      ["历史分析", `${storage.analysis_count} 条记录`, historySize(storage.analysis_size)],
+      ["合计", "—", historySize(storage.total_size)],
+    ], "");
+    renderHistoryTable("historyUploads", ["原始文件名", "上传时间", "文件大小", "关联分析", "文件标识"],
+      data.uploads.map(item => [item.original_filename || `${item.file_id}（原始名称未知）`, historyTime(item.uploaded_at, item.time_source), historySize(item.file_size), item.analysis_count, item.file_id]), "暂无已上传数据。");
+    renderHistoryTable("historyAnalyses", ["目标变量", "原始文件", "分析时间", "结果大小", "分析标识"],
+      data.analyses.map(item => [item.target || "未知", item.original_filename || (item.file_id ? `${item.file_id}（原始名称未知${item.upload_exists ? "" : "，上传文件缺失"}）` : "未知"), historyTime(item.created_at, item.time_source), historySize(item.result_size), item.run_id]), "暂无历史分析记录。");
+    el("historyStatus").textContent = "已读取最新磁盘记录。";
+  } catch (error) {
+    el("historyStorage").innerHTML = "";
+    renderHistoryTable("historyUploads", [], [], "历史记录读取失败，请刷新重试。");
+    renderHistoryTable("historyAnalyses", [], [], "历史记录读取失败，请刷新重试。");
+    el("historyStatus").textContent = `读取历史记录失败：${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function activateTab(tabId) {
+  if (tabId === "historyTab") refreshHistory();
   for (const button of document.querySelectorAll(".tab-button")) {
     const isActive = button.dataset.tab === tabId;
     button.classList.toggle("active", isActive);

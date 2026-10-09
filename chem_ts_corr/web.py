@@ -20,7 +20,7 @@ from email.policy import default as email_default_policy
 from types import SimpleNamespace
 
 import pandas as pd
-from chem_ts_corr.history import query_history
+from chem_ts_corr.history import query_history, read_metadata, record_time
 
 from chem_ts_corr.config import AnalysisConfig as _AnalysisConfig
 from chem_ts_corr.data import (
@@ -34,6 +34,7 @@ from chem_ts_corr.data import (
 )
 from chem_ts_corr.pipeline import (
     _read_preprocessing_context,
+    _validate_branch_output_complete,
     begin_downstream_stage,
     confirm_initial_screening_branch,
     DISCOVERY_CANDIDATES_FILENAME,
@@ -251,7 +252,10 @@ class _Handler(BaseHTTPRequestHandler):
                 run_id = _single(params, "run_id")
                 if run_id:
                     directory = _resolve_run_dir(run_id)
-                    self._send_json(_build_result_payload(run_id, directory, _read_run_config(directory)))
+                    self._send_json(
+                        _restore_run_payload(run_id) if _single(params, "restore") == "1"
+                        else _build_result_payload(run_id, directory, _read_run_config(directory))
+                    )
                 else:
                     self._send_json(_task_result_response(_single(params, "task_id")))
             except Exception as exc:
@@ -502,6 +506,14 @@ def _restore_exclude_window_response(handler: BaseHTTPRequestHandler) -> dict[st
 
 def _restore_all_exclude_windows_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
+    if not _field(form, "time_column"):
+        file_id = _validate_file_id(_field(form, "file_id"))
+        _resolve_upload(file_id)
+        with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+            for key in list(EXCLUDE_WINDOW_CONTEXTS):
+                if key[0] == file_id:
+                    EXCLUDE_WINDOW_CONTEXTS.pop(key)
+        return {"excludeWindows": [], "excludeWindowStats": None}
     context = _existing_exclude_window_context(
         _field(form, "file_id"), _field(form, "time_column")
     )
@@ -974,6 +986,93 @@ def _build_result_payload(run_id: str, output_dir: Path, config: AnalysisConfig)
         "verificationReviewPool": _records(verification_review_pool),
         "downloads": _download_links(run_id, output_dir),
     }
+
+
+def _restore_run_payload(run_id: str) -> dict[str, Any]:
+    directory = _resolve_run_dir(run_id)
+    try:
+        config = _read_run_config(directory)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise ValueError(f"运行配置无法恢复：{exc}") from exc
+    context = _read_context_for_payload(directory)
+    if context and context["branch_selection_status"] == "awaiting_confirmation":
+        required = {"preprocessing_comparison.csv": {"variable", "raw_final_score", "processed_final_score"}}
+        for branch in ["raw", "processed"]:
+            _validate_branch_output_complete(directory, branch)
+            required[f"screening_branches/{branch}/ranked_features.csv"] = {"variable", "final_score"}
+    else:
+        required = {"ranked_features.csv": {"variable", "final_score"},
+                    "recommended_candidates.csv": {"variable", "final_score"}}
+        if not (directory / "summary.md").is_file() or (directory / "summary.md").stat().st_size == 0:
+            raise ValueError("初筛结果缺失：summary.md")
+    for name, columns in required.items():
+        path = directory / name
+        if not path.is_file() or not columns.issubset(_safe_read_result_csv(path).columns):
+            raise ValueError(f"初筛结果缺失或损坏：{name}")
+    stored = read_metadata(directory / "run_config.json")
+    file_id = stored.get("file_id") or config.input_path.stem
+    file_id = file_id if isinstance(file_id, str) else None
+    filename = None
+    input_available = False
+    input_error = ""
+    windows = context["exclude_windows"] if context is not None else config.exclude_windows
+    window_stats = {"exclude_window_count": len(windows),
+                    "excluded_rows": None if windows else 0, "excluded_ratio": None if windows else 0}
+    if context is not None:
+        window_stats.update({key: context[key] for key in ["original_rows", "excluded_rows", "remaining_rows", "excluded_ratio", "exclude_window_count"] if key in context})
+    window_payload = {"excludeWindows": windows, "excludeWindowStats": window_stats}
+    try:
+        file_id = _validate_file_id(file_id)
+        filename = read_metadata(UPLOADS_DIR / f"{file_id}.json").get("original_filename")
+        source = _resolve_upload(file_id)
+        if source.resolve() != config.input_path.resolve():
+            raise ValueError("保存的原始数据路径与上传文件不一致")
+        # Restore the session's draft windows; stored run files stay untouched.
+        window_context = _exclude_window_context(file_id, config.time_column, config.encoding)
+        if config.target not in window_context["frame"].columns:
+            raise ValueError("保存的目标变量不在原始数据中")
+        with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+            window_context["exclude_windows"] = [dict(window) for window in window_payload["excludeWindows"]]
+            window_payload = _exclude_window_payload(window_context)
+        input_available = True
+    except (OSError, ValueError) as exc:
+        input_error = f"原始数据缺失或不可读取：{exc}。仅可查看已保存结果。"
+    issues = {}
+    for stage, names in {
+        "enhanced": ["enhanced_validation_summary.csv", "model_lift_scores.csv", "rolling_corr_scores.csv"],
+        "model": ["shap_or_importance.csv", "model_variable_importance.csv", "model_discovered_candidates.csv"],
+        "review": ["conditional_granger_scores.csv", "causal_review_report.csv", "causal_review_evidence.csv", "final_review_summary.csv", "evidence_matrix.csv"],
+        "granger": ["granger_tests.csv"],
+    }.items():
+        # Lift/rolling also belong to initial screening; they do not prove Enhanced ran.
+        if not (directory / names[0]).exists():
+            if stage == "enhanced" or not any((directory / name).exists() for name in names):
+                continue
+        missing = [name for name in names if not (directory / name).is_file()]
+        empty = [name for name in names if (directory / name).is_file() and _safe_read_result_csv(directory / name).empty]
+        if missing or empty:
+            issues[stage] = "恢复时的阶段输出不完整或暂无可计算记录：" + ", ".join(missing + empty)
+    payload = _build_result_payload(run_id, directory, config)
+    created_at, time_source = record_time(stored.get("created_at"), directory / "run_config.json")
+    parameters = asdict(config)
+    for name in ["input_path", "output_dir", "roles_path"]:
+        parameters.pop(name, None)
+    if context is not None:
+        parameters.update(preprocess_mode=context["selected_preprocessing_mode"],
+                          resample_rule=context["resample_rule"], exclude_windows=context["exclude_windows"])
+        if context["lowpass_tau_minutes"] is not None:
+            parameters["lowpass_tau_minutes"] = context["lowpass_tau_minutes"]
+        if context["selected_preprocessing_mode"] == "lowpass_diff":
+            parameters["diff_interval_minutes"] = context["requested_diff_interval_minutes"]
+    payload["restoration"] = {
+        "parameters": parameters, "file_id": file_id,
+        "original_filename": filename if isinstance(filename, str) else None,
+        "created_at": created_at, "time_source": time_source,
+        "input_available": input_available, "input_error": input_error,
+        "context_available": context is not None,
+        "stage_issues": issues, **window_payload,
+    }
+    return payload
 
 
 def _read_context_for_payload(output_dir: Path) -> dict[str, Any] | None:
@@ -2898,8 +2997,11 @@ INDEX_HTML = r"""<!doctype html>
     .tab-panel { display:none; gap:14px; }
     .tab-panel.active { display:grid; }
     #historyTab, #historyTab > div { min-width:0; }
+    #overviewTab, #overviewTab > div { min-width:0; }
+    #restoredAnalysis { overflow-wrap:anywhere; }
     #historyStorage table { min-width:0; width:100%; }
     #historyStorage th:nth-child(n+2), #historyStorage td:nth-child(n+2) { text-align:right; font-variant-numeric:tabular-nums; }
+    .history-reanalyze { padding:5px 8px; white-space:nowrap; }
     .overview-grid {
       display:flex;
       gap:10px;
@@ -3518,6 +3620,7 @@ INDEX_HTML = r"""<!doctype html>
         <button id="upload">上传并识别列</button>
         <button id="reset" class="secondary">清空</button>
       </div>
+      <div id="selectedDataFile" class="help" role="status">尚未选择数据。</div>
       </div>
       <div class="control-group primary-group">
         <div class="control-group-title">基础分析参数</div>
@@ -3647,6 +3750,7 @@ INDEX_HTML = r"""<!doctype html>
       <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
         <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
+        <div id="restoredAnalysis" class="help" role="status" hidden></div>
         <div id="branchSelectionSection" class="control-group" hidden>
           <div class="control-group-title">Raw vs Processed 对比</div>
           <div id="branchSelectionStatus" class="help"></div>
@@ -3974,8 +4078,10 @@ INDEX_HTML = r"""<!doctype html>
 
 <script>
 let fileId = "";
+let dataSelectionLocks = 0;
 let currentRunId = "";
 let currentAnalysisContext = {};
+let restoredRunInfo = null;
 let recognizedColumns = [];
 let recognizedNumericColumns = [];
 let lastRows = [];
@@ -4278,18 +4384,71 @@ function validateAnalysisColumnSelection() {
   return "";
 }
 
+function lockDataSelection(delta) {
+  dataSelectionLocks += delta;
+  const busy = dataSelectionLocks > 0;
+  for (const id of ["fileInput", "upload", "reset"]) el(id).disabled = busy;
+  for (const button of document.querySelectorAll(".history-reanalyze, .history-restore")) {
+    button.disabled = busy || (button.dataset.fileId !== undefined && !/^[0-9a-f]{32}$/i.test(button.dataset.fileId));
+  }
+}
+
+function prepareFileSelection() {
+  const parameterIds = ["preprocessMode", "lowpassTauMinutes", "diffIntervalMinutes", "detrendWindow"];
+  const values = parameterIds.map(id => el(id).value);
+  reset();
+  parameterIds.forEach((id, index) => { el(id).value = values[index]; });
+  updatePreprocessControls();
+  el("segmentMode").value = "all";
+  el("segmentMin").value = "";
+  el("segmentMax").value = "";
+}
+
+async function selectHistoryFile(item) {
+  if (dataSelectionLocks) return setStatus("当前操作尚未完成，请稍后切换数据。", "warning");
+  prepareFileSelection();
+  lockDataSelection(1);
+  activateTab("overviewTab");
+  el("controlsTitle").scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    fileId = item.file_id;
+    setStatus("正在识别历史数据…", "loading");
+    if (!await loadColumns()) {
+      fileId = "";
+      el("selectedDataFile").textContent = "历史数据选择失败，请检查文件是否仍存在且可读取。";
+      return;
+    }
+    const form = new FormData();
+    form.append("file_id", fileId);
+    const data = await postForm("/api/restore_all_exclude_windows", form);
+    updateExcludeWindowState(data.excludeWindows, data.excludeWindowStats);
+    el("selectedDataFile").textContent = `历史数据：${item.original_filename || `${item.file_id}（原始名称未知）`}`;
+    setStatus("历史数据已选择，可调整参数后开始分析。", "success");
+  } catch (error) {
+    fileId = "";
+    el("analyze").disabled = true;
+    el("drawTrend").disabled = true;
+    el("drawScatterMatrix").disabled = true;
+    el("selectedDataFile").textContent = "历史数据选择失败。";
+    setStatus(error.message || String(error), "error");
+  } finally {
+    lockDataSelection(-1);
+  }
+}
+
 async function uploadFile() {
+  if (dataSelectionLocks) return setStatus("当前操作尚未完成，请稍后切换数据。", "warning");
   const file = el("fileInput").files[0];
   if (!file) return setStatus("请选择 CSV、Excel 或 TXT 数据文件。");
-  clearVariableFilters();
-  clearLagProfileCache();
-  currentAnalysisContext = {};
+  prepareFileSelection();
+  lockDataSelection(1);
   try {
     setStatus("正在上传文件...", "loading");
     const form = new FormData();
     form.append("file", file);
     const data = await postForm("/api/upload", form);
     fileId = data.file_id;
+    el("selectedDataFile").textContent = `新上传数据：${data.filename}`;
     updateExcludeWindowState([], null);
     recognizedColumns = [];
     recognizedNumericColumns = [];
@@ -4298,6 +4457,8 @@ async function uploadFile() {
     await loadColumns();
   } catch (error) {
     setStatus(error.message || String(error), "error");
+  } finally {
+    lockDataSelection(-1);
   }
 }
 
@@ -4362,19 +4523,28 @@ async function loadColumns() {
   el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
     const timeColumnStatus = data.autoTimeColumn ? `已自动识别时间列：${data.autoTimeColumn}。` : "";
     setStatus(`${timeColumnStatus}列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
+    return true;
   } catch (error) {
     el("analyze").disabled = true;
     setStatus(error.message || String(error), "error");
+    return false;
   }
 }
 
 async function analyze() {
+  if (dataSelectionLocks) return setStatus("当前操作尚未完成，请稍后开始分析。", "warning");
+  if (restoredRunInfo && !restoredRunInfo.input_available) return setStatus(restoredRunInfo.input_error, "warning");
   if (!fileId) return setStatus("请先上传文件。");
   const validationError = validateAnalysisColumnSelection();
   if (validationError) return setStatus(validationError, "error");
+  if (restoredRunInfo) el("selectedDataFile").textContent = `历史数据：${restoredRunInfo.original_filename || `${fileId}（原始名称未知）`}`;
+  restoredRunInfo = null;
+  el("restoredAnalysis").hidden = true;
+  el("restoredAnalysis").textContent = "";
   clearLagProfileCache();
   setStatus("Python 后台正在分析，数据较大时请等待...", "loading");
   el("analyze").disabled = true;
+  lockDataSelection(1);
   try {
     const form = new FormData();
     form.append("file_id", fileId);
@@ -4407,6 +4577,7 @@ async function analyze() {
     setStatus(error.message || String(error), "error");
   } finally {
     el("analyze").disabled = !fileId;
+    lockDataSelection(-1);
   }
 }
 
@@ -4536,8 +4707,8 @@ function renderAnalysisResult(data) {
   el("runEnhancedScreening").disabled = !currentRunId;
   el("runGranger").disabled = !currentRunId;
   el("runModel").disabled = !currentRunId;
-  el("addManualReviewPool").disabled = !currentRunId;
-  el("addModelDiscoveryReviewPool").disabled = !currentRunId;
+  el("addManualReviewPool").disabled = !currentRunId || isRestoredRunReadOnly();
+  el("addModelDiscoveryReviewPool").disabled = !currentRunId || isRestoredRunReadOnly();
   el("runCausalReview").disabled = !currentRunId;
   updateBranchSelectionUi(data);
   setDownstreamGate(false);
@@ -4605,6 +4776,7 @@ function updateBranchSelectionUi(data) {
   const status = data.branchSelectionStatus;
   const activeBranch = data.activeScreeningBranch;
   const locked = Boolean(data.branchLocked);
+  const readOnly = isRestoredRunReadOnly();
   const selected = data.selectedPreprocessingMode || "";
   el("confirmProcessedBranch").textContent = processedBranchLabel(selected);
   el("branchLockedHint").hidden = !locked;
@@ -4618,8 +4790,8 @@ function updateBranchSelectionUi(data) {
   if (status === "awaiting_confirmation") {
     el("branchSelectionStatus").textContent =
       "双分支初筛已完成，正式初筛尚未发布。请查看 Raw vs Processed 对比后明确确认一个分支；确认前不会展示正式排名、Top-K 或推荐变量。";
-    el("confirmRawBranch").disabled = locked;
-    el("confirmProcessedBranch").disabled = locked;
+    el("confirmRawBranch").disabled = locked || readOnly;
+    el("confirmProcessedBranch").disabled = locked || readOnly;
     return;
   }
   if (status === "not_required") {
@@ -4633,12 +4805,17 @@ function updateBranchSelectionUi(data) {
     `已确认正式初筛分支：${activeBranch === "raw" ? "原始数据" : "预处理数据"}` +
     (data.activePreprocessingMode ? `（active preprocessing = ${data.activePreprocessingMode}）` : "") +
     (locked ? "。后续验证已开始，当前初筛分支已锁定；如需切换请重新分析。" : "。");
-  el("confirmRawBranch").disabled = activeBranch === "raw" || locked;
-  el("confirmProcessedBranch").disabled = activeBranch === "processed" || locked;
+  el("confirmRawBranch").disabled = activeBranch === "raw" || locked || readOnly;
+  el("confirmProcessedBranch").disabled = activeBranch === "processed" || locked || readOnly;
+}
+
+function isRestoredRunReadOnly() {
+  return restoredRunInfo !== null && (!restoredRunInfo.input_available || !restoredRunInfo.context_available);
 }
 
 function setDownstreamGate(blocked) {
-  el("downstreamGateHint").hidden = !blocked;
+  blocked = blocked || isRestoredRunReadOnly();
+  el("downstreamGateHint").hidden = !blocked || isRestoredRunReadOnly();
   el("runEnhancedScreening").disabled = blocked || !currentRunId;
   el("runGranger").disabled = blocked || !currentRunId;
   el("runModel").disabled = blocked || !currentRunId;
@@ -4648,6 +4825,7 @@ function setDownstreamGate(blocked) {
 
 async function confirmInitialScreeningBranch(branch) {
   if (!currentRunId) return setStatus("请先完成初筛。");
+  if (isRestoredRunReadOnly()) return setStatus("当前历史分析为只读状态，无法确认正式分支。", "warning");
   const startedAt = performance.now();
   const timerId = startStatusTimer("正在确认正式初筛分支...", startedAt);
   el("confirmRawBranch").disabled = true;
@@ -4848,7 +5026,8 @@ async function runCausalReview() {
 
 function updateXgbRunAvailability() {
   const enabled = el("enableXgbValidation").checked;
-  el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length);
+  el("runXgbValidation").disabled = !(enabled && currentRunId && lastFinalReviewSummaryRows.length)
+    || isRestoredRunReadOnly();
   if (!enabled && !lastXgbMessage) el("xgbStatus").textContent = "XGB 时间外预测验证未启用。";
 }
 
@@ -5219,10 +5398,28 @@ async function refreshHistory() {
       ["历史分析", `${storage.analysis_count} 条记录`, historySize(storage.analysis_size)],
       ["合计", "—", historySize(storage.total_size)],
     ], "");
-    renderHistoryTable("historyUploads", ["原始文件名", "上传时间", "文件大小", "关联分析", "文件标识"],
-      data.uploads.map(item => [item.original_filename || `${item.file_id}（原始名称未知）`, historyTime(item.uploaded_at, item.time_source), historySize(item.file_size), item.analysis_count, item.file_id]), "暂无已上传数据。");
-    renderHistoryTable("historyAnalyses", ["目标变量", "原始文件", "分析时间", "结果大小", "分析标识"],
-      data.analyses.map(item => [item.target || "未知", item.original_filename || (item.file_id ? `${item.file_id}（原始名称未知${item.upload_exists ? "" : "，上传文件缺失"}）` : "未知"), historyTime(item.created_at, item.time_source), historySize(item.result_size), item.run_id]), "暂无历史分析记录。");
+    renderHistoryTable("historyUploads", ["原始文件名", "上传时间", "文件大小", "关联分析", "文件标识", "操作"],
+      data.uploads.map(item => [item.original_filename || `${item.file_id}（原始名称未知）`, historyTime(item.uploaded_at, item.time_source), historySize(item.file_size), item.analysis_count, item.file_id, ""]), "暂无已上传数据。");
+    el("historyUploads").querySelectorAll("tbody tr").forEach((row, index) => {
+      const item = data.uploads[index];
+      const button = document.createElement("button");
+      button.className = "secondary history-reanalyze";
+      button.textContent = "重新分析";
+      button.dataset.fileId = item.file_id;
+      button.disabled = dataSelectionLocks > 0 || !/^[0-9a-f]{32}$/i.test(item.file_id);
+      button.addEventListener("click", () => selectHistoryFile(item));
+      row.lastElementChild.appendChild(button);
+    });
+    renderHistoryTable("historyAnalyses", ["目标变量", "原始文件", "分析时间", "结果大小", "分析标识", "操作"],
+      data.analyses.map(item => [item.target || "未知", item.original_filename || (item.file_id ? `${item.file_id}（原始名称未知${item.upload_exists ? "" : "，上传文件缺失"}）` : "未知"), historyTime(item.created_at, item.time_source), historySize(item.result_size), item.run_id, ""]), "暂无历史分析记录。");
+    el("historyAnalyses").querySelectorAll("tbody tr").forEach((row, index) => {
+      const button = document.createElement("button");
+      button.className = "secondary history-reanalyze history-restore";
+      button.textContent = "恢复分析";
+      button.disabled = dataSelectionLocks > 0;
+      button.addEventListener("click", () => restoreAnalysis(data.analyses[index].run_id));
+      row.lastElementChild.appendChild(button);
+    });
     el("historyStatus").textContent = "已读取最新磁盘记录。";
   } catch (error) {
     el("historyStorage").innerHTML = "";
@@ -5272,10 +5469,16 @@ function handleTabKeydown(event, button) {
 }
 
 async function postForm(url, form) {
-  const response = await fetch(url, { method: "POST", body: form });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "请求失败");
-  return data;
+  const locksData = url !== "/api/llm_connection";
+  if (locksData) lockDataSelection(1);
+  try {
+    const response = await fetch(url, { method: "POST", body: form });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "请求失败");
+    return data;
+  } finally {
+    if (locksData) lockDataSelection(-1);
+  }
 }
 
 function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
@@ -5543,9 +5746,9 @@ function renderExcludeWindows() {
   const restoreAll = el("restoreAllExcludeWindows");
   if (!list || !stats || !restoreAll) return;
   const count = Number(excludeWindowStats.exclude_window_count || 0);
-  const rows = Number(excludeWindowStats.excluded_rows || 0);
-  const ratio = Number(excludeWindowStats.excluded_ratio || 0);
-  stats.textContent = `已标记：${count} 个窗口 / ${rows.toLocaleString("zh-CN")} 点（${(ratio * 100).toFixed(1)}%）`;
+  const rows = excludeWindowStats.excluded_rows;
+  const ratio = excludeWindowStats.excluded_ratio;
+  stats.textContent = `已标记：${count} 个窗口 / ${rows == null ? "未知" : Number(rows).toLocaleString("zh-CN")} 点（${ratio == null ? "未知" : (Number(ratio) * 100).toFixed(1) + "%"}）`;
   restoreAll.disabled = !excludeWindows.length;
   if (!excludeWindows.length) {
     list.className = "exclude-window-list empty";
@@ -5615,6 +5818,8 @@ async function restoreAllExcludeWindows() {
 }
 
 async function drawTrend() {
+  if (restoredRunInfo && !restoredRunInfo.input_available) return setStatus(restoredRunInfo.input_error, "warning");
+  lockDataSelection(1);
   try {
     const variables = Array.from(new Set([el("trendVar1").value, el("trendVar2").value, el("trendVar3").value, el("trendVar4").value, el("trendVar5").value, el("trendVar6").value, el("trendVar7").value, el("trendVar8").value].filter(Boolean)));
     if (!variables.length) return setStatus("请至少选择一个趋势变量。");
@@ -5640,6 +5845,8 @@ async function drawTrend() {
     el("trendLegend").innerHTML = "";
     clearTrendStats();
     setStatus(error.message || String(error), "error");
+  } finally {
+    lockDataSelection(-1);
   }
 }
 
@@ -5656,6 +5863,7 @@ function clearScatterMatrix(message = "选择至少一个 X 变量和一个 Y �
 }
 
 async function drawScatterMatrix() {
+  if (restoredRunInfo && !restoredRunInfo.input_available) return setStatus(restoredRunInfo.input_error, "warning");
   if (!fileId) return setStatus("请先上传数据文件。", "warning");
   const xVariables = selectedScatterVariables("x");
   const yVariables = selectedScatterVariables("y");
@@ -5663,6 +5871,7 @@ async function drawScatterMatrix() {
   if (!yVariables.length) return setStatus("请选择至少一个 Y 轴变量。", "warning");
   const startedAt = performance.now();
   el("drawScatterMatrix").disabled = true;
+  lockDataSelection(1);
   setStatus("正在生成 XY 散点矩阵...", "loading");
   try {
     const params = new URLSearchParams();
@@ -5685,6 +5894,7 @@ async function drawScatterMatrix() {
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   } finally {
     el("drawScatterMatrix").disabled = !fileId;
+    lockDataSelection(-1);
   }
 }
 
@@ -7105,6 +7315,7 @@ function syncModelDiscoveryReviewPoolOptions(rows) {
 
 async function addToVerificationReviewPool(candidateSource) {
   if (!currentRunId) return setStatus("请先完成主筛查。");
+  if (isRestoredRunReadOnly()) return setStatus("当前历史分析为只读状态，无法修改复核池。", "warning");
   const isModelDiscovery = candidateSource === "model_discovery";
   const variable = (isModelDiscovery
     ? el("modelDiscoveryReviewPoolVariable").value
@@ -8691,6 +8902,7 @@ function clearOptionalElement(targetId) {
 }
 
 function reset() {
+  if (dataSelectionLocks) return setStatus("当前操作尚未完成，请稍后清空。", "warning");
   const resetUrl = new URL(window.location.href);
   resetUrl.searchParams.delete("run_id");
   window.history.replaceState(null, "", resetUrl);
@@ -8699,6 +8911,9 @@ function reset() {
   fileId = "";
   currentRunId = "";
   currentAnalysisContext = {};
+  restoredRunInfo = null;
+  el("restoredAnalysis").hidden = true;
+  el("restoredAnalysis").textContent = "";
   recognizedColumns = [];
   recognizedNumericColumns = [];
   lastRows = [];
@@ -8711,6 +8926,8 @@ function reset() {
   lastEnhancedSummaryRows = [];
   lastEnhancedLiftRows = [];
   lastEnhancedRollingRows = [];
+  lastValidationSummaryRows = [];
+  lastValidationFieldsRows = [];
   lastVerificationReviewPoolRows = [];
   lastConditionalRows = [];
   lastCausalEvidenceRows = [];
@@ -8735,6 +8952,8 @@ function reset() {
   lastScatterMatrixPayload = null;
   tableSortStates = { table: { column: "final_score", direction: "desc" }, finalReviewSummaryTable: { column: "final_rank", direction: "asc" } };
   el("fileInput").value = "";
+  el("selectedDataFile").textContent = "尚未选择数据。";
+  updateExcludeWindowState([], null);
   el("timeColumn").innerHTML = "";
   el("targetColumn").innerHTML = "";
   el("segmentColumn").innerHTML = "";
@@ -8748,6 +8967,7 @@ function reset() {
   el("forceIncludeSummary").textContent = "请选择强制复核变量";
   el("forceIncludeDropdown").open = false;
   el("preprocessMode").value = "raw";
+  for (const option of document.querySelectorAll("#preprocessMode option[data-restored-mode]")) option.remove();
   el("lowpassTauMinutes").value = "5.0";
   el("diffIntervalMinutes").value = "";
   el("detrendWindow").value = "24";
@@ -8791,6 +9011,7 @@ function reset() {
   el("llmConnectionStatus").textContent = "尚未测试 API 连接。";
   setLlmReport("");
   el("llmReportDownload").innerHTML = "";
+  el("generateLlmReport").disabled = true;
   el("llmApiKey").value = "";
   el("overview").innerHTML = "";
   el("analysisTimingBreakdown").textContent = "";
@@ -8819,6 +9040,8 @@ function reset() {
   el("modelDiscoveredTable").textContent = "运行随机森林模型解释后显示遗漏探索线索。";
   el("verificationReviewPoolTable").className = "empty";
   el("verificationReviewPoolTable").textContent = "完成主筛查后显示二级验证复核池。";
+  renderValidationSummaryTable([]);
+  renderValidationFieldsTable([]);
   el("manualReviewPoolVariable").value = "";
   el("modelDiscoveryReviewPoolVariable").innerHTML = '<option value="">请选择模型探索变量</option>';
   el("addManualReviewPool").disabled = true;
@@ -8864,18 +9087,95 @@ function reset() {
   el("conditionalBaselineMaxlag").value = "24";
   setStatus("");
 }
-async function restoreRunFromUrl() {
-  const runId = new URLSearchParams(window.location.search).get("run_id");
-  if (!runId) return;
+async function restoreAnalysis(runId) {
+  if (dataSelectionLocks) return setStatus("当前操作尚未完成，请稍后恢复分析。", "warning");
+  reset();
+  lockDataSelection(1);
   try {
-    const response = await fetch(`/api/result?run_id=${encodeURIComponent(runId)}`);
+    const response = await fetch(`/api/result?run_id=${encodeURIComponent(runId)}&restore=1`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "运行记录读取失败");
+    const info = data.restoration;
+    const config = info.parameters;
+    const capacityColumns = config.residual_control_columns?.length ? config.residual_control_columns : (config.capacity_columns || []);
+    fileId = info.file_id || "";
+    if (info.input_available && !await loadColumns()) {
+      info.input_available = false;
+      info.input_error = "原始数据列识别失败，仅可查看已保存结果。";
+    }
+    if (!info.input_available) {
+      fillSelect(el("timeColumn"), [config.time_column]);
+      fillSelect(el("targetColumn"), [config.target]);
+      fillSelect(el("segmentColumn"), config.segment_column ? [config.segment_column] : [], true);
+      fillCapacityOptions(capacityColumns);
+      fillForceIncludeOptions(config.force_include_variables || []);
+      recognizedColumns = Array.from(new Set([
+        config.time_column, config.target, config.segment_column, ...(config.excluded_columns || []),
+        ...(config.capacity_columns || []), ...(config.residual_control_columns || []),
+        ...(config.force_include_variables || []),
+      ].filter(Boolean)));
+      recognizedNumericColumns = recognizedColumns.filter(name => name !== config.time_column);
+      fillExcludedColumnOptions(recognizedNumericColumns);
+    }
+    if (!Array.from(el("preprocessMode").options).some(option => option.value === config.preprocess_mode)) {
+      const option = document.createElement("option");
+      option.value = config.preprocess_mode;
+      option.textContent = `历史模式：${config.preprocess_mode}`;
+      option.dataset.restoredMode = "1";
+      el("preprocessMode").appendChild(option);
+    }
+    for (const [id, key] of Object.entries({
+      timeColumn:"time_column", targetColumn:"target", maxLag:"max_lag", topK:"top_k",
+      minValidRatio:"min_valid_ratio", preprocessMode:"preprocess_mode", lowpassTauMinutes:"lowpass_tau_minutes",
+      diffIntervalMinutes:"diff_interval_minutes", detrendWindow:"detrend_window", segmentColumn:"segment_column",
+      segmentMode:"segment_mode", segmentMin:"segment_min", segmentMax:"segment_max",
+    })) el(id).value = config[key] ?? "";
+    el("resampleRule").value = String(config.resample_rule || "").replace(/min$/, "");
+    setCapacitySelection(capacityColumns);
+    setForceIncludeSelection(config.force_include_variables || []);
+    updateExcludedColumnDisabledState();
+    setExcludedColumnSelection(config.excluded_columns || []);
+    refreshColumnSelectors();
+    for (const id of ["timeColumn", "targetColumn", "segmentColumn"]) syncSearchableSelect(el(id));
+    updatePreprocessControls();
+    updateExcludeWindowState(info.excludeWindows, info.excludeWindowStats);
+    restoredRunInfo = info;
     renderAnalysisResult(data);
-    setStatus("已恢复运行记录。", "success");
+    el("enableXgbValidation").checked = Boolean(config.enable_xgb_validation || (data.xgbResult && data.xgbResult.status !== "not_run"));
+    el("xgbTopN").value = config.xgb_top_n ?? 8;
+    el("xgbMaxLag").value = config.xgb_max_lag ?? "";
+    el("xgbWhitelist").value = (config.xgb_whitelist || []).join(",");
+    updateXgbRunAvailability();
+    const name = info.original_filename || `${fileId}（原始名称未知）`;
+    const continuationError = info.input_error || (info.context_available ? "" : "缺少已保存的预处理上下文；仅可查看结果或重新分析。");
+    el("selectedDataFile").textContent = `恢复分析数据：${name}${info.input_available ? "" : "（原始数据不可用）"}`;
+    const notice = el("restoredAnalysis");
+    notice.hidden = false;
+    notice.textContent = `已恢复：${config.target} · ${name} · ${historyTime(info.created_at, info.time_source)}`
+      + (continuationError ? `。${continuationError}` : "")
+      + Object.values(info.stage_issues).map(message => `。${message}`).join("");
+    const stageTables = {enhanced:"enhancedSummaryTable",model:"modelVariableImportanceTable",review:"finalReviewSummaryTable",granger:"grangerTable"};
+    for (const [stage, message] of Object.entries(info.stage_issues)) {
+      const table = el(stageTables[stage]);
+      if (table && table.classList.contains("empty")) table.textContent = message;
+    }
+    for (const id of ["analyze", "drawTrend", "drawScatterMatrix"]) el(id).disabled = !info.input_available;
+    activateTab("overviewTab");
+    setStatus(continuationError || "已恢复运行记录，可在原运行下继续后续验证。", continuationError ? "warning" : "success");
   } catch (error) {
+    fileId = "";
+    currentRunId = "";
+    currentAnalysisContext = {};
+    setDownstreamGate(true);
+    for (const id of ["analyze", "drawTrend", "drawScatterMatrix"]) el(id).disabled = true;
     setStatus(error.message || String(error), "error");
+  } finally {
+    lockDataSelection(-1);
   }
+}
+async function restoreRunFromUrl() {
+  const runId = new URLSearchParams(window.location.search).get("run_id");
+  if (runId) await restoreAnalysis(runId);
 }
 restoreRunFromUrl();
 </script>

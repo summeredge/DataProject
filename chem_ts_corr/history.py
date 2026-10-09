@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -67,11 +68,14 @@ def query_history(uploads_dir: Path, runs_dir: Path) -> dict:
             file_id = config.get("file_id")
             file_id = file_id if isinstance(file_id, str) else None
             upload = by_id.get(file_id)
+            original_filename = upload["original_filename"] if upload else None
+            if original_filename is None and file_id and re.fullmatch(r"[0-9a-f]{32}", file_id):
+                original_filename = read_metadata(uploads_dir / f"{file_id}.json").get("original_filename")
             target = config.get("target")
             analyses.append({
                 "run_id": path.name, "file_id": file_id,
                 "target": target if isinstance(target, str) else None,
-                "original_filename": upload["original_filename"] if upload else None,
+                "original_filename": original_filename if isinstance(original_filename, str) else None,
                 "upload_exists": upload is not None,
                 "created_at": created_at, "time_source": source,
                 "result_size": disk_size(path),

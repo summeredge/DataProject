@@ -63,7 +63,7 @@ def test_workbench_hierarchy_defaults_to_basic_parameters_and_result_summary():
     assert '<details id="advancedParameters" class="advanced-parameters">' in INDEX_HTML
     assert 'id="timeColumn"' in INDEX_HTML.split('<details id="advancedParameters"', 1)[0]
     assert 'activateTab("overviewTab");' in INDEX_HTML
-    assert 'class="results-heading"' in INDEX_HTML
+    assert '<section class="results" aria-label="分析结果">' in INDEX_HTML
     assert 'class="status-panel"' in INDEX_HTML
 
 

@@ -70,6 +70,24 @@ def _layout() -> _TabLayoutParser:
     return parser
 
 
+def test_results_start_with_navigation_and_no_redundant_titles():
+    results = INDEX_HTML.split('<section class="results" aria-label="分析结果">', 1)[1]
+    assert results.lstrip().startswith('<div class="tabs" role="tablist"')
+    for marker in [
+        "resultsTitle", "results-heading", "results-description", "results-priority",
+        "默认先展示主筛查摘要和候选表格", "主任务：筛选可复核候选",
+    ]:
+        assert marker not in INDEX_HTML
+    for panel in _layout().panels:
+        content = results.split(f'id="{panel["id"]}"', 1)[1].split(">", 1)[1]
+        assert not content.lstrip().startswith("<h2>")
+    for title in [
+        "初步分析 Top 10", "完整初步分析结果", "XY 散点矩阵",
+        "可信度审查摘要", "第四层工程复核摘要", "存储概览",
+    ]:
+        assert f"<h2>{title}</h2>" in results
+
+
 def test_result_tab_buttons_have_required_order_and_no_candidate_tab():
     layout = _layout()
     labels = [str(button["text"]).strip() for button in layout.buttons]

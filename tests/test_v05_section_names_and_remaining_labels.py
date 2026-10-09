@@ -5,7 +5,7 @@ from chem_ts_corr.web import FINAL_REVIEW_SUMMARY_FIELD_NOTES, INDEX_HTML
 
 def test_section_names_are_clearer():
     required = [
-        "<h3>可信度审查概览</h3>",
+        "<h2>可信度审查摘要</h2>",
         "<h2>逐变量可信度审查证据表</h2>",
         'id="finalReviewQualityOverview"',
         'id="causalReviewEvidenceTable"',
@@ -15,6 +15,7 @@ def test_section_names_are_clearer():
     forbidden = [
         "<h2>最终推荐质量总览</h2>",
         "<h2>综合证据复核</h2>",
+        "<h3>可信度审查概览</h3>",
     ]
     for marker in forbidden:
         assert marker not in INDEX_HTML

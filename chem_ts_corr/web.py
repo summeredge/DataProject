@@ -3227,6 +3227,31 @@ INDEX_HTML = r"""<!doctype html>
     .markdown-report th:first-child, .markdown-report td:first-child { position:static; box-shadow:none; }
     @media (max-width:900px) { main { grid-template-columns:1fr; padding:12px; } .row { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } .trend-stats { grid-template-columns:repeat(2, minmax(0, 1fr)); } .scatter-matrix-controls { grid-template-columns:repeat(2, minmax(0, 1fr)); } .chart-controls { grid-template-columns:repeat(2,minmax(120px,1fr)); } }
     @media (max-width:560px) { .grid { grid-template-columns:1fr; } .llm-config-grid { grid-template-columns:1fr; } .trend-stats { grid-template-columns:1fr; } .scatter-matrix-controls { grid-template-columns:1fr; } .chart-controls { grid-template-columns:1fr; } }
+    /* 可信度审查摘要：局部紧凑布局，纵向滚动交给页面。 */
+    #causalReviewTab { min-width:0; grid-template-columns:minmax(0,1fr); }
+    #causalReviewTab > div { min-width:0; }
+    #finalReviewQualityOverview { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:6px; margin:8px 0; }
+    #finalReviewQualityOverview .metric-card { display:flex; align-items:center; justify-content:space-between; gap:8px; min-width:0; min-height:0; padding:8px 10px; border-radius:var(--radius-sm); }
+    #finalReviewQualityOverview strong { font-size:var(--font-xs); font-weight:500; color:var(--muted); }
+    #finalReviewQualityOverview span { font-size:20px; font-weight:650; font-variant-numeric:tabular-nums; }
+    .review-summary-heading { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
+    .review-summary-heading h2, #finalReviewSummaryDownload { margin:0; }
+    #finalReviewSummaryDownload { display:flex; flex-wrap:wrap; gap:6px; }
+    #finalReviewSummaryTable .table-wrap { max-height:none; width:100%; overflow-x:auto; }
+    #finalReviewSummaryTable table { min-width:100%; }
+    #finalReviewSummaryTable th, #finalReviewSummaryTable td { box-sizing:border-box; padding:6px 8px; vertical-align:middle; white-space:nowrap; overflow-wrap:normal; word-break:normal; }
+    #finalReviewSummaryTable [data-column="final_rank"] { width:65px; min-width:65px; max-width:65px; text-align:center; }
+    #finalReviewSummaryTable th[data-column="final_rank"] { padding:6px 4px; font-size:11px; }
+    #finalReviewSummaryTable [data-column="variable"] { min-width:220px; }
+    #finalReviewSummaryTable [data-column="evidence_score"] { min-width:85px; text-align:center; }
+    #finalReviewSummaryTable th:nth-child(-n+2), #finalReviewSummaryTable td:nth-child(-n+2) { position:sticky; z-index:3; background:var(--panel); }
+    #finalReviewSummaryTable th:nth-child(2), #finalReviewSummaryTable td:nth-child(2) { left:65px; box-shadow:1px 0 0 var(--line); }
+    #finalReviewSummaryTable th:nth-child(-n+2) { z-index:4; background:var(--surface-pearl); }
+    #finalReviewSummaryTable tr:nth-child(even) td:nth-child(-n+2) { background:#f7f7f9; }
+    #finalReviewSummaryTable tr:hover td:nth-child(-n+2) { background:var(--surface-muted); }
+    #finalReviewSummaryTable tr.selected td:nth-child(-n+2) { background:var(--info-bg); }
+    #finalReviewSummaryTable .status-label { white-space:nowrap; padding:2px 5px; }
+    #finalReviewSummaryTable .small-button { width:80px; min-height:28px; margin:0; padding:4px 8px; white-space:nowrap; }
   </style>
   <style>
     /* ============================================================
@@ -3533,30 +3558,20 @@ INDEX_HTML = r"""<!doctype html>
     section { border-radius:var(--radius-panel); padding:18px; }
     .controls { border-top:3px solid var(--accent); }
     .results { border-top:3px solid var(--accent); }
-    .section-heading, .results-heading {
+    .section-heading {
       display:flex;
       align-items:flex-start;
       justify-content:space-between;
       gap:16px;
       margin-bottom:14px;
     }
-    .section-heading h2, .results-heading h2 { margin:0 0 4px; font-size:20px; }
-    .section-description, .results-description {
+    .section-heading h2 { margin:0 0 4px; font-size:20px; }
+    .section-description {
       margin:0;
       max-width:680px;
       color:var(--muted);
       font-size:var(--font-sm);
       line-height:1.45;
-    }
-    .results-priority {
-      flex:0 0 auto;
-      padding:5px 8px;
-      border:1px solid var(--line);
-      border-radius:var(--radius-sm);
-      color:var(--muted);
-      background:var(--surface-muted);
-      font-size:var(--font-xs);
-      white-space:nowrap;
     }
     .control-group { border-radius:var(--radius-md); background:var(--surface-control); }
     .control-group.primary-group { background:var(--panel); border-color:var(--line); }
@@ -3656,8 +3671,7 @@ INDEX_HTML = r"""<!doctype html>
     .results .help { border-radius:var(--radius-md); }
     @media (max-width:900px) {
       main { grid-template-columns:1fr; padding:14px; }
-      .section-heading, .results-heading { display:block; }
-      .results-priority { display:inline-block; margin-top:8px; }
+      .section-heading { display:block; }
     }
     @media (max-width:640px) {
       header { padding:24px 16px 20px; }
@@ -3798,14 +3812,7 @@ INDEX_HTML = r"""<!doctype html>
       </div>
     </section>
 
-    <section class="results" aria-labelledby="resultsTitle">
-      <div class="results-heading">
-        <div>
-          <h2 id="resultsTitle">分析结果</h2>
-          <p class="results-description">默认先展示主筛查摘要和候选表格；趋势图、后续验证与下载结果按需查看。</p>
-        </div>
-        <span class="results-priority">主任务：筛选可复核候选</span>
-      </div>
+    <section class="results" aria-label="分析结果">
       <div class="tabs" role="tablist" aria-label="结果分类">
         <button class="tab-button active" role="tab" aria-selected="true" aria-controls="overviewTab" id="tab-overviewTab" data-tab="overviewTab" tabindex="0">初步分析</button>
         <button class="tab-button" role="tab" aria-selected="false" aria-controls="trendTab" id="tab-trendTab" data-tab="trendTab" tabindex="-1">趋势图</button>
@@ -3819,7 +3826,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="historyTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-historyTab" hidden>
-        <h2>历史管理</h2>
         <div class="actions"><button id="refreshHistory">刷新历史记录</button></div>
         <div id="historyStatus" class="help" role="status"></div>
         <h2>存储概览</h2>
@@ -3833,7 +3839,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
-        <h2>初步分析</h2>
         <div class="actions"><button id="analyze" disabled>开始分析</button></div>
         <div id="restoredAnalysis" class="help" role="status" hidden></div>
         <div id="branchSelectionSection" class="control-group" hidden>
@@ -3869,7 +3874,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="trendTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-trendTab" hidden>
-        <h2>趋势图</h2>
         <div id="trendReviewHint" class="help">点击可信度审查摘要中的“查看趋势”后显示候选变量审查提示。</div>
         <div class="chart-controls">
           <label>数据 1<select id="trendVar1"></select></label>
@@ -3932,7 +3936,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="validationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-validationTab" hidden>
-        <h2>二次验证</h2>
         <div class="help">
           <span>先完成主筛查，再按需运行增强筛选、Granger 预测验证或随机森林模型解释。结果会同步写入下载文件。</span>
           <span>Granger 显著表示历史预测信息，不等于因果成立；随机森林重要性表示模型依赖，不等于可操作性；模型提升低可能说明目标自身历史已解释大部分波动；滚动稳定性低说明关系可能受工况影响。</span>
@@ -3999,7 +4002,6 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="causalReviewTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-causalReviewTab" hidden>
-        <h2>第三层可信度审查</h2>
         <div class="help">
           <span>本层是可信度审查：解释第二层预测价值是否可能受共同驱动、控制响应或统计限制影响；不是因果结论，也不改变初筛评分或排序。正式第三层候选来自已发布初筛的 causal_review_candidates.csv；风险标签包含过滤仅用于结果展示，不改变正式候选。</span>
           <span>可信度审查支持长滞后变量。默认围绕主筛查最佳滞后附近做条件 Granger 验证，避免对 1..maxlag 全量扫描造成计算过慢。如需完整扫描，可切换为 full_scan。</span>
@@ -4023,10 +4025,8 @@ INDEX_HTML = r"""<!doctype html>
         <h2>条件 Granger 预测验证结果</h2>
         <div class="download-buttons" id="conditionalDownload"></div>
         <div id="conditionalGrangerTable" class="empty">未运行 条件 Granger 预测验证。</div>
-        <h2>可信度审查摘要</h2>
+        <div class="review-summary-heading"><h2>可信度审查摘要</h2><div class="download-buttons" id="finalReviewSummaryDownload"></div></div>
         <div class="help">该表基于逐变量可信度审查证据生成，用于解释独立预测贡献、混杂风险、控制关系和统计限制。结果不是因果结论，也不改变初筛评分、排序或 Top-K。人工复核优先级仅用于第三层展示和复核建议，不参与算法评分或初筛排序；点击其它列排序仅用于辅助查看。点击“查看趋势”可自动带入目标变量和候选变量，用于人工检查滞后方向、响应形态和工艺合理性。</div>
-        <div class="download-buttons" id="finalReviewSummaryDownload"></div>
-        <h3>可信度审查概览</h3>
         <div id="finalReviewQualityOverview" class="overview-grid"></div>
         <div id="finalReviewSummaryTable" class="empty">未运行 可信度审查摘要。</div>
         <h2>逐变量可信度审查证据表</h2>
@@ -4042,7 +4042,6 @@ INDEX_HTML = r"""<!doctype html>
 
 
       <div id="xgbValidationTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-xgbValidationTab" hidden>
-        <h2>XGBoost 时间外预测验证</h2>
         <div class="help">第四层回答：候选变量在时间顺序隔离的数据中，是否仍提供额外预测信息。结果是候选变量预测增量证据和模型时间外表现，仅供人工复核参考；不用于因果结论、工艺根因判断或变量排名，不改变前三层结果。</div>
         <div class="help">Baseline（M1）：目标变量历史信息 + 配置的控制变量历史；Candidate：同一 M1 基线 + 单个候选变量历史信息。预测改善只表示候选变量提供额外预测信息，不表示候选变量决定目标变量。</div>
         <div class="help">工业连续时序中的相邻采样点通常存在自相关，因此样本行数不等于独立信息量。时间外验证应同时查看实际样本数和 train / validation / test 的时间覆盖范围。</div>
@@ -4099,7 +4098,6 @@ INDEX_HTML = r"""<!doctype html>
 
 
       <div id="llmReportTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-llmReportTab" hidden>
-        <h2>AI 综合解读</h2>
         <div class="help">填写 API 配置后可直接调用 DeepSeek/OpenAI 兼容聊天补全接口生成报告。API 密钥仅随本次请求发送，不保存到磁盘、不写入报告。</div>
         <div class="llm-config-grid">
           <label>分析变量数量<input id="llmTopN" type="number" min="1" max="100" value="20"></label>
@@ -4131,12 +4129,10 @@ INDEX_HTML = r"""<!doctype html>
       </div>
 
       <div id="downloadsTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-downloadsTab" hidden>
-        <h2>下载</h2>
         <div id="downloads" class="download-buttons"></div>
       </div>
 
       <div id="termsHelpTab" class="tab-panel" role="tabpanel" aria-labelledby="tab-termsHelpTab" hidden>
-        <h2>术语与标签说明</h2>
         <div class="help">
           <div>本页用于解释分析结果中的标签、风险、证据等级和模型指标，帮助工程人员理解页面显示名称对应的复核含义。</div>
           <div>这些说明仅用于辅助工程复核，不改变分析结果，也不参与计算；后台分析输出和 CSV 下载保持不变。</div>
@@ -7606,8 +7602,9 @@ function renderFinalReviewSummaryTable(rows) {
         });
         td.appendChild(button);
       } else {
-        td.innerHTML = renderTableCell(column, finalSummaryValue(row, column));
+        td.innerHTML = renderFinalReviewCell(column, finalSummaryValue(row, column));
       }
+      td.dataset.column = column;
       td.className = tableCellClass(column, finalSummaryValue(row, column));
       tr.appendChild(td);
     }
@@ -8489,7 +8486,8 @@ function sortableHeaderHtml(targetId, column) {
   const isSorted = state.column === column;
   const mark = isSorted ? (state.direction === "asc" ? "↑" : "↓") : "";
   const ariaSort = isSorted ? (state.direction === "asc" ? "ascending" : "descending") : "none";
-  return `<th scope="col" class="sortable" tabindex="0" aria-sort="${ariaSort}" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
+  const title = column === "final_rank" ? "人工复核优先级（展示序号；不参与初筛评分或排序）" : columnLabel(column);
+  return `<th scope="col" title="${escapeHtml(title)}" class="sortable" tabindex="0" aria-sort="${ariaSort}" data-column="${escapeHtml(column)}">${escapeHtml(columnLabel(column))}<span class="sort-mark">${mark}</span></th>`;
 }
 
 function attachSortableHeaders(table, targetId, rerender) {
@@ -8553,6 +8551,34 @@ function statusTone(column, value) {
   if (/risk|warning|limited|manual|secondary|weak|partial|not_run|not_computed|skipped|unknown/.test(text)) return "caution";
   if (/success|supported|strong|consistent|ok|normal|priority|candidate|positive/.test(text)) return "positive";
   return "neutral";
+}
+
+function renderFinalReviewCell(column, value) {
+  const fullText = displayCellValue(column, value);
+  const compactLabels = {
+    "未发现明显混杂风险": "未见明显风险",
+    "未发现明显控制关系风险": "未见明显风险",
+    "可能属于控制响应信号": "疑似控制响应",
+    "可能存在负荷或控制背景影响": "负荷/控制背景影响",
+    "可能存在共同驱动影响": "共同驱动风险",
+    "可能存在共享信号影响": "共享信号风险",
+    "可能存在公式关系影响": "公式关系风险",
+    "未发现明显统计限制": "未见明显限制",
+    "独立预测贡献证据较强": "独立支持较强",
+    "存在独立预测贡献证据，但存在限制": "独立支持受限",
+    "未形成独立预测贡献证据": "未形成独立支持",
+    "优先复核但统计受限": "优先复核·统计受限",
+    "二级复核但统计受限": "二级复核·统计受限",
+  };
+  const text = compactLabels[fullText] || fullText;
+  if (!STATUS_COLUMNS.has(column)) return `<span title="${escapeHtml(fullText)}">${escapeHtml(text)}</span>`;
+  const status = String(value);
+  const tone = ["no_flagged_confounder", "no_control_relation_flagged", "no_flagged_statistical_limitation"].includes(value)
+    ? "positive" : ["not_run", "not_computed", "missing", "not_assessed"].includes(value)
+    ? "neutral" : statusTone(column, value);
+  const displayTone = tone === "neutral" && /risk|limitation|possible_control_response|control_reference|shared_capacity/.test(status)
+    ? "caution" : tone;
+  return `<span class="status-label status-label-${displayTone}" title="${escapeHtml(fullText)}">${escapeHtml(text || "-")}</span>`;
 }
 
 function renderTableCell(column, value) {
@@ -8973,7 +8999,7 @@ function columnLabel(column) {
     final_review_decision: "可信度审查建议",
     final_review_reason: "证据摘要",
     conditional_granger_status: "条件Granger状态",
-    final_rank: "人工复核优先级（展示序号；不参与初筛评分或排序）",
+    final_rank: "复核序号",
     final_recommendation: "可信度审查建议",
     final_decision: "可信度审查建议",
     key_reason: "主要原因（证据摘要）",

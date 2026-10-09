@@ -33,9 +33,9 @@ def test_confounder_review_keeps_formal_result_download_areas():
         assert marker in INDEX_HTML
 
 
-def test_validation_headers_match_and_legacy_review_ui_is_removed():
-    assert '<h2>二次验证</h2>' in INDEX_HTML
-    assert '<h2>第三层可信度审查</h2>' in INDEX_HTML
+def test_validation_guidance_remains_and_legacy_review_ui_is_removed():
+    assert 'id="validationTab"' in INDEX_HTML
+    assert "本层是可信度审查：解释第二层预测价值" in INDEX_HTML
     assert ".secondary-validation-params, .causal-review-params" in INDEX_HTML
 
     removed_markup = [

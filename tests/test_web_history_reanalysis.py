@@ -210,6 +210,7 @@ function renderDownloads(){}
   lastFinalReviewSummaryRows=[{old:true}];lastXgbFoldContextRows=[{old:true}];
   lastTrendSeries=[{old:true}];lastScatterMatrixPayload={old:true};
   excludeWindows=[{start:'old',end:'old'}];lagProfileCache.set('old',{});
+  const oldLagRequestSerial=lagProfileRequestSerial;lastLagProfile={key:'old',rows:[{lag:-2}]};
   el('downloads').innerHTML='old-link';el('validationSummaryTable').textContent='old-stage';
   el('preprocessMode').value='lowpass';el('maxLag').value='7';
   await selectHistoryFile({file_id:'a'.repeat(32),original_filename:'历史.csv'});
@@ -219,6 +220,7 @@ function renderDownloads(){}
   assert.deepEqual(lastFinalReviewSummaryRows,[]);assert.deepEqual(lastXgbFoldContextRows,[]);
   assert.deepEqual(excludeWindows,[]);assert.deepEqual(lastTrendSeries,[]);
   assert.equal(lastScatterMatrixPayload,null);assert.equal(lagProfileCache.size,0);
+  assert(lagProfileRequestSerial>oldLagRequestSerial);assert.equal(lastLagProfile,null);
   assert.equal(el('downloads').innerHTML,'');assert.equal(el('validationSummaryTable').textContent,'');
   assert(!new URL(window.location.href).searchParams.has('run_id'));
   assert.equal(el('preprocessMode').value,'lowpass');assert.equal(el('maxLag').value,'7');

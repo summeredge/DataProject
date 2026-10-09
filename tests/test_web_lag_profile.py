@@ -215,7 +215,17 @@ def test_lag_profile_frontend_guards_races_cache_scope_and_scoring_boundaries():
     assert "panel.dataset.lagProfileKey !== key" in loader
     assert "lastLagProfile = null" in loader
     assert "lagPanel.dataset.lagProfileKey === lastLagProfile.key" in resize
-    assert "clearLagProfileCache()" in upload
+    prepare = INDEX_HTML.split("function prepareFileSelection()", 1)[1].split(
+        "async function selectHistoryFile", 1
+    )[0]
+    history_selection = INDEX_HTML.split("async function selectHistoryFile", 1)[1].split(
+        "async function uploadFile", 1
+    )[0]
+    reset = INDEX_HTML.split("function reset()", 1)[1].split("\n}", 1)[0]
+    assert "prepareFileSelection()" in upload
+    assert "prepareFileSelection()" in history_selection
+    assert "reset()" in prepare
+    assert "clearLagProfileCache()" in reset
     assert "clearLagProfileCache()" in analyze
     assert "Math.abs" not in curve_path
     for score in ["driver_rank", "final_score", "driver_priority_score"]:

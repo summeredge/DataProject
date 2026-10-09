@@ -536,3 +536,20 @@ PR-2 的 JavaScript 状态检查扩展到历史按钮和 URL 共用入口、参�
 - `data_fingerprint` 覆盖所有 fold 实际 train / validation / test 输入：修改
   任意 test / validation / 非首 fold 实际数据都会改变 fingerprint，相同输入
   重复执行稳定，未进入 feature 的无关列变化不影响 fingerprint。
+
+
+## PR-4 历史手动清理
+
+`tests/test_web_history_cleanup.py` 覆盖单项/批量删除、上传元数据、引用冲突、
+预检查取消、执行时新增引用、清空后的根目录及新上传兼容、活动初筛/同步操作及任务登记锁、
+非法 ID、链接、文件缺失、损坏配置、部分失败与真实释放空间。
+Node 行为测试覆盖列表全选/单选、确认取消、不发送修改请求、部分成功保留勾选、
+已加载记录删除后的页面复位与历史刷新；HTTP 测试覆盖两个请求阶段。
+
+回归命令：
+
+```powershell
+& $python -m pytest tests/test_web_history.py tests/test_web_history_reanalysis.py tests/test_web_history_restore.py tests/test_web_history_cleanup.py tests/test_web_tab_layout.py -q
+```
+
+按任务同步修改范围另执行分支确认、后续验证、复核池、XGBoost 和 Web 请求解析测试。

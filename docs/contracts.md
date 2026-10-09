@@ -1000,3 +1000,26 @@ limiting_factors
 API `validationFields` 另行保留五个阶段字段：`initial_screening_lag`、`validation_lag`、
 `conditional_validation_lag`、`screening_model_lift`、`validation_model_lift`；所有 lag 保持
 带符号方向，禁止使用 `abs(lag)` 或 `abs(best_lag)` 改写方向。
+
+
+## PR-4 手动历史清理
+
+`POST /api/history/cleanup` 沿用表单请求：`mode=selected|all`，
+`phase=preview|execute`（默认 preview），`file_ids`、`run_ids` 为逗号分隔的
+32 位小写十六进制 UUID。客户端不能传入路径。preview 不删除文件；取消确认不发送 execute。
+
+响应包含 `storage`（选中对象数量及可清理对象预计大小，包含上传元数据）、
+`conflicts`（kind/id/reason，引用冲突另含 related_analysis_count）、`allowed`，
+以及 `deleted_file_ids`、`deleted_run_ids`、`released_size`。execute 另返回 `complete`；
+只有无冲突、无跳过和无失败时 complete 为 true，部分清理不报告全部成功。
+
+正式执行在 `TASKS_LOCK` 内重新扫描、检查任务状态并删除；所有 Web 上传、初筛启动、
+分支确认、复核池编辑及后续验证/LLM 写入请求在同一锁下临时登记 running 操作，
+初筛后台任务保存其 file_id。运行操作保护其 run_id 和原始数据；关联不能确定的活动操作
+保守阻断清理，存在活动操作时清空全部一律拒绝。
+
+先删除明确选中的分析，再检查仍存在的引用并删除上传数据，最后删除元数据。
+未选中、删除失败或不能安全清理的关联分析阻止上传删除；无法确认关联的保留分析也阻止
+上传删除。旧配置可从 input_path 的 UUID 文件名恢复关联。根目录保留，不自动级联删除。
+仅管理 UUID 上传数据/JSON 元数据和 UUID 分析目录；其他文件跳过并报告。
+根目录、目标及分析目录内部的符号链接/Windows 重解析点拒绝删除。

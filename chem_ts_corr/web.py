@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import asdict, replace
+from functools import wraps
 from datetime import datetime, timezone
 import json
 import math
@@ -20,7 +22,7 @@ from email.policy import default as email_default_policy
 from types import SimpleNamespace
 
 import pandas as pd
-from chem_ts_corr.history import query_history, read_metadata, record_time
+from chem_ts_corr.history import cleanup_history, query_history, read_metadata, record_time
 
 from chem_ts_corr.config import AnalysisConfig as _AnalysisConfig
 from chem_ts_corr.data import (
@@ -185,9 +187,27 @@ def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = T
     server.serve_forever()
 
 
+def _protect_history_read(function):
+    @wraps(function)
+    def protected(self):
+        parsed = urlparse(self.path)
+        if parsed.path in {"/api/columns", "/api/trend", "/api/scatter_matrix", "/api/lag_profile", "/api/result", "/download"}:
+            params = parse_qs(parsed.query)
+            file_id = _single(params, "file_id") if parsed.path in {"/api/columns", "/api/trend", "/api/scatter_matrix"} else ""
+            run_id = _single(params, "run_id") if parsed.path not in {"/api/columns", "/api/trend", "/api/scatter_matrix"} else ""
+            with _history_activity(parsed.path, run_id=run_id, file_id=file_id,
+                                   task_id=_single(params, "task_id") if parsed.path == "/api/result" else ""):
+                function(self)
+        else:
+            function(self)
+
+    return protected
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "ChemTsCorr/0.2"
 
+    @_protect_history_read
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in {"/", "/index.html"}:
@@ -276,6 +296,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            if self.path == "/api/history/cleanup":
+                self._send_json(_history_cleanup_response(self))
+                return
             if self.path == "/api/upload":
                 self._send_json(_upload_response(self))
                 return
@@ -390,8 +413,58 @@ def _is_client_disconnect(exc: BaseException) -> bool:
     return False
 
 
-def _upload_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+
+@contextmanager
+def _history_activity(operation: str, *, run_id: str = "", file_id: str = "", task_id: str = ""):
+    operation_id = uuid.uuid4().hex
+    with TASKS_LOCK:
+        if task_id and not run_id:
+            task = TASKS.get(task_id, {})
+            run_id = task.get("run_id") or task.get("result", {}).get("run_id") or ""
+            file_id = task.get("file_id") or file_id
+        if not _RUN_ID_RE.fullmatch(run_id):
+            run_id = ""
+        if _FILE_ID_RE.fullmatch(file_id.strip().lower()):
+            file_id = file_id.strip().lower()
+        TASKS[operation_id] = {"status": "running", "run_id": run_id,
+                               "file_id": file_id, "operation": operation}
+    try:
+        if run_id and _RUN_ID_RE.fullmatch(run_id):
+            config = read_metadata(RUNS_DIR / run_id / "run_config.json")
+            associated_file = config.get("file_id") or Path(str(config.get("input_path") or "")).stem
+            with TASKS_LOCK:
+                TASKS[operation_id]["file_id"] = associated_file or file_id
+        yield
+    finally:
+        with TASKS_LOCK:
+            TASKS.pop(operation_id, None)
+
+
+def _protect_history_operation(function):
+    @wraps(function)
+    def protected(handler):
+        form = _multipart_form(handler)
+        with _history_activity(function.__name__, run_id=_field(form, "run_id"),
+                               file_id=_field(form, "file_id")):
+            return function(handler, form=form)
+    return protected
+
+
+def _history_cleanup_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
+    phase = _field(form, "phase", "preview")
+    if phase not in {"preview", "execute"}:
+        raise ValueError("不支持的清理阶段")
+    with TASKS_LOCK:
+        active = [task for task in TASKS.values() if task.get("status") == "running"]
+        return cleanup_history(UPLOADS_DIR, RUNS_DIR, mode=_field(form, "mode"),
+                               file_ids=_list_field(form, "file_ids"), run_ids=_list_field(form, "run_ids"),
+                               execute=phase == "execute", active=active)
+
+
+@_protect_history_operation
+def _upload_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     file_item = form["file"] if "file" in form else None
     if file_item is None or not getattr(file_item, "filename", ""):
         raise ValueError("请选择 CSV、Excel 或 TXT 数据文件")
@@ -625,8 +698,9 @@ def _datetime_local(value: pd.Timestamp) -> str:
     return pd.Timestamp(value).strftime("%Y-%m-%dT%H:%M")
 
 
-def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _analyze_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     file_id = _field(form, "file_id")
     encoding = _field(form, "encoding", "utf-8-sig")
     time_column = _field(form, "time_column")
@@ -707,6 +781,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
             "status": "running",
             "message": "等待后台分析启动",
             "run_id": run_id,
+            "file_id": file_id,
             "start_time": now,
             "created_at": now,
             "updated_at": now,
@@ -1193,8 +1268,9 @@ def _branch_context_payload(output_dir: Path) -> dict[str, Any]:
     }
 
 
+@_protect_history_operation
 def _confirm_initial_screening_branch_response(
-    handler: BaseHTTPRequestHandler,
+    handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Confirm an existing screening branch and return the refreshed payload.
 
@@ -1203,7 +1279,7 @@ def _confirm_initial_screening_branch_response(
     screening or re-computes the comparison. Frozen backend error tokens are
     preserved on failure.
     """
-    form = _multipart_form(handler)
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     branch = _field(form, "branch")
     output_dir = _resolve_run_dir(run_id)
@@ -1279,9 +1355,10 @@ def _task_result_response(task_id: str) -> dict[str, Any]:
     return {**previous, **_build_result_payload(run_id, directory, _read_run_config(directory))}
 
 
-def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+@_protect_history_operation
+def _run_enhanced_screening_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
     total_started = time.perf_counter()
-    form = _multipart_form(handler)
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     run_enhanced_screening_for_active_branch(
@@ -1371,8 +1448,9 @@ def _enhanced_validation_summary(
     return summary
 
 
-def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _run_granger_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     run_granger_for_active_branch(
@@ -1391,8 +1469,9 @@ def _run_granger_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     }
 
 
-def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _run_model_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     result = run_model_for_active_branch(
@@ -1424,10 +1503,11 @@ def _run_model_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     }
 
 
+@_protect_history_operation
 def _add_to_verification_review_pool_response(
-    handler: BaseHTTPRequestHandler,
+    handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    form = _multipart_form(handler)
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     variable = _field(form, "variable")
     candidate_source = _field(form, "candidate_source")
@@ -1536,8 +1616,9 @@ def _build_causal_review_candidate_table(
 
 
 
-def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _run_causal_review_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     config = _read_run_config(output_dir)
@@ -1584,8 +1665,9 @@ def _run_causal_review_response(handler: BaseHTTPRequestHandler) -> dict[str, An
     }
 
 
-def _run_xgb_validation_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _run_xgb_validation_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     if not _bool_field(form, "enable_xgb_validation"):
         return {
             "status": "skipped",
@@ -1723,8 +1805,9 @@ def _xgb_response_payload(
     }
 
 
-def _llm_prompt_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _llm_prompt_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     output_dir = _resolve_run_dir(run_id)
     _lock_formal_branch_for_llm(output_dir)
@@ -1763,8 +1846,9 @@ def _llm_connection_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         return {"ok": False, "message": f"API 连接失败：{message}"}
     return {"ok": True, "message": "API 连接成功"}
 
-def _llm_report_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    form = _multipart_form(handler)
+@_protect_history_operation
+def _llm_report_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] | None = None) -> dict[str, Any]:
+    form = form if form is not None else _multipart_form(handler)
     run_id = _field(form, "run_id")
     api_key = _field(form, "api_key")
     output_dir = _resolve_run_dir(run_id)
@@ -3745,6 +3829,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="historyUploads" class="empty">进入历史管理后读取上传记录。</div>
         <h2>历史分析</h2>
         <div id="historyAnalyses" class="empty">进入历史管理后读取分析记录。</div>
+        <div class="actions"><button id="deleteSelectedHistory" disabled>删除选中</button><button id="clearAllHistory">清空全部</button></div>
       </div>
 
       <div id="overviewTab" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overviewTab">
@@ -4082,6 +4167,8 @@ let dataSelectionLocks = 0;
 let currentRunId = "";
 let currentAnalysisContext = {};
 let restoredRunInfo = null;
+const historySelectedFiles = new Set();
+const historySelectedRuns = new Set();
 let recognizedColumns = [];
 let recognizedNumericColumns = [];
 let lastRows = [];
@@ -4202,6 +4289,8 @@ el("copyLlmReport").addEventListener("click", copyLlmReport);
 
 el("upload").addEventListener("click", uploadFile);
 el("refreshHistory").addEventListener("click", refreshHistory);
+el("deleteSelectedHistory").addEventListener("click", () => cleanupHistory("selected"));
+el("clearAllHistory").addEventListener("click", () => cleanupHistory("all"));
 el("analyze").addEventListener("click", analyze);
 el("reset").addEventListener("click", reset);
 el("timeColumn").addEventListener("change", handleProtectedColumnChange);
@@ -4391,6 +4480,8 @@ function lockDataSelection(delta) {
   for (const button of document.querySelectorAll(".history-reanalyze, .history-restore")) {
     button.disabled = busy || (button.dataset.fileId !== undefined && !/^[0-9a-f]{32}$/i.test(button.dataset.fileId));
   }
+  el("deleteSelectedHistory").disabled = dataSelectionLocks > 0 || !(historySelectedFiles.size || historySelectedRuns.size);
+  el("clearAllHistory").disabled = dataSelectionLocks > 0;
 }
 
 function prepareFileSelection() {
@@ -5383,6 +5474,66 @@ function renderHistoryTable(id, headings, rows, emptyText) {
     : escapeHtml(emptyText);
 }
 
+function renderHistorySelection(id, items, key, selected) {
+  const validIds = new Set(items.map(item => item[key]).filter(value => /^[0-9a-f]{32}$/.test(value)));
+  for (const value of selected) if (!validIds.has(value)) selected.delete(value);
+  const table = el(id);
+  const heading = table.querySelector("thead th");
+  if (!heading) return;
+  const all = document.createElement("input");
+  all.type = "checkbox"; all.setAttribute("aria-label", id === "historyUploads" ? "全选上传数据" : "全选历史分析");
+  heading.replaceChildren(all);
+  const boxes = [];
+  const update = () => {
+    all.checked = validIds.size > 0 && selected.size === validIds.size;
+    all.indeterminate = selected.size > 0 && !all.checked;
+    el("deleteSelectedHistory").disabled = dataSelectionLocks > 0 || !(historySelectedFiles.size || historySelectedRuns.size);
+  };
+  table.querySelectorAll("tbody tr").forEach((row, index) => {
+    const value = items[index][key];
+    const box = document.createElement("input");
+    box.type = "checkbox"; box.checked = selected.has(value); box.disabled = !validIds.has(value);
+    box.setAttribute("aria-label", `选择 ${value}`);
+    box.addEventListener("change", () => { if (box.checked) selected.add(value); else selected.delete(value); update(); });
+    row.firstElementChild.replaceChildren(box); boxes.push([box, value]);
+  });
+  all.addEventListener("change", () => {
+    for (const [box, value] of boxes) if (!box.disabled) { box.checked = all.checked; if (all.checked) selected.add(value); else selected.delete(value); }
+    update();
+  });
+  update();
+}
+
+async function cleanupHistory(mode) {
+  if (dataSelectionLocks > 0) return setStatus("当前操作尚未完成，请稍后清理。", "warning");
+  if (mode === "selected" && !(historySelectedFiles.size || historySelectedRuns.size)) return;
+  lockDataSelection(1);
+  let result = null;
+  try {
+    const form = new FormData();
+    form.append("mode", mode); form.append("phase", "preview");
+    form.append("file_ids", [...historySelectedFiles].join(",")); form.append("run_ids", [...historySelectedRuns].join(","));
+    const preview = await postForm("/api/history/cleanup", form);
+    const conflicts = preview.conflicts.map(item => `${item.id}：${item.reason}${item.related_analysis_count ? `（${item.related_analysis_count} 条关联分析）` : ""}`).join("\n");
+    const storage = preview.storage;
+    if (!preview.allowed) { el("historyStatus").textContent = `选中上传 ${storage.upload_count} 个文件、分析 ${storage.analysis_count} 条记录，预计释放 ${historySize(storage.total_size)}。${conflicts || "没有可清理的历史记录。"}`; return; }
+    const message = `${mode === "all" ? "清空全部历史记录" : "删除选中历史记录"}：上传 ${storage.upload_count} 个文件（${historySize(storage.upload_size)}），分析 ${storage.analysis_count} 条记录（${historySize(storage.analysis_size)}）。\n预计释放 ${historySize(storage.total_size)}。${conflicts ? `\n以下项目将跳过：\n${conflicts}` : ""}\n删除后无法恢复，确认继续？`;
+    if (!window.confirm(message)) { el("historyStatus").textContent = "已取消清理，历史文件保持不变。"; return; }
+    form.set("phase", "execute");
+    result = await postForm("/api/history/cleanup", form);
+    for (const value of result.deleted_file_ids) historySelectedFiles.delete(value);
+    for (const value of result.deleted_run_ids) historySelectedRuns.delete(value);
+  } catch (error) {
+    el("historyStatus").textContent = `清理失败：${error.message}`;
+  } finally {
+    lockDataSelection(-1);
+  }
+  if (!result) return;
+  if (result.deleted_file_ids.includes(fileId) || result.deleted_run_ids.includes(currentRunId)) reset();
+  await refreshHistory();
+  el("historyStatus").textContent = `${result.complete ? "清理完成" : "清理未全部完成"}：已删除 ${result.deleted_file_ids.length} 个上传文件、${result.deleted_run_ids.length} 条分析，实际释放 ${historySize(result.released_size)}。` + result.conflicts.map(item => `${item.id}：${item.reason}`).join("；");
+}
+
 async function refreshHistory() {
   const button = el("refreshHistory");
   if (button.disabled) return;
@@ -5398,8 +5549,8 @@ async function refreshHistory() {
       ["历史分析", `${storage.analysis_count} 条记录`, historySize(storage.analysis_size)],
       ["合计", "—", historySize(storage.total_size)],
     ], "");
-    renderHistoryTable("historyUploads", ["原始文件名", "上传时间", "文件大小", "关联分析", "文件标识", "操作"],
-      data.uploads.map(item => [item.original_filename || `${item.file_id}（原始名称未知）`, historyTime(item.uploaded_at, item.time_source), historySize(item.file_size), item.analysis_count, item.file_id, ""]), "暂无已上传数据。");
+    renderHistoryTable("historyUploads", ["选择", "原始文件名", "上传时间", "文件大小", "关联分析", "文件标识", "操作"],
+      data.uploads.map(item => ["", item.original_filename || `${item.file_id}（原始名称未知）`, historyTime(item.uploaded_at, item.time_source), historySize(item.file_size), item.analysis_count, item.file_id, ""]), "暂无已上传数据。");
     el("historyUploads").querySelectorAll("tbody tr").forEach((row, index) => {
       const item = data.uploads[index];
       const button = document.createElement("button");
@@ -5410,8 +5561,8 @@ async function refreshHistory() {
       button.addEventListener("click", () => selectHistoryFile(item));
       row.lastElementChild.appendChild(button);
     });
-    renderHistoryTable("historyAnalyses", ["目标变量", "原始文件", "分析时间", "结果大小", "分析标识", "操作"],
-      data.analyses.map(item => [item.target || "未知", item.original_filename || (item.file_id ? `${item.file_id}（原始名称未知${item.upload_exists ? "" : "，上传文件缺失"}）` : "未知"), historyTime(item.created_at, item.time_source), historySize(item.result_size), item.run_id, ""]), "暂无历史分析记录。");
+    renderHistoryTable("historyAnalyses", ["选择", "目标变量", "原始文件", "分析时间", "结果大小", "分析标识", "操作"],
+      data.analyses.map(item => ["", item.target || "未知", item.original_filename || (item.file_id ? `${item.file_id}（原始名称未知${item.upload_exists ? "" : "，上传文件缺失"}）` : "未知"), historyTime(item.created_at, item.time_source), historySize(item.result_size), item.run_id, ""]), "暂无历史分析记录。");
     el("historyAnalyses").querySelectorAll("tbody tr").forEach((row, index) => {
       const button = document.createElement("button");
       button.className = "secondary history-reanalyze history-restore";
@@ -5420,6 +5571,9 @@ async function refreshHistory() {
       button.addEventListener("click", () => restoreAnalysis(data.analyses[index].run_id));
       row.lastElementChild.appendChild(button);
     });
+    renderHistorySelection("historyUploads", data.uploads, "file_id", historySelectedFiles);
+    renderHistorySelection("historyAnalyses", data.analyses, "run_id", historySelectedRuns);
+    el("deleteSelectedHistory").disabled = dataSelectionLocks > 0 || !(historySelectedFiles.size || historySelectedRuns.size);
     el("historyStatus").textContent = "已读取最新磁盘记录。";
   } catch (error) {
     el("historyStorage").innerHTML = "";

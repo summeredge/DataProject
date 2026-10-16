@@ -90,6 +90,14 @@ def test_table_width_uses_content_fit_with_page_maximum():
     assert "width:100%;table-layout:fixed" not in compact
 
 
+def test_page_main_layout_is_not_width_capped_so_results_fill_page_width():
+    compact = INDEX_HTML.replace(" ", "")
+    main_rules = compact.split("main{")[1:]
+    assert main_rules
+    for rule in main_rules:
+        assert "max-width" not in rule.split("}", 1)[0]
+
+
 def test_overview_recommendations_preserve_backend_default_order():
     render = INDEX_HTML.split("function renderAnalysisResult(data)", 1)[1].split("function sleep", 1)[0]
     assert 'delete tableSortStates["overviewTop"];' in render

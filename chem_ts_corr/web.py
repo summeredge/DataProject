@@ -3308,7 +3308,6 @@ INDEX_HTML = r"""<!doctype html>
     }
     /* 主布局：羊皮纸画布 + 白色面板 */
     main {
-      max-width:1560px; margin:0 auto;
       padding:20px 28px 56px;
       gap:24px;
       align-items:start;

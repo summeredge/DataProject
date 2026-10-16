@@ -69,3 +69,56 @@ def test_start_app_still_uses_selected_python_command_for_checks():
     assert '%PYTHON_CMD%' in text
     assert 'Checking Python dependencies' in text
     assert 'Starting local web app' in text
+
+
+def test_start_app_uses_dynamic_port_and_python_browser_launch():
+    text = _start_app_text()
+    assert re.search(r"cli serve --host 127\.0\.0\.1 --port 0", text)
+    assert "--no-open" not in text
+    assert "APP_URL" not in text
+    assert "Invoke-WebRequest" not in text
+
+
+def test_serve_command_defaults_to_dynamic_port():
+    from chem_ts_corr.cli import build_parser
+
+    assert build_parser().parse_args(["serve"]).port == 0
+    assert build_parser().parse_args(["serve", "--port", "8765"]).port == 8765
+
+
+def test_web_server_uses_actual_bound_port_for_url(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+
+    from chem_ts_corr import web
+
+    opened_urls = []
+
+    class StubServer:
+        server_port = 52341
+
+        def __init__(self, address, _handler):
+            assert address == ("127.0.0.1", 0)
+
+        def serve_forever(self):
+            pass
+
+    class ImmediateTimer:
+        def __init__(self, _delay, callback):
+            self.callback = callback
+
+        def start(self):
+            self.callback()
+
+    monkeypatch.setattr(web, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(web, "UPLOADS_DIR", tmp_path / "uploads")
+    monkeypatch.setattr(web, "ThreadingHTTPServer", StubServer)
+    monkeypatch.setattr(web, "threading", SimpleNamespace(Timer=ImmediateTimer))
+    monkeypatch.setattr(web.webbrowser, "open", opened_urls.append)
+
+    web.run_server()
+
+    assert opened_urls == ["http://127.0.0.1:52341"]
+    assert "http://127.0.0.1:52341" in capsys.readouterr().out
+    assert (tmp_path / "runs").is_dir()
+    assert (tmp_path / "uploads").is_dir()
+

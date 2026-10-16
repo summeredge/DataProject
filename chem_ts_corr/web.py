@@ -175,11 +175,11 @@ RECOMMENDED_CANDIDATE_COLUMNS = (
 )
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
+def run_server(host: str = "127.0.0.1", port: int = 0, open_browser: bool = True) -> None:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((host, port), _Handler)
-    url = f"http://{host}:{port}"
+    url = f"http://{host}:{server.server_port}"
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     print(f"本地服务已启动：{url}")
@@ -2980,7 +2980,7 @@ def _safe_read_result_csv(path: Path) -> pd.DataFrame:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local Chem TS Corr web UI.")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args()
     run_server(args.host, args.port, open_browser=not args.no_open)
@@ -3288,17 +3288,6 @@ INDEX_HTML = r"""<!doctype html>
       font-size:15px;
       line-height:1.5;
       -webkit-font-smoothing:antialiased;
-    }
-    /* 全局导航：纯黑细条（global-nav） */
-    .global-nav {
-      position:sticky; top:0; z-index:60;
-      display:flex; align-items:center; justify-content:center;
-      height:44px; padding:0 20px;
-      background:var(--surface-black); color:#fff;
-    }
-    .global-nav-brand {
-      font-size:12px; font-weight:600; letter-spacing:-.12px;
-      color:#fff; white-space:nowrap;
     }
     /* 页头 Hero：大标题 + 副标题 */
     header {
@@ -3694,9 +3683,6 @@ INDEX_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
-  <nav class="global-nav" aria-label="主导航">
-    <span class="global-nav-brand">化工装置时序相关性分析</span>
-  </nav>
   <header>
     <h1>化工装置时序相关性分析</h1>
     <div class="subtitle">浏览器负责上传和展示，Python 后台处理大数据并生成下载结果。</div>

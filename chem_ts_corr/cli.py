@@ -147,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = subparsers.add_parser("serve", help="run the local web UI")
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--port", type=int, default=0)
     serve.add_argument("--no-open", action="store_true")
     return parser
 

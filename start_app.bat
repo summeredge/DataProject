@@ -2,7 +2,6 @@
 setlocal
 cd /d "%~dp0"
 
-set "APP_URL=http://127.0.0.1:8765/"
 set "PYTHON_CMD="
 
 where python >nul 2>nul
@@ -38,11 +37,8 @@ if errorlevel 1 (
 )
 
 echo Starting local web app...
-echo Open this URL if the browser does not open automatically:
-echo %APP_URL%
+echo The browser will open automatically. The actual URL will be shown below.
 
-start "" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$url='%APP_URL%'; for($i=0; $i -lt 120; $i++){ try { $response=Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 1; if($response.StatusCode -ge 200){ Start-Process $url; exit 0 } } catch {}; Start-Sleep -Milliseconds 250 }; Start-Process $url"
-
-%PYTHON_CMD% -m chem_ts_corr.cli serve --host 127.0.0.1 --port 8765 --no-open
+%PYTHON_CMD% -m chem_ts_corr.cli serve --host 127.0.0.1 --port 0
 
 pause

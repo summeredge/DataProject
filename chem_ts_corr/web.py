@@ -311,6 +311,9 @@ class _Handler(BaseHTTPRequestHandler):
             if self.path == "/api/restore_exclude_window":
                 self._send_json(_restore_exclude_window_response(self))
                 return
+            if self.path == "/api/preview_exclusions":
+                self._send_json(_preview_exclusions_response(self))
+                return
             if self.path == "/api/restore_all_exclude_windows":
                 self._send_json(_restore_all_exclude_windows_response(self))
                 return
@@ -543,6 +546,28 @@ def _exclude_window_payload(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _exclude_conditions_field(form) -> list[dict[str, Any]]:
+    try:
+        conditions = json.loads(_field(form, "exclude_conditions", "[]"))
+    except (ValueError, TypeError) as exc:
+        raise ValueError("数值排除条件必须是有效 JSON") from exc
+    if not isinstance(conditions, list):
+        raise ValueError("数值排除条件必须是列表")
+    return conditions
+
+
+def _preview_exclusions_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    form = _multipart_form(handler)
+    context = _exclude_window_context(
+        _field(form, "file_id"), _field(form, "time_column"), _field(form, "encoding", "auto")
+    )
+    with EXCLUDE_WINDOW_CONTEXTS_LOCK:
+        stats = exclude_window_stats(
+            context["frame"], context["exclude_windows"], _exclude_conditions_field(form)
+        )
+    return {"stats": stats}
+
+
 def _exclude_window_response(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     form = _multipart_form(handler)
     context = _exclude_window_context(
@@ -753,6 +778,7 @@ def _analyze_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] |
         residual_control_columns=residual_control_columns,
         force_include_variables=force_include_variables,
         excluded_columns=excluded_columns,
+        exclude_conditions=_exclude_conditions_field(form),
         exclude_control_columns_from_candidates=_bool_field(form, "exclude_control_columns_from_candidates") if "exclude_control_columns_from_candidates" in form else True,
         enable_granger=False,
         enable_model=False,
@@ -773,6 +799,12 @@ def _analyze_response(handler: BaseHTTPRequestHandler, *, form: dict[str, Any] |
                 dict(window) for window in exclude_context["exclude_windows"]
             ]
     config = replace(config, exclude_windows=exclude_windows)
+    if config.exclude_conditions:
+        stats = exclude_window_stats(
+            exclude_context["frame"], exclude_windows, config.exclude_conditions
+        )
+        if not stats["remaining_rows"]:
+            raise ValueError("数据排除后没有可用于分析的数据，请调整时间窗口或数值条件")
     task_id = uuid.uuid4().hex
     now = time.time()
     with TASKS_LOCK:
@@ -1134,7 +1166,8 @@ def _restore_run_payload(run_id: str) -> dict[str, Any]:
         parameters.pop(name, None)
     if context is not None:
         parameters.update(preprocess_mode=context["selected_preprocessing_mode"],
-                          resample_rule=context["resample_rule"], exclude_windows=context["exclude_windows"])
+                          resample_rule=context["resample_rule"], exclude_windows=context["exclude_windows"],
+                          exclude_conditions=context["exclude_conditions"])
         if context["lowpass_tau_minutes"] is not None:
             parameters["lowpass_tau_minutes"] = context["lowpass_tau_minutes"]
         if context["selected_preprocessing_mode"] == "lowpass_diff":
@@ -2204,6 +2237,7 @@ def _prepared_frame_for_secondary(
         segment_mode=config.segment_mode,
         segment_min=config.segment_min,
         segment_max=config.segment_max,
+        max_lag=config.max_lag,
     )
     target_mask = operating_segment_mask(
         cleaned,
@@ -2299,6 +2333,7 @@ def _scaled_frame_cache_key(
         tuple(config.force_include_variables or []),
         tuple(config.excluded_columns or []),
         tuple((window["start"], window["end"]) for window in config.exclude_windows),
+        tuple((rule["column"], rule["operator"], rule["value"]) for rule in config.exclude_conditions),
         protected_columns,
         config.resample_rule,
         config.min_valid_ratio,
@@ -3028,7 +3063,12 @@ INDEX_HTML = r"""<!doctype html>
     .single-dropdown > summary::after { content:"⌄"; font-size:14px; line-height:1; }
     .single-dropdown[open] > summary::after { content:"⌃"; }
     .single-dropdown > summary::-webkit-details-marker { display:none; }
-    .single-dropdown > .select-filter { width:calc(100% - 16px); margin:6px 8px 0; }
+    .dropdown-panel > .select-filter { width:calc(100% - 16px); margin:6px 8px 0; }
+    .dropdown-panel { position:fixed; inset:auto; margin:0; padding:0; box-sizing:border-box; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0003; overflow:auto; }
+    .dropdown-panel:popover-open { display:flex; flex-direction:column; gap:4px; }
+    .dropdown-panel > .select-filter, .dropdown-panel > .multi-filter { flex-shrink:0; }
+    .dropdown-panel > .single-options, .dropdown-panel > .multi-options { min-height:0; min-width:0; flex:0 1 auto; }
+    .single-dropdown > summary { white-space:nowrap; overflow:hidden; }
     .single-options { max-height:180px; overflow:auto; border-top:1px solid var(--line); padding:6px 8px; display:grid; gap:2px; }
     .single-option { border-radius:4px; padding:6px 8px; background:transparent; color:var(--text); font-size:var(--font-xs); font-weight:400; text-align:left; }
     .single-option:hover, .single-option[aria-selected="true"] { background:var(--surface-muted); }
@@ -3256,6 +3296,10 @@ INDEX_HTML = r"""<!doctype html>
     #finalReviewSummaryTable tr.selected td:nth-child(-n+2) { background:var(--info-bg); }
     #finalReviewSummaryTable .status-label { white-space:nowrap; padding:2px 5px; }
     #finalReviewSummaryTable .small-button { width:80px; min-height:28px; margin:0; padding:4px 8px; white-space:nowrap; }
+    .exclude-condition { display:grid; grid-template-columns:minmax(0,1fr) 42px minmax(42px,.55fr) auto; gap:4px; margin-bottom:8px; align-items:end; }
+    .exclude-condition label { min-width:0; font-size:10px; }
+    #excludeConditions select, #excludeConditions input { width:100%; min-width:0; height:28px; min-height:28px; box-sizing:border-box; padding:4px 3px; font-size:10px; }
+    #excludeConditions button { height:28px; min-height:28px; padding:4px 3px; font-size:10px; }
   </style>
   <style>
     /* ============================================================
@@ -3750,6 +3794,11 @@ INDEX_HTML = r"""<!doctype html>
               </details>
             </label>
             <div class="help">选中的列将在所有分析、验证和图表处理前删除；原始上传文件不会被修改。</div>
+            <div class="control-group-title">按数值条件排除</div>
+            <div id="excludeConditions"></div>
+            <button id="addExcludeCondition" type="button" class="secondary">+ 添加条件</button>
+            <div class="help">满足任意一条条件即排除对应时间点，与时间窗口合并去重；仅对新分析生效。</div>
+            <div id="excludeConditionStats" class="help" role="status" aria-live="polite">请先上传并识别数据。</div>
           </div>
           <div class="control-group">
             <div class="control-group-title">工况与残差控制</div>
@@ -4209,6 +4258,7 @@ let trendDefaultStart = "";
 let trendDefaultEnd = "";
 let trendSelection = null;
 let excludeWindows = [];
+let exclusionPreviewRevision = 0;
 let excludeWindowStats = { exclude_window_count: 0, excluded_rows: 0, excluded_ratio: 0 };
 let lastScatterMatrixPayload = null;
 let scatterMatrixResizeTimer = null;
@@ -4229,6 +4279,8 @@ el("trendEnd").addEventListener("input", markTrendTimeRangeManual);
 el("trendMaxPoints").addEventListener("change", updateAutoTrendTimeRange);
 el("clearTrendSelection").addEventListener("click", clearTrendSelection);
 el("addExcludeWindow").addEventListener("click", addExcludeWindow);
+el("addExcludeCondition").addEventListener("click", () => addExcludeCondition());
+el("timeColumn").addEventListener("change", () => void previewExclusions());
 el("restoreAllExcludeWindows").addEventListener("click", restoreAllExcludeWindows);
 el("drawScatterMatrix").addEventListener("click", drawScatterMatrix);
 el("preprocessMode").addEventListener("change", updatePreprocessControls);
@@ -4597,6 +4649,7 @@ async function loadColumns() {
   el("analyze").disabled = false;
   el("drawTrend").disabled = data.numericColumns.length < 1;
   el("drawScatterMatrix").disabled = data.numericColumns.length < 1;
+    void previewExclusions();
     const timeColumnStatus = data.autoTimeColumn ? `已自动识别时间列：${data.autoTimeColumn}。` : "";
     setStatus(`${timeColumnStatus}列识别完成。编码：${data.encoding}。采样读取 ${data.sampleRows} 行，识别到 ${data.columns.length} 列。`, "success");
     return true;
@@ -4643,6 +4696,7 @@ async function analyze() {
     form.append("residual_control_columns", getCapacitySelection().join(","));
     form.append("force_include_variables", getForceIncludeSelection().join(","));
     form.append("excluded_columns", getExcludedColumnSelection().join(","));
+    form.append("exclude_conditions", JSON.stringify(getExcludeConditions()));
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
@@ -5608,7 +5662,7 @@ function handleTabKeydown(event, button) {
 }
 
 async function postForm(url, form) {
-  const locksData = url !== "/api/llm_connection";
+  const locksData = url !== "/api/llm_connection" && url !== "/api/preview_exclusions";
   if (locksData) lockDataSelection(1);
   try {
     const response = await fetch(url, { method: "POST", body: form });
@@ -5618,6 +5672,41 @@ async function postForm(url, form) {
   } finally {
     if (locksData) lockDataSelection(-1);
   }
+}
+
+function setupDropdownPanel(dropdown, contents) {
+  const panel = document.createElement("div");
+  panel.className = "dropdown-panel";
+  panel.setAttribute("popover", "auto");
+  panel.append(...contents);
+  dropdown.appendChild(panel);
+  const position = () => {
+    const rect = dropdown.querySelector("summary").getBoundingClientRect();
+    const width = Math.min(rect.width, window.innerWidth - 16);
+    const below = Math.max(0, window.innerHeight - rect.bottom - 12);
+    const above = Math.max(0, rect.top - 12);
+    const upwards = below < 240 && above > below;
+    panel.style.width = `${width}px`;
+    panel.style.maxHeight = `${Math.min(280, upwards ? above : below)}px`;
+    panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))}px`;
+    panel.style.top = `${upwards ? rect.top - panel.getBoundingClientRect().height - 4 : rect.bottom + 4}px`;
+  };
+  dropdown.addEventListener("toggle", () => {
+    if (dropdown.open) {
+      panel.showPopover();
+      position();
+      window.addEventListener("resize", position);
+      document.addEventListener("scroll", position, true);
+    } else {
+      panel.hidePopover();
+      window.removeEventListener("resize", position);
+      document.removeEventListener("scroll", position, true);
+    }
+  });
+  panel.addEventListener("toggle", () => {
+    if (!panel.matches(":popover-open")) dropdown.open = false;
+  });
+  panel.addEventListener("input", position);
 }
 
 function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不分段") {
@@ -5650,7 +5739,8 @@ function searchableSelect(select, values, allowEmpty = false, emptyLabel = "不�
     select.tabIndex = -1;
     select.setAttribute("aria-hidden", "true");
     select.addEventListener("change", () => syncSearchableSelect(select));
-    dropdown.append(summary, filter, empty, options, select);
+    dropdown.append(summary, select);
+    setupDropdownPanel(dropdown, [filter, empty, options]);
   }
   renderSearchableSelect(select);
 }
@@ -5743,6 +5833,7 @@ function searchableMultiOptions(box) {
     empty.textContent = "未找到匹配的位号";
     empty.hidden = true;
     box.insertAdjacentElement("beforebegin", empty);
+    setupDropdownPanel(box.closest(".multi-dropdown"), [filter, empty, box]);
   }
   filterMultiOptions(box);
 }
@@ -5873,10 +5964,60 @@ function setTrendWindowFromSelection(start, end) {
   updateTrendSelectionInfo();
 }
 
+function getExcludeConditions() {
+  return Array.from(el("excludeConditions").children).map((row) => {
+    const value = row.querySelector("input").value.trim();
+    if (!value || !Number.isFinite(Number(value))) throw new Error("数值排除条件的比较值必须是有限数值");
+    const column = row.querySelector("select").value;
+    if (!column) throw new Error("请选择数值排除条件的变量");
+    return {column, operator: row.querySelectorAll("select")[1].value, value: Number(value)};
+  });
+}
+
+function addExcludeCondition(condition = {}) {
+  const row = document.createElement("div");
+  row.className = "exclude-condition";
+  row.innerHTML = '<label>条件变量<select aria-label="条件变量"></select></label><label>比较条件<select aria-label="比较条件"></select></label><label>比较值<input type="number" step="any" aria-label="比较值"></label><button type="button" class="secondary">删除</button>';
+  const [column, operator] = row.querySelectorAll("select");
+  column.add(new Option("请选择", ""));
+  recognizedNumericColumns.forEach((name) => column.add(new Option(name, name)));
+  column.value = condition.column || "";
+  [[">", ">"], [">=", "≥"], ["<", "<"], ["<=", "≤"], ["=", "="], ["!=", "≠"]].forEach(([value, label]) => operator.add(new Option(label, value)));
+  operator.value = condition.operator || ">";
+  row.querySelector("input").value = condition.value ?? "";
+  row.addEventListener("input", () => void previewExclusions());
+  row.addEventListener("change", () => void previewExclusions());
+  row.querySelector("button").addEventListener("click", () => { row.remove(); void previewExclusions(); });
+  el("excludeConditions").appendChild(row);
+  void previewExclusions();
+}
+
+async function previewExclusions() {
+  const revision = ++exclusionPreviewRevision;
+  const status = el("excludeConditionStats");
+  if (!fileId || !el("timeColumn").value) { status.textContent = "请先上传并识别数据。"; return; }
+  try {
+    const form = new FormData();
+    form.append("file_id", fileId);
+    form.append("time_column", el("timeColumn").value);
+    form.append("encoding", "auto");
+    form.append("exclude_conditions", JSON.stringify(getExcludeConditions()));
+    status.textContent = "正在预览排除点数…";
+    const {stats} = await postForm("/api/preview_exclusions", form);
+    if (revision !== exclusionPreviewRevision) return;
+    const count = (value) => Number(value).toLocaleString("zh-CN");
+    status.textContent = `预计排除：${count(stats.excluded_rows)} / ${count(stats.original_rows)} 点（${(stats.excluded_ratio * 100).toFixed(1)}%）；剩余：${count(stats.remaining_rows)} 点。`;
+    if (!stats.remaining_rows) status.textContent += "排除后没有可用于分析的数据，请调整条件。";
+  } catch (error) {
+    if (revision === exclusionPreviewRevision) status.textContent = error.message || String(error);
+  }
+}
+
 function updateExcludeWindowState(windows, stats) {
   excludeWindows = Array.isArray(windows) ? windows : [];
   excludeWindowStats = stats || { exclude_window_count: 0, excluded_rows: 0, excluded_ratio: 0 };
   renderExcludeWindows();
+  void previewExclusions();
 }
 
 function renderExcludeWindows() {
@@ -9086,6 +9227,7 @@ function reset() {
   recognizedColumns = [];
   recognizedNumericColumns = [];
   lastRows = [];
+  el("excludeConditions").replaceChildren();
   lastRecommendedRows = [];
   lastGrangerRows = [];
   lastImportanceRows = [];
@@ -9308,6 +9450,9 @@ async function restoreAnalysis(runId) {
     for (const id of ["timeColumn", "targetColumn", "segmentColumn"]) syncSearchableSelect(el(id));
     updatePreprocessControls();
     updateExcludeWindowState(info.excludeWindows, info.excludeWindowStats);
+    el("excludeConditions").replaceChildren();
+    (config.exclude_conditions || []).forEach(addExcludeCondition);
+    void previewExclusions();
     restoredRunInfo = info;
     renderAnalysisResult(data);
     el("enableXgbValidation").checked = Boolean(config.enable_xgb_validation || (data.xgbResult && data.xgbResult.status !== "not_run"));

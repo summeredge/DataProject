@@ -126,6 +126,7 @@ def test_frontend_selection_reset_busy_guard_and_failure():
         "restoreAnalysis", "restoreRunFromUrl", "historyTime", "setDownstreamGate", "updateXgbRunAvailability",
         "isRestoredRunReadOnly", "updateBranchSelectionUi", "processedBranchLabel",
         "confirmInitialScreeningBranch", "addToVerificationReviewPool",
+        "getExcludeConditions", "addExcludeCondition", "previewExclusions",
     ])
     harness = r'''
 const assert = require('node:assert/strict');
@@ -134,7 +135,8 @@ const buttons = [{dataset:{fileId:'a'.repeat(32)},disabled:false}];
 const document = {
   getElementById(id) {
     if (!elements.has(id)) elements.set(id, {value:'',innerHTML:'',textContent:'',files:[],
-      disabled:false,hidden:false,checked:false,scrollIntoView(){},
+      disabled:false,hidden:false,checked:false,scrollIntoView(){},children:[],
+      replaceChildren(){this.children=[];},
       options:[{value:'raw'},{value:'lowpass'}],appendChild(option){this.options.push(option)},
       classList:{contains(){return true}}});
     return elements.get(id);

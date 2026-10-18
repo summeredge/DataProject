@@ -1,5 +1,17 @@
 # Contracts
 
+## 按数值条件排除
+
+`AnalysisConfig.exclude_conditions` 默认 `[]`；每项仅包含 `column`、`operator`、`value`。
+运算符为 `>`、`>=`、`<`、`<=`、`=`、`!=`，阈值为有限数值。原始数据上的条件按 OR
+组合，与 `exclude_windows` 取并集并按时间点去重；缺失或非有限的变量值不命中任何条件。
+条件在强制剔除列、重采样及预处理前应用，不自动删除条件变量。预览端点
+`POST /api/preview_exclusions` 使用当前文件、时间列、窗口和提交的条件返回 `stats`：
+`original_rows`、`excluded_rows`、`remaining_rows`、`excluded_ratio`、`exclude_window_count`。
+非法条件明确报错；排除后无数据时不能启动新分析。条件随 `run_config.json` 保存，并在
+`preprocessing_context.json` 中与联合统计冻结，后续阶段只读取冻结配置。历史文件缺少字段
+按空条件处理；新上传或切换文件清空待分析条件；修改待分析条件不会改写已有运行。
+
 ## 只读历史记录（PR-1）
 
 `GET /api/history` 每次扫描 `reports/uploads/` 与 `reports/web_runs/`，返回

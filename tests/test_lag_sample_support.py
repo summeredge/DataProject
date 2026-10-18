@@ -78,3 +78,57 @@ def test_support_is_per_variable_and_does_not_remove_real_zero():
     peak = build_lag_peak_quality(pd.DataFrame(rows), 3)
     assert set(peak.variable) == {"short", "long"}
     assert peak.best_score.eq(0.0).all()
+
+
+@pytest.mark.parametrize("start,seed", [(0, 1), (0, 7), (15, 4), (15, 8), (30, 1), (30, 4)])
+def test_narrow_regime_cannot_select_five_to_seven_pair_noise_peaks(start, seed, tmp_path):
+    rng = np.random.default_rng(seed)
+    frame = pd.DataFrame({"target": rng.normal(size=40), "noise": rng.normal(size=40),
+                          "load": ((np.arange(40) >= start) & (np.arange(40) < start + 10)).astype(float)},
+                         index=pd.date_range("2026-01-01", periods=40, freq="min"))
+    config = AnalysisConfig(input_path=Path("unused"), time_column="time", target="target",
+                            output_dir=tmp_path, max_lag=35, segment_column="load",
+                            segment_mode="custom", segment_min=1.0, segment_max=1.0,
+                            skip_rolling_corr=True)
+    tables = analyze_numeric_frame(frame, config)
+    scores = tables.lag_scores.loc[tables.lag_scores.variable.eq("noise")]
+    assert scores.n.max() == 10
+    best = tables.ranked_features.set_index("variable").loc["noise"]
+    assert best.n >= 8
+    if (start, seed) in {(0, 1), (0, 7), (15, 8)}:
+        assert best.candidate_grade not in {"A", "B"}
+    peak = tables.lag_peak_quality.set_index("variable").loc["noise"]
+    assert int(peak.best_lag) == int(best.lag)
+    near = scores.loc[scores.n.ge(8) & scores[["abs_pearson", "abs_spearman"]].max(axis=1).ge(peak.best_score * 0.95)]
+    assert peak.near_peak_lag_count == len(near)
+    assert peak.near_peak_lag_min == near.lag.min()
+    assert peak.near_peak_lag_max == near.lag.max()
+    assert scores.loc[scores.n.between(5, 7), "pearson"].notna().any()
+
+
+@pytest.mark.parametrize("lag", [-2, 2])
+def test_ten_row_true_relationship_keeps_eight_pair_peak(lag):
+    rng = np.random.default_rng(43)
+    frame = pd.DataFrame({"target": rng.normal(size=10)},
+                         index=pd.date_range("2026-01-01", periods=10, freq="min"))
+    frame["x"] = frame.target.shift(-lag).fillna(0.0)
+    scores = compute_lag_scores(frame, "target", 3)
+    best = summarize_best_lags(scores).iloc[0]
+    peak = build_lag_peak_quality(scores, 3).iloc[0]
+    assert int(best.lag) == int(peak.best_lag) == lag
+    assert best.n == 8
+    assert peak.near_peak_lag_min == peak.near_peak_lag_max == lag
+
+
+@pytest.mark.parametrize("count", [5, 6, 7])
+def test_computable_but_unsupported_short_window_has_no_peak(count):
+    rng = np.random.default_rng(63)
+    frame = pd.DataFrame({"target": rng.normal(size=40), "x": rng.normal(size=40)},
+                         index=pd.date_range("2026-01-01", periods=40, freq="min"))
+    frame.loc[frame.index[count:], "x"] = np.nan
+    mask = pd.Series(np.arange(40) < 10, index=frame.index)
+    scores = compute_lag_scores(frame, "target", 35, target_mask=mask)
+    assert scores.n.max() == count
+    assert scores.pearson.notna().any()
+    assert summarize_best_lags(scores).empty
+    assert build_lag_peak_quality(scores, 35).empty

@@ -157,7 +157,7 @@ def compute_lag_scores(
 def _supported_lag_scores(lag_scores: pd.DataFrame) -> pd.DataFrame:
     # Relative support rejects tiny edge overlaps; the cap preserves well-sampled long lags.
     peak_n = lag_scores.groupby("variable")["n"].transform("max")
-    minimum_n = np.ceil(peak_n * 0.5).clip(lower=5, upper=20)
+    minimum_n = np.ceil(peak_n * 0.5).clip(lower=8, upper=20)
     return lag_scores.loc[lag_scores["n"].ge(minimum_n)]
 
 

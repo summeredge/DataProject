@@ -10,6 +10,8 @@ from chem_ts_corr.time_axis import (
     PHYSICAL_GAP_STARTS_ATTR,
     SAMPLE_PERIOD_NS_ATTR,
     infer_sample_period_ns,
+    lagged_series,
+    physical_gap_starts,
     preserve_sample_period,
     preserve_time_axis_metadata,
     sample_period_ns,
@@ -96,6 +98,21 @@ def operating_segment_mask(
     return mask
 
 
+def _positive_lag_source_mask(
+    frame: pd.DataFrame, target_mask: pd.Series, max_lag: int
+) -> pd.Series:
+    sources = target_mask.copy()
+    if bool(sources.all()):
+        return sources
+    period_ns = sample_period_ns(frame)
+    starts = physical_gap_starts(frame)
+    for lag in range(1, max_lag + 1):
+        sources |= lagged_series(
+            target_mask, frame.index, -lag, period_ns=period_ns, forced_starts=starts
+        ).eq(True)
+    return sources
+
+
 def preprocess_frame(
     frame: pd.DataFrame,
     target: str,
@@ -109,11 +126,13 @@ def preprocess_frame(
     segment_mode: str = "all",
     segment_min: float | None = None,
     segment_max: float | None = None,
+    max_lag: int = 0,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     if resample_rule:
         frame = _resample_frame(frame, resample_rule, period_ns)
         period_ns = infer_sample_period_ns(frame.index)
+        preserve_sample_period(frame, period_ns)
 
     selected = frame
     if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
@@ -145,6 +164,11 @@ def preprocess_frame(
     valid_ratio = frame.loc[selection].notna().mean()
     keep_columns = valid_ratio[valid_ratio >= min_valid_ratio].index.tolist()
     keep = set(keep_columns)
+    if max_lag > 0 and not bool(selection.all()):
+        sources = _positive_lag_source_mask(frame, selection, max_lag)
+        # Admit possible historical pairs; lag selection owns the actual sample-support check.
+        historical = frame.loc[sources & ~selection].notna().any()
+        keep.update(historical[historical].index)
     keep.add(target)
     for col in (protected_columns or []):
         if col in frame.columns:
@@ -208,14 +232,23 @@ def preprocess_frame_causal(
 def standardize_frame(
     frame: pd.DataFrame,
     fit_mask: pd.Series | None = None,
+    *,
+    max_lag: int = 0,
 ) -> pd.DataFrame:
     fit_frame = frame
     if fit_mask is not None:
         resolved_mask = fit_mask.reindex(frame.index).fillna(False).astype(bool)
         fit_frame = frame.loc[resolved_mask]
+    means = fit_frame.mean()
+    scales = fit_frame.std(ddof=0)
+    if max_lag > 0 and fit_mask is not None and means.isna().any():
+        sources = _positive_lag_source_mask(frame, resolved_mask, max_lag)
+        history = frame.loc[sources]
+        means = means.fillna(history.mean())
+        scales = scales.fillna(history.std(ddof=0))
     scaler = FrameScaler(
-        mean_=fit_frame.mean(),
-        scale_=fit_frame.std(ddof=0).replace(0, 1),
+        mean_=means,
+        scale_=scales.replace(0, 1),
         feature_names=tuple(fit_frame.columns),
     )
     transformed = scaler.transform(frame)

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import math
+import operator
 
+import numpy as np
 import pandas as pd
 
 
@@ -62,9 +65,11 @@ def _parse_exclude_window_time(value: Any, position: int, field: str) -> pd.Time
 def apply_exclude_windows(
     frame: pd.DataFrame,
     exclude_windows: list[dict[str, str]],
+    exclude_conditions: list[dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
     """Return a copy of ``frame`` without rows in inclusive exclusion windows."""
     excluded, _ = _exclude_window_mask(frame, exclude_windows)
+    excluded |= exclude_condition_mask(frame, [] if exclude_conditions is None else exclude_conditions)
     result = frame.loc[~excluded].copy(deep=True)
     result.attrs = dict(frame.attrs)
     return result
@@ -73,9 +78,11 @@ def apply_exclude_windows(
 def exclude_window_stats(
     frame: pd.DataFrame,
     exclude_windows: list[dict[str, str]],
+    exclude_conditions: list[dict[str, Any]] | None = None,
 ) -> dict[str, int | float]:
     """Summarize rows selected out by the shared exclusion-window rule."""
     excluded, window_count = _exclude_window_mask(frame, exclude_windows)
+    excluded |= exclude_condition_mask(frame, [] if exclude_conditions is None else exclude_conditions)
     original_rows = len(frame)
     excluded_rows = int(excluded.sum())
     return {
@@ -85,6 +92,29 @@ def exclude_window_stats(
         "excluded_ratio": excluded_rows / original_rows if original_rows else 0.0,
         "exclude_window_count": window_count,
     }
+
+
+def exclude_condition_mask(frame: pd.DataFrame, conditions: list[dict[str, Any]]) -> pd.Series:
+    """Compare original values; missing/nonfinite values never match, including !=."""
+    if not isinstance(conditions, list):
+        raise ValueError("数值排除条件 exclude_conditions 必须是列表")
+    comparisons = {">": operator.gt, ">=": operator.ge, "<": operator.lt,
+                   "<=": operator.le, "=": operator.eq, "!=": operator.ne}
+    excluded = pd.Series(False, index=frame.index, dtype=bool)
+    for position, condition in enumerate(conditions):
+        prefix = f"数值排除条件 {position + 1}"
+        if not isinstance(condition, dict) or set(condition) != {"column", "operator", "value"}:
+            raise ValueError(f"{prefix} 必须包含 column、operator、value")
+        column, comparison, value = (condition[key] for key in ("column", "operator", "value"))
+        if not isinstance(column, str) or column not in frame.columns:
+            raise ValueError(f"{prefix} 变量不存在：{column!r}")
+        if not isinstance(comparison, str) or comparison not in comparisons:
+            raise ValueError(f"{prefix} 运算符无效：{comparison!r}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"{prefix} 比较值必须是有限数值")
+        values = pd.to_numeric(frame[column], errors="coerce")
+        excluded |= np.isfinite(values) & comparisons[comparison](values, value)
+    return excluded
 
 
 def normalize_excluded_columns(excluded_columns: list[str] | None) -> list[str]:

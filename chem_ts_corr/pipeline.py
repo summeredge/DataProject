@@ -71,6 +71,7 @@ CONTEXT_FIELDS = [
     "resample_rule",
     "branch_selection_status",
     "exclude_windows",
+    "exclude_conditions",
     "original_rows",
     "exclude_window_count",
     "excluded_rows",
@@ -79,6 +80,7 @@ CONTEXT_FIELDS = [
 ]
 EXCLUSION_CONTEXT_DEFAULTS = {
     "exclude_windows": [],
+    "exclude_conditions": [],
     "original_rows": 0,
     "exclude_window_count": 0,
     "excluded_rows": 0,
@@ -751,6 +753,7 @@ def _build_preprocessing_context(
         "resample_rule": config.resample_rule,
         "branch_selection_status": branch_selection_status,
         "exclude_windows": [dict(window) for window in config.exclude_windows],
+        "exclude_conditions": [dict(condition) for condition in config.exclude_conditions],
         **exclusion_stats,
     }
 
@@ -793,8 +796,10 @@ def load_analysis_source_frame(
             config.input_path, config.time_column, encoding=config.encoding
         )
     original_rows = len(raw)
-    if config.exclude_windows:
-        retained = apply_exclude_windows(raw, config.exclude_windows)
+    if config.exclude_windows or config.exclude_conditions:
+        retained = apply_exclude_windows(raw, config.exclude_windows, config.exclude_conditions)
+        if retained.empty:
+            raise ValueError("数据排除后没有可用于分析的数据，请调整时间窗口或数值条件")
         gap_starts = _exclude_window_gap_starts(raw, retained)
         raw = retained
         if gap_starts:
@@ -827,7 +832,7 @@ def _analysis_exclude_window_stats(config: AnalysisConfig) -> dict[str, int | fl
     raw = load_timeseries_csv(
         config.input_path, config.time_column, encoding=config.encoding
     )
-    return exclude_window_stats(raw, config.exclude_windows)
+    return exclude_window_stats(raw, config.exclude_windows, config.exclude_conditions)
 
 
 def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
@@ -853,6 +858,7 @@ def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
         segment_mode=config.segment_mode,
         segment_min=config.segment_min,
         segment_max=config.segment_max,
+        max_lag=config.max_lag,
     )
 
 
@@ -902,6 +908,8 @@ def _validate_context(data: object) -> None:
         raise ValueError(f"{prefix} missing fields {missing}")
     if not isinstance(data["exclude_windows"], list):
         raise ValueError(f"{prefix} exclude_windows must be a list")
+    if not isinstance(data["exclude_conditions"], list):
+        raise ValueError(f"{prefix} exclude_conditions must be a list")
 
     status = data["branch_selection_status"]
     selected = data["selected_preprocessing_mode"]
@@ -1864,4 +1872,5 @@ def _downstream_config_from_context(
         ),
         resample_rule=context["resample_rule"],
         exclude_windows=[dict(window) for window in context["exclude_windows"]],
+        exclude_conditions=[dict(condition) for condition in context.get("exclude_conditions", [])],
     )

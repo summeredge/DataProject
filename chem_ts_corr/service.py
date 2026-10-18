@@ -150,6 +150,7 @@ def _analyze_numeric_frame_core(
         segment_mode=config.segment_mode,
         segment_min=config.segment_min,
         segment_max=config.segment_max,
+        max_lag=config.max_lag,
     )
     segment_mask = operating_segment_mask(
         cleaned,
@@ -169,7 +170,7 @@ def _analyze_numeric_frame_core(
     )
     target_mask = segment_mask.reindex(transformed.index).fillna(False).astype(bool)
     analysis_target_mask = None if bool(target_mask.all()) else target_mask
-    scaled = standardize_frame(transformed, fit_mask=analysis_target_mask)
+    scaled = standardize_frame(transformed, fit_mask=analysis_target_mask, max_lag=config.max_lag)
 
     _progress(progress_callback, "正在计算滞后相关")
     lag_scores = compute_lag_scores(

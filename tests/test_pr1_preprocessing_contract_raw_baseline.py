@@ -312,7 +312,7 @@ def test_raw_main_screening_regression_baseline(tmp_path: Path):
         if lag > 0:
             assert str(row["direction"]) == "变量领先目标"
         elif lag < 0:
-            assert str(row["direction"]) == "变量滞后目标"
+            assert str(row["direction"]) == "目标领先变量"
         else:
             assert str(row["direction"]) == "同步变化"
 

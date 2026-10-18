@@ -5378,7 +5378,7 @@ const termsHelpRows = [
   { category: "参数设置说明", name: "可信度审查候选数量", signal: "进入第三层可信度审查的候选变量数量。", reading: "数量越大覆盖越广但计算和人工解释成本越高。", action: "先用默认数量快速定位，再按需要扩大范围。" },
   { category: "参数设置说明", name: "风险标签包含过滤", signal: "按风险标签文本筛选复核或推荐结果。", reading: "只改变页面查看和复核聚焦范围，不表示未显示变量没有风险。", action: "用于定位共同负荷、数据质量等特定问题，留空表示不过滤。" },
   { category: "风险标签说明", name: "滞后边界风险", signal: "最佳滞后贴近扫描窗口边界，峰值可能尚未完全覆盖。", reading: "当前最大滞后点数可能偏小，真实响应时间可能更长。", action: "扩大最大滞后点数，结合趋势图确认峰值是否继续外移。" },
-  { category: "风险标签说明", name: "变量滞后目标风险", signal: "页面显示为变量滞后目标。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
+  { category: "风险标签说明", name: "目标领先变量风险", signal: "页面显示为目标领先变量。", reading: "变量变化晚于目标，更像响应量或受同一扰动影响。", action: "优先检查工艺方向，通常不直接作为前馈变量。" },
   { category: "风险标签说明", name: "公式泄漏 / 计算耦合风险", signal: "候选变量可能由目标或其上下游计算项派生。", reading: "高相关可能来自公式、软测量或报表口径耦合。", action: "核对 DCS/ historian 点位定义，剔除直接计算关系后再复核。" },
   { category: "风险标签说明", name: "数据质量风险", signal: "数据质量问题通过 data_quality_score 连续降低基础分；严重质量问题保留风险标记，但不再额外封顶。", reading: "统计指标可能受采样、坏点或仪表状态驱动。", action: "先清洗数据、确认仪表有效性，再重新运行分析。" },
   { category: "风险标签说明", name: "共线性风险", signal: "多个候选变量高度同步或代表同一工艺负荷。", reading: "模型可能难以区分真正贡献变量，单变量解释不稳定。", action: "做变量分组、残差控制或条件 Granger 预测验证。" },
@@ -5387,7 +5387,7 @@ const termsHelpRows = [
   { category: "证据等级与复核建议", name: "优先复核", signal: "可信度审查中独立预测支持较强且限制较少。", reading: "值得投入工程时间检查变量定义、方向和可操作性。", action: "查看趋势，核对滞后方向，并与班组/工艺专家确认。" },
   { category: "证据等级与复核建议", name: "仅人工复核", signal: "自动证据不足或风险较多，但业务上仍可能重要。", reading: "系统不建议直接采纳，需要人工判断。", action: "作为待查清单，补充机理证据或更多工况数据。" },
   { category: "滞后与方向解释", name: "变量领先目标", signal: "最佳 lag 为正，候选变量变化早于目标。", reading: "更符合前馈、扰动源或可提前预警变量特征。", action: "重点检查响应时间是否符合工艺停留时间。" },
-  { category: "滞后与方向解释", name: "变量滞后目标", signal: "最佳 lag 为负，变量变化晚于目标。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
+  { category: "滞后与方向解释", name: "目标领先变量", signal: "最佳 lag 为负，变量变化晚于目标。", reading: "候选变量可能是结果、反馈动作或滞后响应。", action: "谨慎用于控制前馈，可转为诊断或结果验证。" },
   { category: "模型验证指标", name: "模型提升", signal: "加入候选变量后，相比基线模型的预测效果改善。", reading: "变量提供了目标自身历史以外的增量信息。", action: "优先关注提升稳定且跨工况一致的变量。" },
   { category: "模型验证指标", name: "预测贡献", signal: "随机森林模型解释或重要性排序靠前。", reading: "模型依赖该变量做预测，但不代表可操作或因果成立。", action: "与相关性、Granger 和工程机理交叉验证。" },
   { category: "模型验证指标", name: "仅作预测验证，不是因果结论", signal: "Granger、条件 Granger 或模型指标显著。", reading: "说明历史信息有助于预测，不自动证明调节该变量会改变目标。", action: "在工程应用前必须经过机理和可操作性复核。" },
@@ -6596,7 +6596,7 @@ const CANONICAL_RISK_GROUPS = [
   },
   {
     key: "target_lead_risk",
-    label: "变量滞后目标风险",
+    label: "目标领先变量风险",
     aliases: ["target_leads_variable", "target_leads_candidate", "target_lead_risk", "no_positive_lag", "non_positive_screening_lag", "non-positive screening lag"],
   },
   {
@@ -7218,7 +7218,7 @@ function renderLagProfile(payload, panel = el("lagProfilePanel")) {
       <span>虚线标记：lag = 0 / 当前最佳滞后</span>
       <span>红圈：搜索边界点</span>
     </div>
-    <div class="lag-profile-directions"><span>负值：变量滞后目标</span><span>0：同步变化</span><span>正值：变量领先目标</span></div>
+    <div class="lag-profile-directions"><span>负值：目标领先变量</span><span>0：同步变化</span><span>正值：变量领先目标</span></div>
     <div class="lag-profile-summary">
       ${lagProfileSummaryItem("同步 Pearson", zeroPoint && zeroPoint.pearson, "correlation")}
       ${lagProfileSummaryItem("同步 Spearman", zeroPoint && zeroPoint.spearman, "correlation")}
@@ -7293,7 +7293,7 @@ function lagDirectionText(lag, missingText = "未计算") {
   const value = lagProfileNumber(lag);
   if (value === null) return missingText;
   if (value > 0) return "变量领先目标";
-  if (value < 0) return "变量滞后目标";
+  if (value < 0) return "目标领先变量";
   return "同步变化";
 }
 
@@ -7498,7 +7498,7 @@ function renderScreeningQualityHints(rows) {
     hints.push("多个候选变量命中滞后边界，当前 max_lag 可能偏小，建议结合工艺停留时间扩大 max_lag 后复跑。");
   }
   if (rows.filter((row) => numericValue(row.lag) !== null && numericValue(row.lag) < 0).length >= 2) {
-    hints.push("多个候选变量表现为变量滞后目标，建议检查时间对齐、响应变量混入或数据时间戳方向。");
+    hints.push("多个候选变量表现为目标领先变量，建议检查时间对齐、响应变量混入或数据时间戳方向。");
   }
   if (rows.filter((row) => includesFlag(row, "common_capacity_driver") || row.common_capacity_driver_flag === true || String(row.common_capacity_driver_flag) === "1").length >= 2) {
     hints.push("多个变量可能受共同负荷驱动，建议优先复核负荷变量和物料平衡链条。");
@@ -8652,7 +8652,7 @@ function formatValue(value) {
       model_lift_weak_support: "模型提升弱支持",
       model_explanation_support: "模型解释支持",
       lag_boundary: "滞后触及边界",
-      target_leads_variable: "变量滞后目标",
+      target_leads_variable: "目标领先变量",
       upstream_driver_candidate: "上游驱动候选",
       synchronous_association: "同步关联",
       downstream_response: "下游响应",
@@ -8680,7 +8680,7 @@ function formatValue(value) {
       formula_like: "公式类变量",
       strong_formula_leakage: "强公式泄漏",
       common_capacity_driver: "共同负荷驱动",
-      target_leads_variable: "变量滞后目标",
+      target_leads_variable: "目标领先变量",
       unstable_across_regimes: "跨工况不稳定",
       poor_data_quality: "数据质量需关注",
       severe_data_quality: "数据质量严重不足",
@@ -8738,8 +8738,8 @@ function formatValue(value) {
       model_supported_but_granger_weak: "模型支持但Granger较弱",
       boundary_lag_uncertain: "滞后边界不确定",
       candidate_leads_target: "变量领先目标",
-      target_leads_candidate: "变量滞后目标",
-      target_leads_variable: "变量滞后目标",
+      target_leads_candidate: "目标领先变量",
+      target_leads_variable: "目标领先变量",
       synchronous: "同步变化",
       unknown: "未知",
       positive: "正向",
@@ -8755,7 +8755,7 @@ function formatValue(value) {
       model_lag_boundary_risk: "模型滞后边界风险",
       synchronous_or_leakage_risk: "同步或泄漏风险",
       screening_lag_boundary_risk: "初筛滞后边界风险",
-      target_lead_risk: "变量滞后目标风险",
+      target_lead_risk: "目标领先变量风险",
       stability_risk: "稳定性风险",
       model_supported_screening_candidate: "模型支持的初筛候选",
       raw_lag_signal: "滞后相关线索",
@@ -8850,7 +8850,7 @@ function columnLabel(column) {
     strong_formula_leakage_flag: "强公式泄漏",
     common_capacity_driver_flag: "疑似共同负荷驱动",
     engineering_context: "工程上下文",
-    target_leads_variable_flag: "变量滞后目标",
+    target_leads_variable_flag: "目标领先变量",
     unstable_across_regimes_flag: "跨工况不稳定",
     unstable_over_time_flag: "时序不稳定",
     lag_boundary_flag: "是否触及滞后边界",

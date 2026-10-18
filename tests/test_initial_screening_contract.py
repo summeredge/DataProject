@@ -93,7 +93,7 @@ def _ranked(rows: list[tuple[str, float, int]]) -> pd.DataFrame:
                 "variable": variable,
                 "score": score,
                 "lag": lag,
-                "direction": "变量领先目标" if lag > 0 else "变量滞后目标" if lag < 0 else "同步变化",
+                "direction": "变量领先目标" if lag > 0 else "目标领先变量" if lag < 0 else "同步变化",
             }
             for variable, score, lag in rows
         ]

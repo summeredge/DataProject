@@ -245,5 +245,5 @@ def describe_lag_direction(lag: int) -> str:
     if lag > 0:
         return "变量领先目标"
     if lag < 0:
-        return "变量滞后目标"
+        return "目标领先变量"
     return "同步变化"

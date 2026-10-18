@@ -181,7 +181,7 @@ def test_lag_profile_route_and_frontend_curve_contract_are_present():
         "lag = 0",
         "当前最佳滞后",
         "变量领先目标",
-        "变量滞后目标",
+        "目标领先变量",
         "同步变化",
         "最佳滞后触及搜索边界",
         "correlationConsistencyMessage",

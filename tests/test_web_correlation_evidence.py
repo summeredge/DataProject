@@ -133,7 +133,7 @@ def test_dominant_correlation_uses_the_signed_value_for_the_selected_method(
     [
         (5, "变量领先目标", -0.8, "负向"),
         (0, "同步变化", -0.8, "负向"),
-        (-5, "变量滞后目标", 0.8, "正向"),
+        (-5, "目标领先变量", 0.8, "正向"),
     ],
 )
 def test_time_relationship_and_correlation_direction_remain_independent(

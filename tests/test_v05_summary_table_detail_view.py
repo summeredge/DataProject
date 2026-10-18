@@ -37,7 +37,7 @@ def test_display_label_translates_common_evidence_markers():
         "模型提升弱支持",
         "模型解释支持",
         "滞后触及边界",
-        "变量滞后目标",
+        "目标领先变量",
     ]
     for marker in required:
         assert marker in INDEX_HTML

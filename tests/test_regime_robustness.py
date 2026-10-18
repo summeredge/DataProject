@@ -258,7 +258,7 @@ def test_v1_regime_component_weight_is_absent():
 
 def test_risk_compatibility_fields_remain_neutral_in_v5():
     variable_only = pd.DataFrame(columns=["variable"])
-    ranked = pd.DataFrame([{"variable": "x", "score": 0.9, "lag": -1, "direction": "变量滞后目标"}])
+    ranked = pd.DataFrame([{"variable": "x", "score": 0.9, "lag": -1, "direction": "目标领先变量"}])
     risks = pd.DataFrame([{"variable": "x", "risk_flags": "target_leads_variable"}])
     row = final_ranked_features(
         ranked, variable_only, variable_only, variable_only, risks, variable_only, variable_only,

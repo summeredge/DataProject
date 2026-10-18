@@ -58,7 +58,7 @@ def test_index_html_uses_plain_string_semantics():
 def test_raw_risk_tag_display_is_chinese_readable():
     required = [
         "formatRawRiskTags",
-        "变量滞后目标",
+        "目标领先变量",
         "滞后触及边界",
         "数据质量需关注",
         "数据质量严重不足",

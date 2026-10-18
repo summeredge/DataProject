@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from chem_ts_corr.config import AnalysisConfig
-from chem_ts_corr.service import analyze_numeric_frame
+from chem_ts_corr.service import AnalysisTables, analyze_numeric_frame
+from chem_ts_corr.report import write_outputs
+from chem_ts_corr.verification_review_pool import write_initial_verification_review_pool
+from chem_ts_corr.pipeline import _verification_review_variables
+from chem_ts_corr import web
 
 from .four_layer_cases import SyntheticCase
 
@@ -29,6 +33,7 @@ KEY_FIELDS = [
     "candidate_grade",
     "recommended_use",
     "lag",
+    "n",
     "direction",
     "risk_flags",
     "regime_sign_reversal_flag",
@@ -58,6 +63,11 @@ def run_case(case: SyntheticCase, output_dir: Path) -> pd.DataFrame:
         skip_model_lift=bool(metadata.get("skip_model_lift", True)),
         skip_rolling_corr=bool(metadata.get("skip_rolling_corr", False)),
         segment_column=metadata.get("segment_column"),
+        segment_mode=str(metadata.get("segment_mode", "all")),
+        segment_min=metadata.get("segment_min"),
+        segment_max=metadata.get("segment_max"),
+        min_valid_ratio=float(metadata.get("min_valid_ratio", 0.7)),
+        force_include_variables=metadata.get("force_include_variables"),
         residual_control_columns=metadata.get("residual_control_columns"),
         exclude_control_columns_from_candidates=False,
     )
@@ -74,7 +84,75 @@ def run_case(case: SyntheticCase, output_dir: Path) -> pd.DataFrame:
         ranked = ranked.merge(flags, on="variable", how="left")
     ranked = ranked.sort_values("final_score", ascending=False, kind="stable").reset_index(drop=True)
     ranked["final_rank"] = np.arange(1, len(ranked) + 1)
+    ranked.attrs["candidate_coverage"] = candidate_coverage(case, tables, config)
     return ranked
+
+
+def candidate_coverage(
+    case: SyntheticCase, tables: AnalysisTables, config: AnalysisConfig
+) -> dict[str, object]:
+    # Use the same writers and input selector as the formal workflow, without running validation.
+    write_outputs(
+        config.output_dir, config.target, tables.ranked_features, tables.lag_scores,
+        tables.granger_tests, tables.importance, tables.metrics,
+        residual_corr_scores=tables.residual_corr_scores,
+        risk_flags=tables.risk_flags, recommended_candidates=tables.recommended_candidates,
+    )
+    write_initial_verification_review_pool(
+        config.output_dir, tables.ranked_features, top_k=config.top_k,
+        manual_include=config.force_include_variables,
+    )
+    sets = {
+        filename: pd.read_csv(config.output_dir / filename, encoding="utf-8-sig")["variable"].tolist()
+        for filename in ("ranked_features.csv", "recommended_candidates.csv",
+                         "verification_review_pool.csv", "causal_review_candidates.csv")
+    }
+    sets["actual_validation_variables"] = _verification_review_variables(
+        config.output_dir, tables.ranked_features, config, web
+    )
+    sets["causal_review_candidates.csv"] = sets.pop("causal_review_candidates.csv")
+    rules = {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选",
+    }
+    details = []
+    ranked = tables.ranked_features.set_index("variable")
+    for variable in sorted(case.true_drivers):
+        missing = [name for name, values in sets.items() if variable not in values]
+        row = ranked.loc[variable] if variable in ranked.index else None
+        details.append({
+            "variable": variable,
+            "membership": {name: variable in values for name, values in sets.items()},
+            "missing_from": missing,
+            "first_missing_set": missing[0] if missing else None,
+            "applicable_exit_rules": {name: rules[name] for name in missing},
+            "initial_rank": int(row.driver_rank) if row is not None else None,
+            "final_score": float(row.final_score) if row is not None else None,
+            "candidate_grade": str(row.candidate_grade) if row is not None else None,
+            "risk_flags": str(row.risk_flags) if row is not None else None,
+        })
+    return {
+        "candidate_transfer_success": all(not detail["missing_from"] for detail in details) if details else None,
+        "capability_limitations": {
+            "nonlinear_stable_driver": ["非单调关系不保证被Pearson/Spearman主筛查识别，排名靠前不代表推荐成功"],
+            "regime_sign_reversal": ["全局相关可能被工况符号反转抵消，当前初筛不自动执行后续工况验证"],
+        }.get(str(case.metadata["scenario"]), []),
+        "sets": sets,
+        "recall": {
+            name: len(case.true_drivers.intersection(values)) / len(case.true_drivers)
+            if case.true_drivers else None
+            for name, values in sets.items()
+        },
+        "important_variables": details,
+        "selection_rules": rules,
+        "expected_policy_differences": {
+            "verification_only": sorted(set(sets["actual_validation_variables"]) - set(sets["recommended_candidates.csv"])),
+            "recommendation_only": sorted(set(sets["recommended_candidates.csv"]) - set(sets["actual_validation_variables"])),
+        },
+    }
 
 
 def _typed(case: SyntheticCase, kind: str) -> frozenset[str]:
@@ -557,6 +635,15 @@ def evaluate_case_expectations(
             add("proxy_identification_rate", proxy_metrics["redundancy_group_detection_rate"] == 1.0 and proxy_metrics["proxy_identification_rate"] == 0.0 and proxy_metrics["proxy_separation_rate"] == 0.0, "mixed unresolved proxy group contributes to proxy identification rate")
             add("noise_low", indexed.loc["noise", "candidate_grade"] not in {"A", "B"} and int(indexed.loc["noise", "final_rank"]) > int(indexed.loc["x_driver", "final_rank"]), "mixed noise receives high grade or precedes true driver")
             add("model_followup_not_executed", "prediction_score" not in ranked.columns, "initial screening exposes model follow-up fields")
+    if scenario == "missing_candidate_segments":
+        row = _row(ranked, "x_driver")
+        add("missing_driver_retained", row is not None, "selected-regime driver lost during preprocessing")
+        add("missing_driver_lag", row is not None and int(row["lag"]) == case.lags["x_driver"], "missing-segment driver physical lag changed")
+        coverage = ranked.attrs["candidate_coverage"]
+        add("missing_driver_recall", all(value == 1.0 for value in coverage["recall"].values()), "missing-segment driver lost from an actual candidate set")
+    elif scenario == "low_sample_lag_noise":
+        add("low_sample_noise_not_high_grade", not ranked["candidate_grade"].isin(["A", "B"]).any(), "low-sample noise receives A/B grade")
+        add("low_sample_overlap_supported", ranked["n"].ge(20).all(), "low-sample edge lag selected")
     for name, passed, failure in stability_contract_checks(scenario, stability):
         add(name, passed, failure)
     passed_names = [name for name, passed, _ in checks if passed]

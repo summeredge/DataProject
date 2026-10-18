@@ -314,3 +314,75 @@ def test_statistical_screening_contracts_remain_in_source():
     assert "__squared" in source
     assert "def order_initial_candidates" in source
     assert '"_initial_final_score"' in source
+
+
+@pytest.mark.parametrize("name", ["nonlinear_stable_driver", "regime_sign_reversal"])
+def test_complete_rank_is_not_candidate_transfer_success(name, tmp_path):
+    case, ranked, _ = _indexed(name, tmp_path)
+    coverage = ranked.attrs["candidate_coverage"]
+    assert coverage["recall"]["ranked_features.csv"] == 1.0
+    assert coverage["recall"]["recommended_candidates.csv"] == 0.0
+    assert coverage["recall"]["verification_review_pool.csv"] == 1.0
+    assert coverage["recall"]["actual_validation_variables"] == 1.0
+    assert coverage["recall"]["causal_review_candidates.csv"] == 0.0
+    assert coverage["candidate_transfer_success"] is False
+    assert coverage["capability_limitations"]
+    detail = coverage["important_variables"][0]
+    assert detail["first_missing_set"] == "recommended_candidates.csv"
+    assert detail["missing_from"] == ["recommended_candidates.csv", "causal_review_candidates.csv"]
+    assert set(detail["applicable_exit_rules"]) == set(detail["missing_from"])
+    assert set(coverage["expected_policy_differences"]["verification_only"]) >= case.true_drivers
+
+
+@pytest.mark.parametrize("name", ["true_lagged_driver", "collinear_proxy", "missing_candidate_segments"])
+def test_important_driver_reaches_actual_candidate_sets(name, tmp_path):
+    case, ranked, index = _indexed(name, tmp_path)
+    coverage = ranked.attrs["candidate_coverage"]
+    assert all(value == 1.0 for value in coverage["recall"].values())
+    assert coverage["candidate_transfer_success"] is True
+    assert all(not detail["missing_from"] for detail in coverage["important_variables"])
+    if name == "missing_candidate_segments":
+        assert int(index.loc["x_driver", "lag"]) == case.lags["x_driver"]
+        assert int(index.loc["x_driver", "n"]) == 120
+
+
+def test_coverage_reads_formal_outputs_and_actual_validation_selector(tmp_path):
+    case = CASES["true_lagged_driver"]()
+    case = replace(case, metadata={**case.metadata, "top_k": 1,
+                                   "force_include_variables": ["noise"]})
+    ranked = run_case(case, tmp_path)
+    coverage = ranked.attrs["candidate_coverage"]
+    for filename, values in coverage["sets"].items():
+        if filename.endswith(".csv"):
+            actual = pd.read_csv(tmp_path / filename, encoding="utf-8-sig")
+            assert values == actual["variable"].tolist()
+    assert coverage["sets"]["actual_validation_variables"] == ["x_driver", "noise"]
+    pool = pd.read_csv(tmp_path / "verification_review_pool.csv", encoding="utf-8-sig")
+    assert pool.candidate_source.tolist() == ["initial_screening", "manual_include"]
+
+
+def test_low_sample_noise_has_no_invented_driver_recall(tmp_path):
+    _, ranked, _ = _indexed("low_sample_lag_noise", tmp_path)
+    assert not ranked.candidate_grade.isin(["A", "B"]).any()
+    assert ranked.n.ge(20).all()
+    coverage = ranked.attrs["candidate_coverage"]
+    assert all(value is None for value in coverage["recall"].values())
+    assert coverage["candidate_transfer_success"] is None
+    assert coverage["important_variables"] == []
+
+
+def test_top_k_omission_is_visible_in_actual_second_stage_input(tmp_path):
+    case = CASES["mixed_evidence"]()
+    case = replace(case, metadata={**case.metadata, "top_k": 1})
+    ranked = run_case(case, tmp_path)
+    coverage = ranked.attrs["candidate_coverage"]
+    assert coverage["recall"]["ranked_features.csv"] == 1.0
+    assert coverage["recall"]["actual_validation_variables"] <= 0.5
+    assert coverage["candidate_transfer_success"] is False
+    expected = ranked.head(1).variable.tolist()
+    assert coverage["sets"]["verification_review_pool.csv"] == expected
+    assert coverage["sets"]["actual_validation_variables"] == expected
+    omitted = [detail for detail in coverage["important_variables"]
+               if not detail["membership"]["actual_validation_variables"]]
+    assert omitted
+    assert all("verification_review_pool.csv" in detail["applicable_exit_rules"] for detail in omitted)

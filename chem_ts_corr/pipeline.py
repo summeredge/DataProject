@@ -849,6 +849,10 @@ def _load_cleaned_frame(config: AnalysisConfig) -> pd.DataFrame:
         protected_columns=[column for column in protected if column],
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
+        segment_column=config.segment_column,
+        segment_mode=config.segment_mode,
+        segment_min=config.segment_min,
+        segment_max=config.segment_max,
     )
 
 

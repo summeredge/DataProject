@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -342,6 +342,28 @@ def model_incremental_validation(n=420, noise=0.12, seed=111, lag=3) -> Syntheti
     )
 
 
+def missing_candidate_segments(n=360, noise=0.15, seed=101, lag=4) -> SyntheticCase:
+    base = true_lagged_driver(n=n, noise=noise, seed=seed, lag=lag)
+    frame = base.frame.copy()
+    selected_start = n * 2 // 3
+    frame.loc[frame.index[:selected_start - lag - 1], "x_driver"] = np.nan
+    frame.loc[frame.index[20:n // 2], "noise"] = np.nan
+    frame["load"] = (np.arange(n) >= selected_start).astype(float)
+    return replace(
+        base, frame=frame,
+        variable_types={**base.variable_types, "regime": frozenset({"load"})},
+        metadata={**base.metadata, "scenario": "missing_candidate_segments",
+                  "segment_column": "load", "segment_mode": "custom",
+                  "segment_min": 1.0, "segment_max": 1.0},
+    )
+
+
+def low_sample_lag_noise(n=40, noise=1.0, seed=0) -> SyntheticCase:
+    base = noise_only(n=n, noise=noise, seed=seed, variable_count=1)
+    return replace(base, metadata={**base.metadata, "scenario": "low_sample_lag_noise",
+                                   "max_lag": 35})
+
+
 CASES = {
     function.__name__: function
     for function in [
@@ -356,5 +378,7 @@ CASES = {
         noise_only,
         mixed_evidence,
         model_incremental_validation,
+        missing_candidate_segments,
+        low_sample_lag_noise,
     ]
 }

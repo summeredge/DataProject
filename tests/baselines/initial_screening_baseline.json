@@ -31,6 +31,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 4,
+        "n": 356,
         "direction": "变量领先目标",
         "risk_flags": "",
         "regime_sign_reversal_flag": null,
@@ -52,6 +53,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 1,
+        "n": 359,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -89,6 +91,69 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 1.0,
       "significant_q_count": 1
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_driver",
+          "noise"
+        ],
+        "recommended_candidates.csv": [
+          "x_driver"
+        ],
+        "verification_review_pool.csv": [
+          "x_driver",
+          "noise"
+        ],
+        "actual_validation_variables": [
+          "x_driver",
+          "noise"
+        ],
+        "causal_review_candidates.csv": [
+          "x_driver"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 1.0,
+          "candidate_grade": "A",
+          "risk_flags": ""
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {
       "top_k_overlap_mean": 1.0,
@@ -248,6 +313,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -3,
+        "n": 357,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable",
         "regime_sign_reversal_flag": null,
@@ -269,6 +335,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 6,
+        "n": 354,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time;lag_boundary",
         "regime_sign_reversal_flag": null,
@@ -306,6 +373,48 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 1.0,
       "significant_q_count": 1
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": null,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_downstream",
+          "noise"
+        ],
+        "recommended_candidates.csv": [],
+        "verification_review_pool.csv": [
+          "x_downstream",
+          "noise"
+        ],
+        "actual_validation_variables": [
+          "x_downstream",
+          "noise"
+        ],
+        "causal_review_candidates.csv": []
+      },
+      "recall": {
+        "ranked_features.csv": null,
+        "recommended_candidates.csv": null,
+        "verification_review_pool.csv": null,
+        "actual_validation_variables": null,
+        "causal_review_candidates.csv": null
+      },
+      "important_variables": [],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise",
+          "x_downstream"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {},
     "passed": true,
@@ -354,6 +463,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 3,
+        "n": 417,
         "direction": "变量领先目标",
         "risk_flags": "",
         "regime_sign_reversal_flag": null,
@@ -375,6 +485,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 0,
+        "n": 420,
         "direction": "同步变化",
         "risk_flags": "",
         "regime_sign_reversal_flag": null,
@@ -426,6 +537,69 @@
       "noise_top_5_rate": 0.0,
       "significant_q_count": 2
     },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "z_driver",
+          "x_common"
+        ],
+        "recommended_candidates.csv": [
+          "x_common",
+          "z_driver"
+        ],
+        "verification_review_pool.csv": [
+          "z_driver",
+          "x_common"
+        ],
+        "actual_validation_variables": [
+          "z_driver",
+          "x_common"
+        ],
+        "causal_review_candidates.csv": [
+          "x_common",
+          "z_driver"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "z_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 1.0,
+          "candidate_grade": "A",
+          "risk_flags": ""
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [],
+        "recommendation_only": []
+      }
+    },
     "stability_metrics": {},
     "passed": false,
     "failure_reason": "common_driver_suppression_rate is below 1.0",
@@ -472,6 +646,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -493,6 +668,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -546,6 +722,69 @@
       "spurious_high_grade_false_positive_rate": 1.0,
       "noise_top_5_rate": 0.0,
       "significant_q_count": 2
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x1_driver",
+          "x2_proxy"
+        ],
+        "recommended_candidates.csv": [
+          "x1_driver",
+          "x2_proxy"
+        ],
+        "verification_review_pool.csv": [
+          "x1_driver",
+          "x2_proxy"
+        ],
+        "actual_validation_variables": [
+          "x1_driver",
+          "x2_proxy"
+        ],
+        "causal_review_candidates.csv": [
+          "x1_driver",
+          "x2_proxy"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x1_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 1.0,
+          "candidate_grade": "A",
+          "risk_flags": "redundant_proxy"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {
       "top_k_overlap_mean": 1.0,
@@ -713,6 +952,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 397,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -734,6 +974,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 398,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -755,6 +996,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -5,
+        "n": 395,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -776,6 +1018,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -1,
+        "n": 399,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -797,6 +1040,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 398,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -818,6 +1062,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 5,
+        "n": 395,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -839,6 +1084,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 1,
+        "n": 399,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -860,6 +1106,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -3,
+        "n": 397,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -881,6 +1128,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 398,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -918,6 +1166,102 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 0.5,
       "significant_q_count": 0
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": false,
+      "capability_limitations": [
+        "非单调关系不保证被Pearson/Spearman主筛查识别，排名靠前不代表推荐成功"
+      ],
+      "sets": {
+        "ranked_features.csv": [
+          "x_nonlinear",
+          "noise_02",
+          "noise_07",
+          "noise_03",
+          "noise_01",
+          "noise_06",
+          "noise_00",
+          "noise_05",
+          "noise_04"
+        ],
+        "recommended_candidates.csv": [],
+        "verification_review_pool.csv": [
+          "x_nonlinear",
+          "noise_02",
+          "noise_07",
+          "noise_03",
+          "noise_01",
+          "noise_06",
+          "noise_00",
+          "noise_05",
+          "noise_04"
+        ],
+        "actual_validation_variables": [
+          "x_nonlinear",
+          "noise_02",
+          "noise_07",
+          "noise_03",
+          "noise_01",
+          "noise_06",
+          "noise_00",
+          "noise_05",
+          "noise_04"
+        ],
+        "causal_review_candidates.csv": []
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 0.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 0.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_nonlinear",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": false,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": false
+          },
+          "missing_from": [
+            "recommended_candidates.csv",
+            "causal_review_candidates.csv"
+          ],
+          "first_missing_set": "recommended_candidates.csv",
+          "applicable_exit_rules": {
+            "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+            "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+          },
+          "initial_rank": 1,
+          "final_score": 0.12965554915207803,
+          "candidate_grade": "E",
+          "risk_flags": "unstable_over_time"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise_00",
+          "noise_01",
+          "noise_02",
+          "noise_03",
+          "noise_04",
+          "noise_05",
+          "noise_06",
+          "noise_07",
+          "x_nonlinear"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {},
     "passed": true,
@@ -962,6 +1306,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 418,
         "direction": "变量领先目标",
         "risk_flags": "unstable_across_regimes;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -983,6 +1328,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 0,
+        "n": 420,
         "direction": "同步变化",
         "risk_flags": "unstable_over_time;poor_data_quality",
         "regime_sign_reversal_flag": null,
@@ -1020,6 +1366,74 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 0.0,
       "significant_q_count": 0
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": false,
+      "capability_limitations": [
+        "全局相关可能被工况符号反转抵消，当前初筛不自动执行后续工况验证"
+      ],
+      "sets": {
+        "ranked_features.csv": [
+          "x_reversal",
+          "load"
+        ],
+        "recommended_candidates.csv": [],
+        "verification_review_pool.csv": [
+          "x_reversal",
+          "load"
+        ],
+        "actual_validation_variables": [
+          "x_reversal",
+          "load"
+        ],
+        "causal_review_candidates.csv": []
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 0.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 0.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_reversal",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": false,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": false
+          },
+          "missing_from": [
+            "recommended_candidates.csv",
+            "causal_review_candidates.csv"
+          ],
+          "first_missing_set": "recommended_candidates.csv",
+          "applicable_exit_rules": {
+            "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+            "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+          },
+          "initial_rank": 1,
+          "final_score": 0.1302594539485096,
+          "candidate_grade": "E",
+          "risk_flags": "unstable_across_regimes;unstable_over_time"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "load",
+          "x_reversal"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {},
     "passed": true,
@@ -1081,6 +1495,7 @@
         "candidate_grade": "B",
         "recommended_use": "manual_review_required",
         "lag": 0,
+        "n": 360,
         "direction": "同步变化",
         "risk_flags": "poor_data_quality",
         "regime_sign_reversal_flag": null,
@@ -1102,6 +1517,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -6,
+        "n": 354,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time;lag_boundary",
         "regime_sign_reversal_flag": null,
@@ -1137,6 +1553,51 @@
       "spurious_high_grade_false_positive_rate": 0.5,
       "noise_top_5_rate": 1.0,
       "significant_q_count": 1
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": null,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_outlier",
+          "noise"
+        ],
+        "recommended_candidates.csv": [
+          "x_outlier"
+        ],
+        "verification_review_pool.csv": [
+          "x_outlier",
+          "noise"
+        ],
+        "actual_validation_variables": [
+          "x_outlier",
+          "noise"
+        ],
+        "causal_review_candidates.csv": [
+          "x_outlier"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": null,
+        "recommended_candidates.csv": null,
+        "verification_review_pool.csv": null,
+        "actual_validation_variables": null,
+        "causal_review_candidates.csv": null
+      },
+      "important_variables": [],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {},
     "passed": false,
@@ -1177,6 +1638,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 6,
+        "n": 354,
         "direction": "变量领先目标",
         "risk_flags": "lag_boundary",
         "regime_sign_reversal_flag": null,
@@ -1214,6 +1676,64 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 0.0,
       "significant_q_count": 1
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_boundary"
+        ],
+        "recommended_candidates.csv": [
+          "x_boundary"
+        ],
+        "verification_review_pool.csv": [
+          "x_boundary"
+        ],
+        "actual_validation_variables": [
+          "x_boundary"
+        ],
+        "causal_review_candidates.csv": [
+          "x_boundary"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_boundary",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 1.0,
+          "candidate_grade": "A",
+          "risk_flags": "lag_boundary"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {},
     "passed": false,
@@ -1286,6 +1806,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 6,
+        "n": 354,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time;lag_boundary",
         "regime_sign_reversal_flag": null,
@@ -1307,6 +1828,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 0,
+        "n": 360,
         "direction": "同步变化",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1328,6 +1850,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1349,6 +1872,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -1,
+        "n": 359,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1370,6 +1894,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -1,
+        "n": 359,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1391,6 +1916,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 5,
+        "n": 355,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1412,6 +1938,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1433,6 +1960,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 1,
+        "n": 359,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1454,6 +1982,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1475,6 +2004,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 1,
+        "n": 359,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1496,6 +2026,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1517,6 +2048,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1538,6 +2070,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 0,
+        "n": 360,
         "direction": "同步变化",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1559,6 +2092,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1580,6 +2114,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1601,6 +2136,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1622,6 +2158,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -1,
+        "n": 359,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1643,6 +2180,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 1,
+        "n": 359,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1664,6 +2202,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1685,6 +2224,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 3,
+        "n": 357,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1706,6 +2246,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": 2,
+        "n": 358,
         "direction": "变量领先目标",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1727,6 +2268,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 358,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1748,6 +2290,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 358,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1769,6 +2312,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -5,
+        "n": 355,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1790,6 +2334,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -4,
+        "n": 356,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1811,6 +2356,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 358,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1832,6 +2378,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -4,
+        "n": 356,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1853,6 +2400,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -4,
+        "n": 356,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1874,6 +2422,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -6,
+        "n": 354,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time;lag_boundary",
         "regime_sign_reversal_flag": null,
@@ -1895,6 +2444,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 358,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -1930,6 +2480,130 @@
       "spurious_high_grade_false_positive_rate": 0.0,
       "noise_top_5_rate": 0.16666666666666666,
       "significant_q_count": 0
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": null,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "noise_22",
+          "noise_05",
+          "noise_00",
+          "noise_17",
+          "noise_04",
+          "noise_28",
+          "noise_02",
+          "noise_14",
+          "noise_27",
+          "noise_10",
+          "noise_11",
+          "noise_21",
+          "noise_12",
+          "noise_13",
+          "noise_09",
+          "noise_26",
+          "noise_08",
+          "noise_29",
+          "noise_25",
+          "noise_20",
+          "noise_06",
+          "noise_23",
+          "noise_15",
+          "noise_01",
+          "noise_19",
+          "noise_03",
+          "noise_16",
+          "noise_24",
+          "noise_18",
+          "noise_07"
+        ],
+        "recommended_candidates.csv": [],
+        "verification_review_pool.csv": [
+          "noise_22",
+          "noise_05",
+          "noise_00",
+          "noise_17",
+          "noise_04",
+          "noise_28",
+          "noise_02",
+          "noise_14",
+          "noise_27",
+          "noise_10",
+          "noise_11",
+          "noise_21",
+          "noise_12",
+          "noise_13",
+          "noise_09",
+          "noise_26",
+          "noise_08",
+          "noise_29",
+          "noise_25",
+          "noise_20"
+        ],
+        "actual_validation_variables": [
+          "noise_22",
+          "noise_05",
+          "noise_00",
+          "noise_17",
+          "noise_04",
+          "noise_28",
+          "noise_02",
+          "noise_14",
+          "noise_27",
+          "noise_10",
+          "noise_11",
+          "noise_21",
+          "noise_12",
+          "noise_13",
+          "noise_09",
+          "noise_26",
+          "noise_08",
+          "noise_29",
+          "noise_25",
+          "noise_20"
+        ],
+        "causal_review_candidates.csv": []
+      },
+      "recall": {
+        "ranked_features.csv": null,
+        "recommended_candidates.csv": null,
+        "verification_review_pool.csv": null,
+        "actual_validation_variables": null,
+        "causal_review_candidates.csv": null
+      },
+      "important_variables": [],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise_00",
+          "noise_02",
+          "noise_04",
+          "noise_05",
+          "noise_08",
+          "noise_09",
+          "noise_10",
+          "noise_11",
+          "noise_12",
+          "noise_13",
+          "noise_14",
+          "noise_17",
+          "noise_20",
+          "noise_21",
+          "noise_22",
+          "noise_25",
+          "noise_26",
+          "noise_27",
+          "noise_28",
+          "noise_29"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {
       "top_k_overlap_mean": 0.40740740740740744,
@@ -2319,6 +2993,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 4,
+        "n": 476,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -2340,6 +3015,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 4,
+        "n": 476,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -2361,6 +3037,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 0,
+        "n": 480,
         "direction": "同步变化",
         "risk_flags": "",
         "regime_sign_reversal_flag": null,
@@ -2382,6 +3059,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 3,
+        "n": 477,
         "direction": "变量领先目标",
         "risk_flags": "",
         "regime_sign_reversal_flag": null,
@@ -2403,6 +3081,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 478,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable",
         "regime_sign_reversal_flag": null,
@@ -2424,6 +3103,7 @@
         "candidate_grade": "E",
         "recommended_use": "state_indicator",
         "lag": -2,
+        "n": 478,
         "direction": "目标领先变量",
         "risk_flags": "target_leads_variable;unstable_across_regimes;unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -2492,6 +3172,106 @@
       "spurious_high_grade_false_positive_rate": 0.5,
       "noise_top_5_rate": 0.0,
       "significant_q_count": 5
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_proxy",
+          "x_driver",
+          "x_common",
+          "z_driver",
+          "x_downstream",
+          "noise"
+        ],
+        "recommended_candidates.csv": [
+          "x_common",
+          "x_proxy",
+          "x_driver",
+          "x_downstream",
+          "z_driver"
+        ],
+        "verification_review_pool.csv": [
+          "x_proxy",
+          "x_driver",
+          "x_common",
+          "z_driver",
+          "x_downstream",
+          "noise"
+        ],
+        "actual_validation_variables": [
+          "x_proxy",
+          "x_driver",
+          "x_common",
+          "z_driver",
+          "x_downstream",
+          "noise"
+        ],
+        "causal_review_candidates.csv": [
+          "x_common",
+          "x_proxy",
+          "x_driver",
+          "x_downstream",
+          "z_driver"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 2,
+          "final_score": 0.8215817277892903,
+          "candidate_grade": "A",
+          "risk_flags": "redundant_proxy"
+        },
+        {
+          "variable": "z_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 4,
+          "final_score": 0.7621512752183028,
+          "candidate_grade": "A",
+          "risk_flags": ""
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise"
+        ],
+        "recommendation_only": []
+      }
     },
     "stability_metrics": {
       "top_k_overlap_mean": 1.0,
@@ -2699,6 +3479,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 3,
+        "n": 417,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -2720,6 +3501,7 @@
         "candidate_grade": "A",
         "recommended_use": "strong_screening_candidate",
         "lag": 3,
+        "n": 417,
         "direction": "变量领先目标",
         "risk_flags": "redundant_proxy",
         "regime_sign_reversal_flag": null,
@@ -2741,6 +3523,7 @@
         "candidate_grade": "E",
         "recommended_use": "unstable_candidate",
         "lag": -1,
+        "n": 419,
         "direction": "目标领先变量",
         "risk_flags": "unstable_over_time",
         "regime_sign_reversal_flag": null,
@@ -2795,6 +3578,74 @@
       "noise_top_5_rate": 1.0,
       "significant_q_count": 2
     },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_incremental",
+          "x_proxy",
+          "noise"
+        ],
+        "recommended_candidates.csv": [
+          "x_incremental",
+          "x_proxy"
+        ],
+        "verification_review_pool.csv": [
+          "x_incremental",
+          "x_proxy",
+          "noise"
+        ],
+        "actual_validation_variables": [
+          "x_incremental",
+          "x_proxy",
+          "noise"
+        ],
+        "causal_review_candidates.csv": [
+          "x_incremental",
+          "x_proxy"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_incremental",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 1.0,
+          "candidate_grade": "A",
+          "risk_flags": "redundant_proxy"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "noise"
+        ],
+        "recommendation_only": []
+      }
+    },
     "stability_metrics": {},
     "passed": true,
     "failure_reason": "",
@@ -2802,6 +3653,321 @@
     "passed_expectations": [
       "model_followup_not_executed",
       "incremental_proxy_resolution_recorded"
+    ]
+  },
+  "missing_candidate_segments": {
+    "scenario": "missing_candidate_segments",
+    "seed": 101,
+    "samples": 360,
+    "parameters": {
+      "scenario": "missing_candidate_segments",
+      "seed": 101,
+      "n": 360,
+      "noise": 0.15,
+      "lag": 4,
+      "segment_column": "load",
+      "segment_mode": "custom",
+      "segment_min": 1.0,
+      "segment_max": 1.0
+    },
+    "variable_types": {
+      "noise": [
+        "noise"
+      ],
+      "true_driver": [
+        "x_driver"
+      ],
+      "regime": [
+        "load"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "x_driver",
+      "noise",
+      "load"
+    ],
+    "key_evidence": [
+      {
+        "variable": "x_driver",
+        "final_score": 0.6149161690894707,
+        "candidate_grade": "B",
+        "recommended_use": "poor_quality_variable",
+        "lag": 4,
+        "n": 120,
+        "direction": "变量领先目标",
+        "risk_flags": "severe_data_quality",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.9898837946333092,
+        "lag_quality": 0.8706466554478612,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.5641019298920904,
+        "evidence_score": 0.6149161690894707,
+        "innovation_score": 0.989737126021714,
+        "pearson_q": 1.3031131507127655e-103,
+        "spearman_q": 9.290622695271172e-97,
+        "corr_q_value": 1.3031131507127655e-103
+      },
+      {
+        "variable": "noise",
+        "final_score": 0.06200314486682284,
+        "candidate_grade": "E",
+        "recommended_use": "state_indicator",
+        "lag": -2,
+        "n": 118,
+        "direction": "目标领先变量",
+        "risk_flags": "target_leads_variable;unstable_over_time;poor_data_quality",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.07176903611803499,
+        "lag_quality": 0.11629607390244605,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.6774537888756159,
+        "evidence_score": 0.12400628973364568,
+        "innovation_score": null,
+        "pearson_q": 0.76929174668639,
+        "spearman_q": 0.76929174668639,
+        "corr_q_value": 0.76929174668639
+      },
+      {
+        "variable": "load",
+        "final_score": 0.0491444456764672,
+        "candidate_grade": "E",
+        "recommended_use": "unstable_candidate",
+        "lag": 1,
+        "n": 120,
+        "direction": "变量领先目标",
+        "risk_flags": "unstable_over_time;poor_data_quality",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": 0.04425173227602671,
+        "lag_quality": 0.08501375026734004,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.5612310241546865,
+        "evidence_score": 0.0491444456764672,
+        "innovation_score": null,
+        "pearson_q": 0.870767537607857,
+        "spearman_q": 0.870767537607857,
+        "corr_q_value": 0.870767537607857
+      }
+    ],
+    "metrics": {
+      "top_1_hit": true,
+      "top_3_recall": 1.0,
+      "top_5_recall": 1.0,
+      "true_driver_average_rank": 1.0,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {
+        "x_driver": 0
+      },
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 1
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": true,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "x_driver",
+          "noise",
+          "load"
+        ],
+        "recommended_candidates.csv": [
+          "x_driver"
+        ],
+        "verification_review_pool.csv": [
+          "x_driver",
+          "noise",
+          "load"
+        ],
+        "actual_validation_variables": [
+          "x_driver",
+          "noise",
+          "load"
+        ],
+        "causal_review_candidates.csv": [
+          "x_driver"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": 1.0,
+        "recommended_candidates.csv": 1.0,
+        "verification_review_pool.csv": 1.0,
+        "actual_validation_variables": 1.0,
+        "causal_review_candidates.csv": 1.0
+      },
+      "important_variables": [
+        {
+          "variable": "x_driver",
+          "membership": {
+            "ranked_features.csv": true,
+            "recommended_candidates.csv": true,
+            "verification_review_pool.csv": true,
+            "actual_validation_variables": true,
+            "causal_review_candidates.csv": true
+          },
+          "missing_from": [],
+          "first_missing_set": null,
+          "applicable_exit_rules": {},
+          "initial_rank": 1,
+          "final_score": 0.6149161690894707,
+          "candidate_grade": "B",
+          "risk_flags": "severe_data_quality"
+        }
+      ],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [
+          "load",
+          "noise"
+        ],
+        "recommendation_only": []
+      }
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "missing_driver_retained",
+      "missing_driver_lag",
+      "missing_driver_recall"
+    ]
+  },
+  "low_sample_lag_noise": {
+    "scenario": "low_sample_lag_noise",
+    "seed": 0,
+    "samples": 40,
+    "parameters": {
+      "scenario": "low_sample_lag_noise",
+      "seed": 0,
+      "n": 40,
+      "noise": 1.0,
+      "variable_count": 1,
+      "max_lag": 35
+    },
+    "variable_types": {
+      "noise": [
+        "noise_00"
+      ]
+    },
+    "reference_map": {},
+    "top_k": 5,
+    "top_k_results": [
+      "noise_00"
+    ],
+    "key_evidence": [
+      {
+        "variable": "noise_00",
+        "final_score": 0.41430453537738987,
+        "candidate_grade": "D",
+        "recommended_use": "manual_review_required",
+        "lag": 19,
+        "n": 21,
+        "direction": "变量领先目标",
+        "risk_flags": "",
+        "regime_sign_reversal_flag": null,
+        "regime_sign_consistency": null,
+        "regime_stability_final": null,
+        "stability_score": null,
+        "lag_quality": 0.029099969442681513,
+        "lag_boundary_flag": false,
+        "data_quality_score": 0.9785720620877001,
+        "evidence_score": 0.41430453537738987,
+        "innovation_score": 0.4257844537862745,
+        "pearson_q": 0.7026144029759974,
+        "spearman_q": 0.6520242190484922,
+        "corr_q_value": 0.6520242190484922
+      }
+    ],
+    "metrics": {
+      "top_1_hit": false,
+      "top_3_recall": 0.0,
+      "top_5_recall": 0.0,
+      "true_driver_average_rank": null,
+      "downstream_average_rank": null,
+      "common_driver_average_rank": null,
+      "proxy_average_rank": null,
+      "common_driver_suppression_rate": null,
+      "proxy_separation_rate": null,
+      "proxy_identification_rate": null,
+      "redundancy_group_detection_rate": null,
+      "common_driver_details": [],
+      "proxy_separation_details": [],
+      "lag_identification_error": {},
+      "noise_high_grade_false_positive_rate": 0.0,
+      "spurious_high_grade_false_positive_rate": 0.0,
+      "noise_top_5_rate": 1.0,
+      "significant_q_count": 0
+    },
+    "candidate_coverage": {
+      "candidate_transfer_success": null,
+      "capability_limitations": [],
+      "sets": {
+        "ranked_features.csv": [
+          "noise_00"
+        ],
+        "recommended_candidates.csv": [
+          "noise_00"
+        ],
+        "verification_review_pool.csv": [
+          "noise_00"
+        ],
+        "actual_validation_variables": [
+          "noise_00"
+        ],
+        "causal_review_candidates.csv": [
+          "noise_00"
+        ]
+      },
+      "recall": {
+        "ranked_features.csv": null,
+        "recommended_candidates.csv": null,
+        "verification_review_pool.csv": null,
+        "actual_validation_variables": null,
+        "causal_review_candidates.csv": null
+      },
+      "important_variables": [],
+      "selection_rules": {
+        "ranked_features.csv": "初筛有效峰值及预处理准入",
+        "recommended_candidates.csv": "一级推荐池既有准入与Top-K规则",
+        "verification_review_pool.csv": "完整排名Top-K及明确人工加入",
+        "actual_validation_variables": "复核池与既有验证输入的并集",
+        "causal_review_candidates.csv": "一级推荐池派生的固定第三层候选"
+      },
+      "expected_policy_differences": {
+        "verification_only": [],
+        "recommendation_only": []
+      }
+    },
+    "stability_metrics": {},
+    "passed": true,
+    "failure_reason": "",
+    "failed_expectations": [],
+    "passed_expectations": [
+      "low_sample_noise_not_high_grade",
+      "low_sample_overlap_supported"
     ]
   }
 }

@@ -2200,6 +2200,10 @@ def _prepared_frame_for_secondary(
         protected_columns=_protected_validation_columns(config, protected_columns),
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
+        segment_column=config.segment_column,
+        segment_mode=config.segment_mode,
+        segment_min=config.segment_min,
+        segment_max=config.segment_max,
     )
     target_mask = operating_segment_mask(
         cleaned,

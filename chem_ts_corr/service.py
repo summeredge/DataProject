@@ -146,6 +146,10 @@ def _analyze_numeric_frame_core(
         protected_columns=[c for c in protected if c],
         max_interpolate_gap_points=config.max_interpolate_gap_points,
         interpolate_limit_area=config.interpolate_limit_area,
+        segment_column=config.segment_column,
+        segment_mode=config.segment_mode,
+        segment_min=config.segment_min,
+        segment_max=config.segment_max,
     )
     segment_mask = operating_segment_mask(
         cleaned,
@@ -599,7 +603,7 @@ def _innovation_evidence(
     innovation_frame = (
         frame
         if already_differenced
-        else difference_by_contiguous_segment(frame).dropna()
+        else difference_by_contiguous_segment(frame).dropna(how="all")
     )
     for _, raw_row in raw_ranked.iterrows():
         variable = str(raw_row["variable"])

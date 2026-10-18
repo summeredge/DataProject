@@ -8,7 +8,7 @@ from chem_ts_corr.lag import build_lag_peak_quality
 
 def _quality(scores: dict[int, float], max_lag: int = 12) -> pd.Series:
     rows = [
-        {"variable": "x", "lag": lag, "abs_pearson": score, "abs_spearman": score}
+        {"variable": "x", "lag": lag, "abs_pearson": score, "abs_spearman": score, "n": 100}
         for lag, score in scores.items()
     ]
     return build_lag_peak_quality(pd.DataFrame(rows), max_lag=max_lag).iloc[0]

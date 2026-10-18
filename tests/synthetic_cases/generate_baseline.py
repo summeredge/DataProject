@@ -66,6 +66,7 @@ def build_case_report(
         "top_k_results": ranked.head(REPORT_TOP_K)["variable"].tolist(),
         "key_evidence": evidence,
         "metrics": _json_value(metrics(case, ranked)),
+        "candidate_coverage": _json_value(ranked.attrs["candidate_coverage"]),
         "stability_metrics": _json_value(stability or {}),
         **expectation,
     }

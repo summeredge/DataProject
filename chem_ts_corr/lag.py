@@ -154,10 +154,18 @@ def compute_lag_scores(
     return result
 
 
+def _supported_lag_scores(lag_scores: pd.DataFrame) -> pd.DataFrame:
+    # Relative support rejects tiny edge overlaps; the cap preserves well-sampled long lags.
+    peak_n = lag_scores.groupby("variable")["n"].transform("max")
+    minimum_n = np.ceil(peak_n * 0.5).clip(lower=5, upper=20)
+    return lag_scores.loc[lag_scores["n"].ge(minimum_n)]
+
+
 def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
     if lag_scores.empty:
         return pd.DataFrame(columns=BEST_LAG_COLUMNS)
-    ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
+    supported = _supported_lag_scores(lag_scores)
+    ranked = supported.assign(score=supported[["abs_pearson", "abs_spearman"]].max(axis=1))
     ranked = ranked.dropna(subset=["score"])
     if ranked.empty:
         return pd.DataFrame(columns=BEST_LAG_COLUMNS)
@@ -175,7 +183,8 @@ def summarize_best_lags(lag_scores: pd.DataFrame) -> pd.DataFrame:
 def build_lag_peak_quality(lag_scores: pd.DataFrame, max_lag: int) -> pd.DataFrame:
     if lag_scores.empty:
         return pd.DataFrame(columns=LAG_PEAK_QUALITY_COLUMNS)
-    ranked = lag_scores.assign(score=lag_scores[["abs_pearson", "abs_spearman"]].max(axis=1))
+    supported = _supported_lag_scores(lag_scores)
+    ranked = supported.assign(score=supported[["abs_pearson", "abs_spearman"]].max(axis=1))
     rows = []
     epsilon = 1e-12
     for var, g in ranked.groupby("variable", sort=False):

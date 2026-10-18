@@ -104,22 +104,18 @@ def preprocess_frame(
     protected_columns: list[str] | None = None,
     max_interpolate_gap_points: int = 5,
     interpolate_limit_area: str = "inside",
+    *,
+    segment_column: str | None = None,
+    segment_mode: str = "all",
+    segment_min: float | None = None,
+    segment_max: float | None = None,
 ) -> pd.DataFrame:
     period_ns = sample_period_ns(frame)
     if resample_rule:
         frame = _resample_frame(frame, resample_rule, period_ns)
         period_ns = infer_sample_period_ns(frame.index)
 
-    valid_ratio = frame.notna().mean()
-    keep_columns = valid_ratio[valid_ratio >= min_valid_ratio].index.tolist()
-    keep = set(keep_columns)
-    keep.add(target)
-    for col in (protected_columns or []):
-        if col in frame.columns:
-            keep.add(col)
-    keep_columns = [c for c in frame.columns if c in keep]
-
-    selected = frame[keep_columns]
+    selected = frame
     if frame.attrs.get(RESAMPLE_BY_PHYSICAL_GAPS_ATTR):
         groups = _contiguous_segment_ids(
             selected.index,
@@ -143,22 +139,28 @@ def preprocess_frame(
             limit=max_interpolate_gap_points,
             limit_area=interpolate_limit_area,
         )
+    selection = operating_segment_mask(
+        cleaned, segment_column, segment_mode, segment_min, segment_max
+    )
+    valid_ratio = frame.loc[selection].notna().mean()
+    keep_columns = valid_ratio[valid_ratio >= min_valid_ratio].index.tolist()
+    keep = set(keep_columns)
+    keep.add(target)
+    for col in (protected_columns or []):
+        if col in frame.columns:
+            keep.add(col)
+    keep_columns = [c for c in frame.columns if c in keep]
+
+    cleaned = cleaned[keep_columns]
     cleaned = cleaned.dropna(axis=1, how="all")
-    rows_before_dropna = int(len(cleaned))
-    cleaned = cleaned.dropna(axis=0, how="any")
-    rows_after_dropna = int(len(cleaned))
-    rows_dropped_by_dropna = rows_before_dropna - rows_after_dropna
-    cleaned.attrs["rows_before_dropna"] = rows_before_dropna
-    cleaned.attrs["rows_after_dropna"] = rows_after_dropna
-    cleaned.attrs["rows_dropped_by_dropna"] = rows_dropped_by_dropna
-    if rows_dropped_by_dropna:
-        warnings = [str(cleaned.attrs.get("preprocess_warnings", "")).strip()] if cleaned.attrs.get("preprocess_warnings") else []
-        warnings.append(f"rows_dropped_by_dropna={rows_dropped_by_dropna}")
-        cleaned.attrs["preprocess_warnings"] = "; ".join(warnings)
+    # Keep source timestamps for lag alignment; each pair handles its own missing values.
+    cleaned.attrs["rows_before_dropna"] = int(len(cleaned))
+    cleaned.attrs["rows_after_dropna"] = int(len(cleaned))
+    cleaned.attrs["rows_dropped_by_dropna"] = 0
 
     if target not in cleaned.columns:
         raise ValueError("Target column was removed during preprocessing")
-    if len(cleaned) < 10:
+    if cleaned[target].notna().sum() < 10:
         raise ValueError("Not enough usable rows after preprocessing; at least 10 are required")
 
     low_variance = cleaned.nunique(dropna=True) <= 1
@@ -255,7 +257,7 @@ def transform_frame(
         transformed = difference_by_physical_interval(
             smoothed,
             diff_interval_minutes=diff_interval_minutes,
-        ).dropna()
+        ).dropna(how="all")
         return preserve_sample_period(transformed, period_ns)
     if mode in NOT_IMPLEMENTED_PREPROCESS_MODES:
         raise ValueError(
@@ -267,13 +269,13 @@ def transform_frame(
         return detrend_moving_average(frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area)
     if mode == "diff":
         return preserve_sample_period(
-            difference_by_contiguous_segment(frame).dropna(), period_ns
+            difference_by_contiguous_segment(frame).dropna(how="all"), period_ns
         )
     if mode == "detrend_diff":
         detrended = detrend_moving_average(
             frame, detrend_window, max_interpolate_gap_points, interpolate_limit_area
         )
-        transformed = difference_by_contiguous_segment(detrended).dropna()
+        transformed = difference_by_contiguous_segment(detrended).dropna(how="all")
         return preserve_sample_period(transformed, period_ns)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
@@ -496,7 +498,7 @@ def detrend_moving_average(
             limit=max_interpolate_gap_points,
             limit_area=interpolate_limit_area,
         )
-    transformed = transformed.dropna()
+    transformed = transformed.dropna(how="all")
     return preserve_sample_period(transformed, period_ns)
 
 

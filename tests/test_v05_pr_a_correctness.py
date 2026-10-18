@@ -37,11 +37,12 @@ def test_preprocess_records_row_drop_metadata_after_interpolation():
         index=index,
     )
     cleaned = preprocess_frame(frame, target="target", resample_rule=None, min_valid_ratio=0.0)
-    assert len(cleaned) == 10
+    assert len(cleaned) == 12
+    assert cleaned["x"].isna().sum() == 2
     assert cleaned.attrs.get("rows_before_dropna") == 12
-    assert cleaned.attrs.get("rows_after_dropna") == 10
-    assert cleaned.attrs.get("rows_dropped_by_dropna") == 2
-    assert "rows_dropped_by_dropna" in cleaned.attrs.get("preprocess_warnings", "")
+    assert cleaned.attrs.get("rows_after_dropna") == 12
+    assert cleaned.attrs.get("rows_dropped_by_dropna") == 0
+    assert "rows_dropped_by_dropna" not in cleaned.attrs.get("preprocess_warnings", "")
 
 
 def test_final_ranked_features_does_not_compute_residual_score_twice():

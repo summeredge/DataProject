@@ -153,7 +153,8 @@ def test_preprocess_dropna_preserves_original_sample_period():
         max_interpolate_gap_points=1,
     )
 
-    assert frame.index[20] not in cleaned.index
+    assert frame.index[20] in cleaned.index
+    assert pd.isna(cleaned.loc[frame.index[20], "x"])
     assert sample_period_ns(cleaned) == 5 * 60 * 1_000_000_000
     shifted = lagged_series(cleaned["x"], cleaned.index, 1, period_ns=sample_period_ns(cleaned))
     assert pd.isna(shifted.loc[frame.index[22]])

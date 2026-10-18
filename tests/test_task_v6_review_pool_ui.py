@@ -15,3 +15,21 @@ def test_review_pool_restores_model_discovery_choices_from_result_payload():
     )[0]
     assert "lastModelDiscoveredRows = data.modelDiscoveredCandidates || [];" in render
     assert "syncModelDiscoveryReviewPoolOptions(lastModelDiscoveredRows);" in render
+
+
+def test_residual_candidates_offer_run_bound_review_pool_actions():
+    renderer = web.INDEX_HTML.split("function renderCompactDetailTable(", 1)[1].split(
+        "function selectCompactDetailRow", 1
+    )[0]
+    assert "targetId === recommendedCandidateTable" in renderer
+    assert "lastVerificationReviewPoolRows" in renderer
+    assert '"已在复核池" : "加入复核池"' in renderer
+    assert "alreadyInPool || !runId || isRestoredRunReadOnly()" in renderer
+    assert 'addToVerificationReviewPool("manual_include", row.variable, runId)' in renderer
+
+    add = web.INDEX_HTML.split("async function addToVerificationReviewPool(", 1)[1].split(
+        "function includesFlag", 1
+    )[0]
+    assert 'form.append("run_id", runId);' in add
+    assert "if (currentRunId !== runId) return;" in add
+    assert "renderRecommendedCandidateTable(lastRecommendedRows);" in add

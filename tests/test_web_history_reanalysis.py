@@ -132,11 +132,13 @@ def test_frontend_selection_reset_busy_guard_and_failure():
 const assert = require('node:assert/strict');
 const elements = new Map();
 const buttons = [{dataset:{fileId:'a'.repeat(32)},disabled:false}];
+const candidateActions = [{disabled:false}];
 const document = {
   getElementById(id) {
     if (!elements.has(id)) elements.set(id, {value:'',innerHTML:'',textContent:'',files:[],
       disabled:false,hidden:false,checked:false,scrollIntoView(){},children:[],
       replaceChildren(){this.children=[];},
+      querySelectorAll(selector){return selector==='.candidate-review-pool-action'?candidateActions:[];},
       options:[{value:'raw'},{value:'lowpass'}],appendChild(option){this.options.push(option)},
       classList:{contains(){return true}}});
     return elements.get(id);
@@ -204,6 +206,7 @@ function renderDownloads(){}
         "updateTrendSelectionInfo", "setCapacitySelection", "fillExcludedColumnOptions", "refreshColumnSelectors",
         "clearTrendStats", "clearScatterMatrix", "closeDetailModal", "clearXgbFoldContext",
         "clearXgbCandidateFoldDetails", "renderExcludeWindows", "setExcludedColumnSelection",
+        "renderRecommendedCandidateTable",
     ])
     assertions = r'''
 (async()=>{
@@ -256,6 +259,7 @@ function renderDownloads(){}
   const running=analyze();
   for (let i=0;i<10&&!finishAnalysis;i++) await Promise.resolve();
   assert(finishAnalysis);assert.equal(dataSelectionLocks,1);
+  assert.equal(candidateActions[0].disabled,true);
   assert.equal(buttons[0].disabled,true);assert.equal(el('upload').disabled,true);
   await selectHistoryFile({file_id:'a'.repeat(32)});reset();
   assert.equal(fileId,'d'.repeat(32));assert.equal(currentRunId,'new-run');
@@ -321,14 +325,26 @@ function renderDownloads(){}
   restoredRunInfo={input_available:true,context_available:true};renderAnalysisResult(restored);
   assert.equal(el('confirmRawBranch').disabled,false);assert.equal(el('confirmProcessedBranch').disabled,false);
   assert.equal(el('addManualReviewPool').disabled,true);
-  let validMutations=0;
-  const savedPostForm=postForm;postForm=async()=>{validMutations++;return restored;};
+  let validMutations=0,submittedPoolForm=null;
+  const savedPostForm=postForm;postForm=async(path,form)=>{validMutations++;
+    submittedPoolForm={path,fields:Object.fromEntries(form.entries())};return restored;};
   await confirmInitialScreeningBranch('raw');assert.equal(validMutations,1);
   restored.branchSelectionStatus='confirmed';renderAnalysisResult(restored);
   assert.equal(el('addManualReviewPool').disabled,false);assert.equal(el('addModelDiscoveryReviewPool').disabled,false);
   el('manualReviewPoolVariable').value='feature';el('modelDiscoveryReviewPoolVariable').value='feature';
   await addToVerificationReviewPool('manual_include');await addToVerificationReviewPool('model_discovery');
-  assert.equal(validMutations,3);postForm=savedPostForm;
+  assert.equal(validMutations,3);
+  await addToVerificationReviewPool('manual_include','residual-feature','saved-run');
+  assert.equal(validMutations,4);
+  assert.deepEqual(submittedPoolForm,{path:'/api/add_to_verification_review_pool',fields:{
+    run_id:'saved-run',variable:'residual-feature',candidate_source:'manual_include'}});
+  lastVerificationReviewPoolRows=[{variable:'keep'}];
+  let resolvePoolAdd;postForm=async()=>new Promise(resolve=>{resolvePoolAdd=resolve;});
+  const pendingPoolAdd=addToVerificationReviewPool('manual_include','late-feature','saved-run');
+  await Promise.resolve();currentRunId='different-run';
+  resolvePoolAdd({verificationReviewPool:[{variable:'late-feature'}]});await pendingPoolAdd;
+  assert.deepEqual(lastVerificationReviewPoolRows,[{variable:'keep'}]);
+  currentRunId='saved-run';postForm=savedPostForm;
   assert(recognizedNumericColumns.includes('load')&&recognizedNumericColumns.includes('control')&&recognizedNumericColumns.includes('feature'));
   lockDataSelection(1);const previous=renderedResult;await restoreAnalysis('different-run');
   assert.equal(renderedResult,previous);lockDataSelection(-1);

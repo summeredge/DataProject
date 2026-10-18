@@ -3211,6 +3211,8 @@ INDEX_HTML = r"""<!doctype html>
     td.wrap-cell { line-height:1.35; }
     .compact-result-table tbody tr { cursor:pointer; }
     .compact-result-table tbody tr.selected { background:#e0f2fe; }
+    #recommendedCandidateTable .candidate-review-pool-action-cell { padding:4px 5px; white-space:nowrap; }
+    #recommendedCandidateTable .candidate-review-pool-action { padding:4px 6px; font-size:var(--font-xs); white-space:nowrap; }
     .detail-panel { margin-top:10px; border:1px solid var(--line); border-radius:8px; padding:12px; background:var(--surface-muted); }
     .detail-panel h3 { margin:0 0 8px; font-size:15px; }
     .modal-backdrop { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(15,23,42,.55); z-index:1000; }
@@ -4700,6 +4702,8 @@ async function analyze() {
     form.append("exclude_control_columns_from_candidates", "true");
     const data = await postForm("/api/analyze", form);
     currentRunId = data.run_id || "";
+    el("recommendedCandidateTable").querySelectorAll(".candidate-review-pool-action")
+      .forEach((button) => { button.disabled = true; });
     const result = await waitForAnalysisResult(data.task_id);
     renderAnalysisResult(result);
     setStatus(formatCompletedAnalysisStatus(result), "success");
@@ -6888,13 +6892,18 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
   }
   const getValue = valueGetter || ((row, column) => row[column]);
   const columns = coreColumns.filter((column) => getValue(rows[0], column) !== undefined);
+  const hasReviewPoolAction = targetId === recommendedCandidateTable;
+  const reviewPoolVariables = hasReviewPoolAction
+    ? new Set((lastVerificationReviewPoolRows || []).map((row) => String(row.variable ?? "")))
+    : null;
   const preserveInputOrder = targetId === candidateTable || targetId === recommendedCandidateTable || targetId === controlReferenceTable || targetId === "overviewTop" || targetId === "validationSummaryTable" || targetId === "modelDiscoveredTable" || targetId === "evidenceMatrixTable" || targetId === "xgbReviewSummaryTable" || targetId === "xgbCandidateUpliftTable";
   ensureTableSortState(targetId, preserveInputOrder ? null : columns[0]);
   const displayRows = sortedRowsForTable(targetId, rows);
   const table = document.createElement("table");
   table.className = "compact-result-table";
   table.setAttribute("aria-label", "核心列");
-  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}</tr></thead>`;
+  const actionHeader = hasReviewPoolAction ? "<th>操作</th>" : "";
+  table.innerHTML = `<thead><tr>${columns.map((c) => sortableHeaderHtml(targetId, c)).join("")}${actionHeader}</tr></thead>`;
   const body = document.createElement("tbody");
   displayRows.forEach((row, index) => {
     const tr = document.createElement("tr");
@@ -6905,6 +6914,24 @@ function renderCompactDetailTable({ targetId, rows, coreColumns, detailColumns =
       const td = document.createElement("td");
       td.className = tableCellClass(column, value);
       td.innerHTML = formatter ? formatter(column, value, row) : renderTableCell(column, value);
+      tr.appendChild(td);
+    }
+    if (hasReviewPoolAction) {
+      const variable = String(row.variable ?? "");
+      const runId = currentRunId;
+      const alreadyInPool = reviewPoolVariables.has(variable);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "candidate-review-pool-action";
+      button.textContent = alreadyInPool ? "已在复核池" : "加入复核池";
+      button.disabled = alreadyInPool || !runId || isRestoredRunReadOnly();
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!button.disabled) void addToVerificationReviewPool("manual_include", row.variable, runId);
+      });
+      const td = document.createElement("td");
+      td.className = "candidate-review-pool-action-cell";
+      td.appendChild(button);
       tr.appendChild(td);
     }
     tr.addEventListener("click", (event) => {
@@ -7593,11 +7620,13 @@ function syncModelDiscoveryReviewPoolOptions(rows) {
   if (options.includes(current)) select.value = current;
 }
 
-async function addToVerificationReviewPool(candidateSource) {
-  if (!currentRunId) return setStatus("请先完成主筛查。");
+async function addToVerificationReviewPool(candidateSource, selectedVariable = null, selectedRunId = currentRunId) {
+  const runId = selectedRunId;
+  if (!runId) return setStatus("请先完成主筛查。");
+  if (runId !== currentRunId) return setStatus("当前分析已切换，无法修改复核池。", "warning");
   if (isRestoredRunReadOnly()) return setStatus("当前历史分析为只读状态，无法修改复核池。", "warning");
   const isModelDiscovery = candidateSource === "model_discovery";
-  const variable = (isModelDiscovery
+  const variable = selectedVariable ?? (isModelDiscovery
     ? el("modelDiscoveryReviewPoolVariable").value
     : el("manualReviewPoolVariable").value.trim());
   if (!variable) {
@@ -7606,17 +7635,20 @@ async function addToVerificationReviewPool(candidateSource) {
   const startedAt = performance.now();
   try {
     const form = new FormData();
-    form.append("run_id", currentRunId);
+    form.append("run_id", runId);
     form.append("variable", variable);
     form.append("candidate_source", candidateSource);
     const data = await postForm("/api/add_to_verification_review_pool", form);
+    if (currentRunId !== runId) return;
     lastVerificationReviewPoolRows = data.verificationReviewPool || [];
     renderVerificationReviewPool(lastVerificationReviewPoolRows);
+    renderRecommendedCandidateTable(lastRecommendedRows);
     syncModelDiscoveryReviewPoolOptions(lastModelDiscoveredRows);
     if (!isModelDiscovery) el("manualReviewPoolVariable").value = "";
     renderDownloads(data.downloads || []);
     setStatus(appendElapsed(data.message || "已加入二级验证复核池。", startedAt), "success");
   } catch (error) {
+    if (currentRunId !== runId) return;
     setStatus(appendElapsed(error.message || String(error), startedAt), "error");
   }
 }
